@@ -1,0 +1,189 @@
+<title>Слабкі місця синхронізації</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&family=Unbounded:wght@500;700&display=swap">
+<style>
+/* Layout: one reading column of findings ranked by impact, each with its numbers table; a capacity strip on top */
+:root{
+  --bg:#f5f6f3; --surface:#ffffff; --fg:#1d2320; --muted:#5d6a63; --line:#d6dcd7;
+  --accent:#1f6f5c; --warn:#a8650b; --bad:#b0362b; --good:#2f7a3b;
+  --display:"Unbounded","Segoe UI",system-ui,sans-serif;
+  --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --surface:#1c2320; --fg:#e4ebe6; --muted:#9aa8a0; --line:#2f3a35;
+  --accent:#5cc3a6; --warn:#e3a54a; --bad:#ef7d70; --good:#7fcf8a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --surface:#1c2320; --fg:#e4ebe6; --muted:#9aa8a0; --line:#2f3a35;
+  --accent:#5cc3a6; --warn:#e3a54a; --bad:#ef7d70; --good:#7fcf8a; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--body)}
+main{max-width:52rem;margin:0 auto;padding:2.5rem 16px 4rem;display:flex;flex-direction:column;gap:2.2rem}
+h1,h2{font-family:var(--display);text-wrap:balance;line-height:1.25;margin:0}
+h1{font-size:1.9rem;font-weight:700}
+h2{font-size:1.15rem;font-weight:500;display:flex;gap:.6rem;align-items:baseline}
+h2 .n{font-family:var(--mono);font-size:.85rem;color:var(--muted)}
+p{margin:0;max-width:65ch}
+.lead{color:var(--muted)}
+section{display:flex;flex-direction:column;gap:.8rem}
+.tag{font:600 .7rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:.3rem .5rem;border-radius:4px;border:1px solid currentColor;white-space:nowrap;align-self:center}
+.bad{color:var(--bad)}.warn{color:var(--warn)}.good{color:var(--good)}
+.cond{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.cond div{background:var(--surface);padding:.8rem 1rem;display:flex;flex-direction:column;gap:.2rem;min-width:0}
+.cond b{font:600 1.3rem/1.2 var(--mono);font-variant-numeric:tabular-nums}
+.cond span{font-size:.8rem;color:var(--muted)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font-size:.88rem;min-width:100%;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:.4rem .7rem .4rem 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:.78rem;letter-spacing:.03em}
+td.num{font-family:var(--mono);white-space:nowrap}
+.fix{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.8rem 1rem;display:flex;flex-direction:column;gap:.4rem}
+.fix strong{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+ul{margin:0;padding-left:1.2rem;display:flex;flex-direction:column;gap:.3rem;max-width:65ch}
+code{font-family:var(--mono);font-size:.88em}
+.chart svg{width:100%;height:auto;max-width:100%}
+.chart text{fill:var(--fg);font:12px var(--body)}
+.chart .m{fill:var(--muted)}
+.foot{font-size:.85rem;color:var(--muted);border-top:1px solid var(--line);padding-top:1rem;display:flex;flex-direction:column;gap:.5rem}
+</style>
+<main>
+<header style="display:flex;flex-direction:column;gap:.8rem">
+<h1>Слабкі місця синхронізації на повільному каналі</h1>
+<p class="lead">Кількісна модель протоколу з дизайн-документа (курсор, <code>_sync_ranges</code>, найновіші першими, Apply пачками) на каналі з умовами нижче. Порядок пунктів відповідає тому, наскільки довго через них чекатиме користувач.</p>
+</header>
+
+<section>
+<div class="cond">
+<div><b>1–2,5 с</b><span>затримка в один бік (2–3 с RTT, плюс песимістичний варіант)</span></div>
+<div><b>250 КБ/с</b><span>вниз (2 Мбіт/с)</span></div>
+<div><b>8,75 КБ/с</b><span>вгору (70 кбіт/с)</span></div>
+<div><b>~4 800 р/с</b><span>межа каналу вниз для одного клієнта, широкий рядок ~50 Б після gzip</span></div>
+</div>
+</section>
+
+<section>
+<h2><span class="n">1</span>Вікно потоку HTTP/2 важить більше за ширину каналу <span class="tag bad">критично</span></h2>
+<p>Сервер може надіслати не більше байтів, ніж дозволяє вікно, поки клієнт не підтвердить отримання, а підтвердження вертається через 2L. Якщо вікно дорівнює стандартним 64 КБ, при RTT 2,5 с маємо всього ~26 КБ/с, тобто ~10% каналу. Тоді клієнт не встигає навіть за рядками, що створюються в онлайні.</p>
+<div class="tw"><table>
+<tr><th>Вікно</th><th>L, с</th><th>Межа, рядків/с</th><th>Онлайн 1 000 р/с, p95 затримки</th><th>Досинхронізація після 1 год × 100 р/с</th></tr>
+<tr><td>1 МБ</td><td class="num">1,25</td><td class="num">~4 800</td><td class="num good">1,3 с</td><td class="num good">83 с</td></tr>
+<tr><td>1 МБ</td><td class="num">2,5</td><td class="num">~3 900</td><td class="num good">2,5 с</td><td class="num good">106 с</td></tr>
+<tr><td>64 КБ</td><td class="num">1,25</td><td class="num">~500</td><td class="num bad">відстає, ~2 хв і росте</td><td class="num bad">31 хв</td></tr>
+<tr><td>64 КБ</td><td class="num">2,5</td><td class="num">~250</td><td class="num bad">відстає</td><td class="num bad">не закінчує за 80 хв</td></tr>
+</table></div>
+<div class="fix"><strong>Що зробити</strong>
+<ul>
+<li>Вікно прийому задає клієнт. У .NET <code>SocketsHttpHandler</code> починає зі стандартних 64 КБ, а далі має динамічне масштабування вікна за RTT. Я думаю, що цього вистачить, але не перевіряв, тому треба перевірити на стенді з <code>tc netem</code> (delay 1250ms, rate 2mbit).</li>
+<li>Якщо масштабування не допоможе, задати <code>InitialHttp2StreamWindowSize</code> близько до BDP: 250 КБ/с × 2L ≈ 0,6–1,3 МБ.</li>
+<li>Вікно, більше за BDP, теж шкодить. Надлишок стоїть у черзі перед відповідями Apply і <code>Head</code>, і з вікном 1 МБ при L=1,25 це до 1,5 с додаткової затримки. Тому сервер має дозувати запис у потік, а не скидати в нього все, що є.</li>
+</ul></div>
+</section>
+
+<section class="chart">
+<h2><span class="n">·</span>Досинхронізація після години офлайну, 100 р/с</h2>
+<svg viewBox="0 0 640 210" role="img" aria-label="Час досинхронізації за конфігураціями, логарифмічна шкала">
+<g stroke="var(--line)"><line x1="190" y1="10" x2="190" y2="180"/><line x1="320" y1="10" x2="320" y2="180"/><line x1="421" y1="10" x2="421" y2="180"/><line x1="522" y1="10" x2="522" y2="180"/></g>
+<text x="190" y="198" class="m" text-anchor="middle">1 хв</text><text x="320" y="198" class="m" text-anchor="middle">10 хв</text><text x="421" y="198" class="m" text-anchor="middle">1 год</text><text x="522" y="198" class="m" text-anchor="middle">6 год</text>
+<!-- x = 190 + 130*log10(sec/60) -->
+<text x="0" y="30">1 МБ, L 1,25</text><rect x="190" y="18" width="18" height="18" fill="var(--good)"/><text x="214" y="32">83 с</text>
+<text x="0" y="62">1 МБ, L 2,5</text><rect x="190" y="50" width="32" height="18" fill="var(--good)"/><text x="228" y="64">106 с</text>
+<text x="0" y="94">64 КБ, L 1,25</text><rect x="190" y="82" width="167" height="18" fill="var(--warn)"/><text x="363" y="96">19 хв злиттям</text>
+<rect x="190" y="104" width="195" height="8" fill="var(--bad)"/><text x="391" y="113" class="m">31 хв без</text>
+<text x="0" y="146">64 КБ, L 2,5</text><rect x="190" y="134" width="233" height="18" fill="var(--warn)"/><text x="429" y="148">62 хв злиттям</text>
+<rect x="190" y="156" width="400" height="8" fill="var(--bad)"/><text x="596" y="165" class="m">∞</text>
+</svg>
+<p class="lead" style="font-size:.85rem">Шкала логарифмічна. «Злиттям» означає з правилом із пункту 2.</p>
+</section>
+
+<section>
+<h2><span class="n">2</span>Свіжий хвіст дрібними пачками з'їдає вікно <span class="tag warn">важливо</span></h2>
+<p>Правило «найновіші першими» щоразу відправляє найсвіжіший проміжок. Під час досинхронізації або при темпі 200+ р/с він складається з 1–5 рядків. Пачка з одного рядка після gzip важить ~200 Б, тоді як у пачці з тисячі рядків той самий рядок займає ~50 Б. Коли канал обмежений вікном, ці дрібні пачки забирають його повністю, і старий проміжок не просувається.</p>
+<div class="tw"><table>
+<tr><th>Випадок (вікно 64 КБ)</th><th>Без злиття</th><th>Злиття 0,5 с</th></tr>
+<tr><td>Онлайн 200 р/с, L=2,5: p95 затримки</td><td class="num bad">6,5 с і росте</td><td class="num good">3,2 с, стабільно</td></tr>
+<tr><td>Середній розмір пачки</td><td class="num">4–20 рядків</td><td class="num">~100 рядків</td></tr>
+<tr><td>1 год офлайну × 100 р/с, L=2,5</td><td class="num bad">не закінчує</td><td class="num">62 хв</td></tr>
+</table></div>
+<div class="fix"><strong>Що зробити</strong>
+<ul>
+<li>Накопичувати свіжий хвіст 0,3–0,5 с, поки він менший за пачку. Нові рядки стануть видимі на ці 0,5 с пізніше.</li>
+<li>Або класти свіжий хвіст і пачку старого проміжку в одне повідомлення. Поле <code>extra</code> для порожніх проміжків уже робить те саме для інших таблиць.</li>
+</ul></div>
+</section>
+
+<section>
+<h2><span class="n">3</span>Правка користувача стоїть у черзі за масовою дією <span class="tag bad">критично</span></h2>
+<p>Канал вгору має всього 8,75 КБ/с, а outbox віддає дії строго за <code>seq</code>, однією пачкою за раз. Тому одна правка, зроблена після імпорту чи масового видалення, чекає, поки пройде все, що стоїть перед нею.</p>
+<div class="tw"><table>
+<tr><th>Що відправляє клієнт</th><th>Час до підтвердження</th></tr>
+<tr><td>Одна правка, канал вільний</td><td class="num good">2,5 с</td></tr>
+<tr><td>Одна правка за імпортом 10 000 рядків (~1,3 МБ)</td><td class="num bad">2 хв 56 с</td></tr>
+<tr><td>Те саме, поки йде досинхронізація вниз (ACK TCP забирають ~половину каналу вгору, це оцінка)</td><td class="num bad">5 хв 25 с</td></tr>
+<tr><td>Масове видалення 100 000 рядків, пачки по 1 000</td><td class="num bad">8 хв 22 с, з них ~4 хв на очікування відповідей</td></tr>
+<tr><td>Архів 100 000 рядків (ключ + expected)</td><td class="num bad">9 хв 53 с</td></tr>
+</table></div>
+<div class="fix"><strong>Що зробити</strong>
+<ul>
+<li>Дві черги в outbox: інтерактивні правки йдуть першими, масові дії в паузах між ними. <code>seq</code> далі визначає порядок застосування на власнику, а <code>applied_seq</code> потрібно буде рахувати окремо для кожної черги. Це зміна дизайну.</li>
+<li>Тримати дві пачки Apply в дорозі одночасно. Масове видалення 100 тис. тоді займе ~4,2 хв замість 8,4.</li>
+<li>Архівувати за предикатом. Замість 100 тис. пар (ключ, expected) клієнт надсилає умову і версію <code>V</code>, до якої він має повну копію. Власник видаляє рядки, що підпадають під умову і мають <code>SyncVersion ≤ V</code>. Будь-яка пізніша зміна підняла б версію рядка вище V, тож він лишився б на місці. Виходить та сама семантика, що з expected, але в одному повідомленні. Перед відправкою треба перевірити, що в таблиці немає дірок нижче V.</li>
+</ul></div>
+</section>
+
+<section>
+<h2><span class="n">4</span>Розмір пачки Apply треба рахувати в секундах <span class="tag warn">важливо</span></h2>
+<p>При 70 кбіт/с пачка на 1 МБ відправляється ~2 хв. Якщо зв'язок обривається, всю пачку доводиться слати заново. Надто дрібні пачки теж повільні, бо кожна чекає свого RTT. Нижче імпорт 10 000 рядків, по 300 прогонів з випадковими обривами.</p>
+<div class="tw"><table>
+<tr><th>Пачка</th><th>Обрив ~раз на 2 хв: середнє / p95</th><th>~раз на 5 хв</th><th>~раз на 15 хв</th></tr>
+<tr><td>1 МБ (~2 хв)</td><td class="num bad">4,4 / 8,9 хв</td><td class="num">3,1 / 5,0 хв</td><td class="num">2,7 / 4,1 хв</td></tr>
+<tr><td>256 КБ (~30 с)</td><td class="num good">3,2 / 4,2 хв</td><td class="num good">2,9 / 3,5 хв</td><td class="num good">2,8 / 3,2 хв</td></tr>
+<tr><td>64 КБ (~7 с)</td><td class="num">3,6 / 4,0 хв</td><td class="num">3,4 / 3,7 хв</td><td class="num">3,4 / 3,5 хв</td></tr>
+<tr><td>16 КБ (~2 с)</td><td class="num bad">6,2 / 6,5 хв</td><td class="num bad">6,0 / 6,2 хв</td><td class="num bad">5,9 / 6,0 хв</td></tr>
+</table></div>
+<div class="fix"><strong>Що зробити</strong>
+<p>Обмежувати пачку часом відправки на виміряній швидкості, приблизно 10–30 с (на цьому каналі це 100–250 КБ), а не кількістю рядків. Дві пачки в дорозі (пункт 3) прибирають і проблему дрібних пачок.</p></div>
+</section>
+
+<section>
+<h2><span class="n">5</span>Знімок і спільний канал на кілька інстансів <span class="tag warn">важливо</span></h2>
+<p>Для великої таблиці знімок займає години. Коли кілька інстансів ділять один канал, кожному дістається його частка.</p>
+<div class="tw"><table>
+<tr><th>Знімок</th><th>Розмір gzip</th><th>Сам на каналі</th><th>10 інстансів ділять канал</th></tr>
+<tr><td>100 тис. рядків</td><td class="num">5 МБ</td><td class="num good">24 с</td><td class="num">3,4 хв</td></tr>
+<tr><td>1 млн</td><td class="num">50 МБ</td><td class="num">3,4 хв</td><td class="num bad">33 хв</td></tr>
+<tr><td>5 млн</td><td class="num">248 МБ</td><td class="num warn">17 хв</td><td class="num bad">2,8 год</td></tr>
+</table></div>
+<p>Коли 10 інстансів онлайн, кожен встигає до ~300 р/с з затримкою L. При 600 р/с на кожен затримка вже ~1 хв і росте.</p>
+<div class="fix"><strong>Що зробити</strong>
+<ul>
+<li>Віддавати знімок теж від найновіших до найстаріших. Тоді користувач одразу бачить свіжі дані, і знімок закінчується так само, як досинхронізація.</li>
+<li>Знімки дорогі, тож варто уникати зайвих: новий <code>instance_id</code> лише через справжнє відновлення бази, а очищення надгробків, яке теж може змусити клієнта брати знімок, тримати поруч із <code>MIN(acked)</code>.</li>
+<li>Знімки й досинхронізацію кількох інстансів запускати по черзі, а не всі разом.</li>
+</ul></div>
+</section>
+
+<section>
+<h2><span class="n">6</span>Темп понад межу каналу і ліміт діапазонів <span class="tag warn">межа моделі</span></h2>
+<p>Якщо власник постійно створює більше ~4 800 р/с на одного клієнта (або ~480 р/с, коли інстансів 10), клієнт ніколи не наздожене, і жоден протокол цього не змінить. Проблема протоколу в іншому. Коли діапазонів стає 16, власник заповнює старий проміжок, поки той не зіллється, і нові рядки тим часом чекають. При 6 000 р/с вони з'являються із запізненням 1,5–3 хв (ліміт 4 дає 93 с, ліміт 16 дає 176 с), тобто вже не діє правило «найновіші першими».</p>
+<div class="fix"><strong>Що зробити</strong>
+<ul>
+<li>Показувати в інтерфейсі, що дані відстають і на скільки (Head мінус курсор).</li>
+<li>Для таблиць, які наповнюються швидше за канал (журнали, телеметрія), не тримати повну копію, а читати їх із власника на запит. Це відповідь на відкрите питання «які таблиці реплікувати».</li>
+<li>На ліміті заповнювати найменший проміжок, а не той, що під верхнім діапазоном: він зливається найшвидше.</li>
+</ul></div>
+</section>
+
+<section>
+<h2><span class="n">7</span>Що працює добре <span class="tag good">гаразд</span></h2>
+<ul>
+<li>Коли темп у межах каналу, затримка в онлайні дорівнює L плюс 0,01 с, від 10 до 3 000 р/с (вікно 1 МБ).</li>
+<li>Після будь-якого офлайну перші дані з'являються через 5 с при L=1,25 (10 с при L=2,5), а найсвіжіші рядки лишаються свіжими протягом усієї досинхронізації: p95 віку 1,4–3,8 с.</li>
+<li>8 годин офлайну при 100 р/с (2,9 млн рядків) клієнт наздоганяє за 10–13 хв, без знімка й без повторних відправок після обривів.</li>
+<li>Діапазонів у нормальному режимі 1–4, тож ліміт 16 спрацьовує лише при перевантаженні.</li>
+</ul>
+<p class="lead" style="font-size:.9rem">Сюди не входить встановлення зв'язку: TCP + TLS + Handshake + Start займають 3–5 RTT, тобто 8–12 с на цьому каналі. Handshake і Start варто об'єднати в один обмін.</p>
+</section>
+
+<div class="foot">
+<p><b>Припущення.</b> «Затримка 2–3 с» сприйнята як RTT (L=1–1,5 с), плюс окремий прогін з L=2,5 с. Дані дають лише вставки в одну таблицю, без схлопування змін, тобто найгірший випадок. Розмір рядків виміряний gzip-ом на синтетичних protobuf-рядках (GUID v7, числа, рядки, текст ~12 слів): ~200 Б у пачці з 1 рядка, ~65 Б з 50, ~50 Б з 1 000+. Втрат пакетів і перевантаження TCP модель не враховує; частку ACK у каналі вгору оцінено як половину.</p>
+<p><b>Код.</b> <code>/mnt/project-files/demo/sim/</code>: <code>sim.js</code> (модель), <code>run.js</code> (сітка прогонів), <code>gzip-bench.js</code> (стиснення), <code>results.json</code> (усі цифри).</p>
+</div>
+</main>

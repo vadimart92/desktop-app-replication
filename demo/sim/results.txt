@@ -1,0 +1,166 @@
+done 23.456s
+
+== online
+coalesce=0 W=65535 L=1 lambda=10 p50=1 p95=1.02 p99=1.02 avgBatch=1 linkUtil=0.01 topAgeEnd=1.1 behindEnd=11 queueMax=0
+coalesce=0 W=65535 L=1 lambda=200 p50=1.01 p95=1.02 p99=1.02 avgBatch=4 linkUtil=0.11 topAgeEnd=1 behindEnd=204 queueMax=0
+coalesce=0 W=65535 L=1 lambda=500 p50=1.51 p95=2.58 p99=2.7 avgBatch=41.5 linkUtil=0.12 topAgeEnd=2.6 behindEnd=148830 queueMax=0.1
+coalesce=0 W=65535 L=1 lambda=1000 p50=61.95 p95=133.81 p99=140.23 avgBatch=227.5 linkUtil=0.1 topAgeEnd=117.1 behindEnd=298220 queueMax=0.1
+coalesce=0 W=65535 L=1 lambda=3000 p50=97.56 p95=212.02 p99=222.7 avgBatch=419.7 linkUtil=0.1 topAgeEnd=186.5 behindEnd=896040 queueMax=0.1
+coalesce=0 W=65535 L=1 lambda=5000 p50=104.96 p95=227.84 p99=239.32 avgBatch=486.6 linkUtil=0.1 topAgeEnd=224.9 behindEnd=1494001 queueMax=0.11
+coalesce=0 W=65535 L=1 lambda=8000 p50=124.93 p95=250.67 p99=262.59 avgBatch=496.1 linkUtil=0.1 topAgeEnd=243.7 behindEnd=2390880 queueMax=0.1
+coalesce=0 W=65535 L=1.5 lambda=10 p50=1.5 p95=1.52 p99=1.52 avgBatch=1 linkUtil=0.01 topAgeEnd=1.6 behindEnd=16 queueMax=0
+coalesce=0 W=65535 L=1.5 lambda=200 p50=1.52 p95=2.4 p99=2.54 avgBatch=6 linkUtil=0.09 topAgeEnd=2.6 behindEnd=304 queueMax=0.04
+coalesce=0 W=65535 L=1.5 lambda=500 p50=37.9 p95=86.41 p99=90.64 avgBatch=116.5 linkUtil=0.07 topAgeEnd=84.5 behindEnd=148830 queueMax=0.1
+coalesce=0 W=65535 L=1.5 lambda=1000 p50=71.58 p95=162.94 p99=171.25 avgBatch=182 linkUtil=0.07 topAgeEnd=155 behindEnd=298220 queueMax=0.1
+coalesce=0 W=65535 L=1.5 lambda=3000 p50=88.14 p95=213.43 p99=224.56 avgBatch=392 linkUtil=0.07 topAgeEnd=224 behindEnd=896040 queueMax=0.1
+coalesce=0 W=65535 L=1.5 lambda=5000 p50=95.22 p95=223.62 p99=235.29 avgBatch=483.1 linkUtil=0.07 topAgeEnd=202.3 behindEnd=1494001 queueMax=0.11
+coalesce=0 W=65535 L=1.5 lambda=8000 p50=121.44 p95=250.25 p99=262.2 avgBatch=494.3 linkUtil=0.07 topAgeEnd=192.8 behindEnd=2390880 queueMax=0.1
+coalesce=0 W=65535 L=2.5 lambda=10 p50=2.5 p95=2.52 p99=2.52 avgBatch=1 linkUtil=0.01 topAgeEnd=2.6 behindEnd=26 queueMax=0
+coalesce=0 W=65535 L=2.5 lambda=200 p50=3.85 p95=6.54 p99=6.83 avgBatch=20.2 linkUtil=0.05 topAgeEnd=6.8 behindEnd=59312 queueMax=0.1
+coalesce=0 W=65535 L=2.5 lambda=500 p50=46.44 p95=128.17 p99=134.81 avgBatch=77.7 linkUtil=0.04 topAgeEnd=114.2 behindEnd=148830 queueMax=0.1
+coalesce=0 W=65535 L=2.5 lambda=1000 p50=56.94 p95=167.7 p99=176.2 avgBatch=129.4 linkUtil=0.04 topAgeEnd=88.9 behindEnd=298220 queueMax=0.08
+coalesce=0 W=65535 L=2.5 lambda=3000 p50=60.29 p95=194.25 p99=208.53 avgBatch=345.8 linkUtil=0.04 topAgeEnd=145.2 behindEnd=896040 queueMax=0.1
+coalesce=0 W=65535 L=2.5 lambda=5000 p50=71.59 p95=204.41 p99=214.28 avgBatch=472.8 linkUtil=0.04 topAgeEnd=89.1 behindEnd=1494001 queueMax=0.1
+coalesce=0 W=65535 L=2.5 lambda=8000 p50=107.55 p95=242.4 p99=252.44 avgBatch=490.7 linkUtil=0.04 topAgeEnd=211.8 behindEnd=2390880 queueMax=0.1
+coalesce=0 W=1048576 L=1 lambda=10 p50=1 p95=1.02 p99=1.02 avgBatch=1 linkUtil=0.01 topAgeEnd=1.1 behindEnd=11 queueMax=0
+coalesce=0 W=1048576 L=1 lambda=200 p50=1.01 p95=1.02 p99=1.02 avgBatch=4 linkUtil=0.11 topAgeEnd=1 behindEnd=204 queueMax=0
+coalesce=0 W=1048576 L=1 lambda=500 p50=1.01 p95=1.02 p99=1.02 avgBatch=10 linkUtil=0.19 topAgeEnd=1 behindEnd=510 queueMax=0
+coalesce=0 W=1048576 L=1 lambda=1000 p50=1.02 p95=1.03 p99=1.03 avgBatch=20 linkUtil=0.33 topAgeEnd=1 behindEnd=1020 queueMax=0.01
+coalesce=0 W=1048576 L=1 lambda=3000 p50=1.02 p95=1.03 p99=1.03 avgBatch=60 linkUtil=0.77 topAgeEnd=1 behindEnd=3060 queueMax=0.02
+coalesce=0 W=1048576 L=1 lambda=5000 p50=6.68 p95=11.9 p99=12.37 avgBatch=490.2 linkUtil=1 topAgeEnd=12.3 behindEnd=1487100 queueMax=0.12
+coalesce=0 W=1048576 L=1 lambda=8000 p50=60.1 p95=113.79 p99=118.56 avgBatch=498.7 linkUtil=1 topAgeEnd=94.3 behindEnd=2390880 queueMax=0.12
+coalesce=0 W=1048576 L=1.5 lambda=10 p50=1.5 p95=1.52 p99=1.52 avgBatch=1 linkUtil=0.01 topAgeEnd=1.6 behindEnd=16 queueMax=0
+coalesce=0 W=1048576 L=1.5 lambda=200 p50=1.51 p95=1.52 p99=1.52 avgBatch=4 linkUtil=0.11 topAgeEnd=1.5 behindEnd=304 queueMax=0
+coalesce=0 W=1048576 L=1.5 lambda=500 p50=1.51 p95=1.52 p99=1.52 avgBatch=10 linkUtil=0.19 topAgeEnd=1.5 behindEnd=760 queueMax=0
+coalesce=0 W=1048576 L=1.5 lambda=1000 p50=1.52 p95=1.53 p99=1.53 avgBatch=20 linkUtil=0.33 topAgeEnd=1.5 behindEnd=1520 queueMax=0.01
+coalesce=0 W=1048576 L=1.5 lambda=3000 p50=1.52 p95=1.53 p99=1.53 avgBatch=60 linkUtil=0.77 topAgeEnd=1.5 behindEnd=4560 queueMax=0.02
+coalesce=0 W=1048576 L=1.5 lambda=5000 p50=7.17 p95=12.39 p99=12.85 avgBatch=490.2 linkUtil=1 topAgeEnd=12.3 behindEnd=1487100 queueMax=0.12
+coalesce=0 W=1048576 L=1.5 lambda=8000 p50=60.5 p95=114.09 p99=118.85 avgBatch=498.7 linkUtil=1 topAgeEnd=94.3 behindEnd=2390880 queueMax=0.12
+coalesce=0 W=1048576 L=2.5 lambda=10 p50=2.5 p95=2.52 p99=2.52 avgBatch=1 linkUtil=0.01 topAgeEnd=2.6 behindEnd=26 queueMax=0
+coalesce=0 W=1048576 L=2.5 lambda=200 p50=2.51 p95=2.52 p99=2.52 avgBatch=4 linkUtil=0.11 topAgeEnd=2.5 behindEnd=504 queueMax=0
+coalesce=0 W=1048576 L=2.5 lambda=500 p50=2.51 p95=2.52 p99=2.52 avgBatch=10 linkUtil=0.19 topAgeEnd=2.5 behindEnd=1260 queueMax=0
+coalesce=0 W=1048576 L=2.5 lambda=1000 p50=2.52 p95=2.53 p99=2.53 avgBatch=20 linkUtil=0.33 topAgeEnd=2.5 behindEnd=2520 queueMax=0.01
+coalesce=0 W=1048576 L=2.5 lambda=3000 p50=2.52 p95=2.53 p99=2.53 avgBatch=60 linkUtil=0.77 topAgeEnd=2.5 behindEnd=7560 queueMax=0.02
+coalesce=0 W=1048576 L=2.5 lambda=5000 p50=33.29 p95=63.47 p99=65.79 avgBatch=496.1 linkUtil=0.81 topAgeEnd=56 behindEnd=1487100 queueMax=0.12
+coalesce=0 W=1048576 L=2.5 lambda=8000 p50=78.09 p95=146.61 p99=152.4 avgBatch=498.8 linkUtil=0.81 topAgeEnd=128.1 behindEnd=2390880 queueMax=0.12
+coalesce=0.5 W=65535 L=1 lambda=10 p50=1.24 p95=1.48 p99=1.5 avgBatch=5.1 linkUtil=0 topAgeEnd=1.5 behindEnd=13 queueMax=0
+coalesce=0.5 W=65535 L=1 lambda=200 p50=1.27 p95=1.5 p99=1.52 avgBatch=101.6 linkUtil=0.05 topAgeEnd=1.5 behindEnd=268 queueMax=0.02
+coalesce=0.5 W=65535 L=1 lambda=500 p50=1.4 p95=2.06 p99=2.2 avgBatch=264.4 linkUtil=0.11 topAgeEnd=2.2 behindEnd=620 queueMax=0.1
+coalesce=0.5 W=65535 L=1 lambda=1000 p50=35.55 p95=150.91 p99=168.8 avgBatch=492.6 linkUtil=0.1 topAgeEnd=117.3 behindEnd=297980 queueMax=0.1
+coalesce=0.5 W=65535 L=1 lambda=3000 p50=60.03 p95=180.64 p99=195.25 avgBatch=471 linkUtil=0.1 topAgeEnd=171.6 behindEnd=895860 queueMax=0.1
+coalesce=0.5 W=65535 L=1 lambda=5000 p50=82.39 p95=228.77 p99=242.62 avgBatch=496.9 linkUtil=0.1 topAgeEnd=225.7 behindEnd=1494400 queueMax=0.1
+coalesce=0.5 W=65535 L=1 lambda=8000 p50=102.13 p95=243.62 p99=257.04 avgBatch=498 linkUtil=0.1 topAgeEnd=245.8 behindEnd=2391840 queueMax=0.1
+coalesce=0.5 W=65535 L=1.5 lambda=10 p50=1.74 p95=1.98 p99=2 avgBatch=5.1 linkUtil=0 topAgeEnd=2.1 behindEnd=18 queueMax=0
+coalesce=0.5 W=65535 L=1.5 lambda=200 p50=1.77 p95=2 p99=2.02 avgBatch=101.6 linkUtil=0.05 topAgeEnd=2 behindEnd=372 queueMax=0.02
+coalesce=0.5 W=65535 L=1.5 lambda=500 p50=22.08 p95=112.82 p99=133.15 avgBatch=471.8 linkUtil=0.07 topAgeEnd=84.9 behindEnd=147460 queueMax=0.1
+coalesce=0.5 W=65535 L=1.5 lambda=1000 p50=47.27 p95=186.14 p99=202.47 avgBatch=493.4 linkUtil=0.07 topAgeEnd=154.5 behindEnd=297980 queueMax=0.1
+coalesce=0.5 W=65535 L=1.5 lambda=3000 p50=77.95 p95=229.57 p99=243.35 avgBatch=460.2 linkUtil=0.07 topAgeEnd=220.8 behindEnd=895860 queueMax=0.1
+coalesce=0.5 W=65535 L=1.5 lambda=5000 p50=81.59 p95=227.4 p99=240.65 avgBatch=497.9 linkUtil=0.07 topAgeEnd=227.1 behindEnd=1494400 queueMax=0.1
+coalesce=0.5 W=65535 L=1.5 lambda=8000 p50=66.32 p95=189.62 p99=202.57 avgBatch=497 linkUtil=0.07 topAgeEnd=195.8 behindEnd=2391840 queueMax=0.1
+coalesce=0.5 W=65535 L=2.5 lambda=10 p50=2.74 p95=2.98 p99=3 avgBatch=5.1 linkUtil=0 topAgeEnd=3.1 behindEnd=29 queueMax=0
+coalesce=0.5 W=65535 L=2.5 lambda=200 p50=2.79 p95=3.15 p99=3.45 avgBatch=109.2 linkUtil=0.05 topAgeEnd=3.4 behindEnd=580 queueMax=0.02
+coalesce=0.5 W=65535 L=2.5 lambda=500 p50=24.32 p95=116.52 p99=131.56 avgBatch=467.7 linkUtil=0.04 topAgeEnd=98.4 behindEnd=148490 queueMax=0.1
+coalesce=0.5 W=65535 L=2.5 lambda=1000 p50=27.41 p95=112.81 p99=125.38 avgBatch=492.7 linkUtil=0.04 topAgeEnd=88.1 behindEnd=297980 queueMax=0.1
+coalesce=0.5 W=65535 L=2.5 lambda=3000 p50=35.64 p95=138.94 p99=149.98 avgBatch=437.9 linkUtil=0.04 topAgeEnd=140.1 behindEnd=895860 queueMax=0.1
+coalesce=0.5 W=65535 L=2.5 lambda=5000 p50=56.06 p95=130.28 p99=135.68 avgBatch=496.6 linkUtil=0.04 topAgeEnd=129.9 behindEnd=1494400 queueMax=0.1
+coalesce=0.5 W=65535 L=2.5 lambda=8000 p50=60.36 p95=201.91 p99=212.45 avgBatch=495.1 linkUtil=0.04 topAgeEnd=211.8 behindEnd=2391840 queueMax=0.1
+coalesce=0.5 W=1048576 L=1 lambda=10 p50=1.24 p95=1.48 p99=1.5 avgBatch=5.1 linkUtil=0 topAgeEnd=1.5 behindEnd=13 queueMax=0
+coalesce=0.5 W=1048576 L=1 lambda=200 p50=1.27 p95=1.5 p99=1.52 avgBatch=101.6 linkUtil=0.05 topAgeEnd=1.5 behindEnd=268 queueMax=0.02
+coalesce=0.5 W=1048576 L=1 lambda=500 p50=1.29 p95=1.53 p99=1.55 avgBatch=254 linkUtil=0.11 topAgeEnd=1.5 behindEnd=670 queueMax=0.06
+coalesce=0.5 W=1048576 L=1 lambda=1000 p50=1.35 p95=1.58 p99=1.58 avgBatch=496 linkUtil=0.21 topAgeEnd=1.4 behindEnd=1440 queueMax=0
+coalesce=0.5 W=1048576 L=1 lambda=3000 p50=1.19 p95=1.29 p99=1.29 avgBatch=270 linkUtil=0.64 topAgeEnd=1.3 behindEnd=3780 queueMax=0.1
+coalesce=0.5 W=1048576 L=1 lambda=5000 p50=5.25 p95=16.66 p99=20.11 avgBatch=492.2 linkUtil=1 topAgeEnd=12 behindEnd=1494400 queueMax=0.12
+coalesce=0.5 W=1048576 L=1 lambda=8000 p50=42.74 p95=129.52 p99=147.45 avgBatch=498.9 linkUtil=1 topAgeEnd=94.5 behindEnd=2391840 queueMax=0.12
+coalesce=0.5 W=1048576 L=1.5 lambda=10 p50=1.74 p95=1.98 p99=2 avgBatch=5.1 linkUtil=0 topAgeEnd=2.1 behindEnd=18 queueMax=0
+coalesce=0.5 W=1048576 L=1.5 lambda=200 p50=1.77 p95=2 p99=2.02 avgBatch=101.6 linkUtil=0.05 topAgeEnd=2 behindEnd=372 queueMax=0.02
+coalesce=0.5 W=1048576 L=1.5 lambda=500 p50=1.79 p95=2.03 p99=2.05 avgBatch=254 linkUtil=0.11 topAgeEnd=2.1 behindEnd=930 queueMax=0.06
+coalesce=0.5 W=1048576 L=1.5 lambda=1000 p50=1.85 p95=2.08 p99=2.08 avgBatch=496 linkUtil=0.21 topAgeEnd=1.9 behindEnd=1940 queueMax=0
+coalesce=0.5 W=1048576 L=1.5 lambda=3000 p50=1.69 p95=1.79 p99=1.79 avgBatch=270 linkUtil=0.64 topAgeEnd=1.8 behindEnd=4860 queueMax=0.1
+coalesce=0.5 W=1048576 L=1.5 lambda=5000 p50=5.74 p95=17.11 p99=20.61 avgBatch=492.2 linkUtil=1 topAgeEnd=12 behindEnd=1494400 queueMax=0.12
+coalesce=0.5 W=1048576 L=1.5 lambda=8000 p50=43.1 p95=129.66 p99=147.12 avgBatch=498.9 linkUtil=1 topAgeEnd=94.5 behindEnd=2391840 queueMax=0.12
+coalesce=0.5 W=1048576 L=2.5 lambda=10 p50=2.74 p95=2.98 p99=3 avgBatch=5.1 linkUtil=0 topAgeEnd=3.1 behindEnd=29 queueMax=0
+coalesce=0.5 W=1048576 L=2.5 lambda=200 p50=2.77 p95=3 p99=3.02 avgBatch=101.6 linkUtil=0.05 topAgeEnd=3 behindEnd=580 queueMax=0.02
+coalesce=0.5 W=1048576 L=2.5 lambda=500 p50=2.79 p95=3.03 p99=3.05 avgBatch=254 linkUtil=0.11 topAgeEnd=3.1 behindEnd=1450 queueMax=0.06
+coalesce=0.5 W=1048576 L=2.5 lambda=1000 p50=2.85 p95=3.08 p99=3.08 avgBatch=496 linkUtil=0.21 topAgeEnd=2.9 behindEnd=2940 queueMax=0
+coalesce=0.5 W=1048576 L=2.5 lambda=3000 p50=2.69 p95=2.79 p99=2.79 avgBatch=270 linkUtil=0.64 topAgeEnd=2.8 behindEnd=8100 queueMax=0.1
+coalesce=0.5 W=1048576 L=2.5 lambda=5000 p50=24.22 p95=78.57 p99=97.35 avgBatch=497 linkUtil=0.81 topAgeEnd=58.5 behindEnd=1494400 queueMax=0.12
+coalesce=0.5 W=1048576 L=2.5 lambda=8000 p50=55.68 p95=168.96 p99=186.37 avgBatch=499 linkUtil=0.81 topAgeEnd=128.3 behindEnd=2391840 queueMax=0.12
+
+== share
+lambda=10 p50=1.26 p95=1.28 linkUtil=0.1 topAgeEnd=1.3 behindEnd=13
+lambda=100 p50=1.27 p95=1.28 linkUtil=0.71 topAgeEnd=1.3 behindEnd=128
+lambda=300 p50=1.36 p95=1.39 linkUtil=1 topAgeEnd=1.4 behindEnd=420
+lambda=600 p50=29.09 p95=56.36 linkUtil=1 topAgeEnd=50.5 behindEnd=177732
+
+== offline
+coalesce=0 W=65535 L=1.25 lambda=100 offline=3600 backlog=360000 firstVisible=5.1 fullSync=1889 topAgeP95=1.35 queueP95=0 behindEnd=126 maxRanges=1 avgBatch=3.8
+coalesce=0 W=65535 L=2.5 lambda=100 offline=3600 backlog=360000 firstVisible=10.1 fullSync=null topAgeP95=4.39 queueP95=0 behindEnd=859950 maxRanges=1 avgBatch=3.6
+coalesce=0 W=65535 L=1.25 lambda=1000 offline=3600 backlog=3600000 firstVisible=5.1 fullSync=null topAgeP95=1778.66 queueP95=0.04 behindEnd=8599810 maxRanges=16 avgBatch=496.1
+coalesce=0 W=65535 L=2.5 lambda=1000 offline=3600 backlog=3600000 firstVisible=10.1 fullSync=null topAgeP95=3114.14 queueP95=0 behindEnd=8599500 maxRanges=16 avgBatch=492.9
+coalesce=0 W=65535 L=1.25 lambda=100 offline=28800 backlog=2880000 firstVisible=5.1 fullSync=null topAgeP95=1.35 queueP95=0 behindEnd=3379981 maxRanges=1 avgBatch=7.6
+coalesce=0 W=65535 L=2.5 lambda=100 offline=28800 backlog=2880000 firstVisible=10.1 fullSync=null topAgeP95=4.39 queueP95=0 behindEnd=3379950 maxRanges=1 avgBatch=3.6
+coalesce=0 W=65535 L=1.25 lambda=3000 offline=600 backlog=1800000 firstVisible=5.1 fullSync=null topAgeP95=3412.38 queueP95=0.04 behindEnd=16799430 maxRanges=16 avgBatch=494.5
+coalesce=0 W=65535 L=2.5 lambda=3000 offline=600 backlog=1800000 firstVisible=10.1 fullSync=null topAgeP95=3487.6 queueP95=0 behindEnd=16798500 maxRanges=16 avgBatch=489.8
+coalesce=0 W=1048576 L=1.25 lambda=100 offline=3600 backlog=360000 firstVisible=5.1 fullSync=83 topAgeP95=1.37 queueP95=0.12 behindEnd=126 maxRanges=1 avgBatch=3.5
+coalesce=0 W=1048576 L=2.5 lambda=100 offline=3600 backlog=360000 firstVisible=10.1 fullSync=106 topAgeP95=2.62 queueP95=0.11 behindEnd=252 maxRanges=1 avgBatch=3.5
+coalesce=0 W=1048576 L=1.25 lambda=1000 offline=3600 backlog=3600000 firstVisible=5.1 fullSync=1014 topAgeP95=1.38 queueP95=0.12 behindEnd=1260 maxRanges=1 avgBatch=38.4
+coalesce=0 W=1048576 L=2.5 lambda=1000 offline=3600 backlog=3600000 firstVisible=10.1 fullSync=1328 topAgeP95=3.28 queueP95=0.12 behindEnd=2520 maxRanges=2 avgBatch=40.8
+coalesce=0 W=1048576 L=1.25 lambda=100 offline=28800 backlog=2880000 firstVisible=5.1 fullSync=629 topAgeP95=1.37 queueP95=0.12 behindEnd=126 maxRanges=1 avgBatch=14.6
+coalesce=0 W=1048576 L=2.5 lambda=100 offline=28800 backlog=2880000 firstVisible=10.1 fullSync=786 topAgeP95=2.61 queueP95=0.11 behindEnd=252 maxRanges=1 avgBatch=14.6
+coalesce=0 W=1048576 L=1.25 lambda=3000 offline=600 backlog=1800000 firstVisible=5.1 fullSync=1193 topAgeP95=1.44 queueP95=0.12 behindEnd=3840 maxRanges=1 avgBatch=76.1
+coalesce=0 W=1048576 L=2.5 lambda=3000 offline=600 backlog=1800000 firstVisible=10.1 fullSync=3105 topAgeP95=3.02 queueP95=0.1 behindEnd=7560 maxRanges=2 avgBatch=92.3
+coalesce=0.5 W=65535 L=1.25 lambda=100 offline=3600 backlog=360000 firstVisible=5.1 fullSync=1166 topAgeP95=7.69 queueP95=0.04 behindEnd=166 maxRanges=2 avgBatch=98.6
+coalesce=0.5 W=65535 L=2.5 lambda=100 offline=3600 backlog=360000 firstVisible=10.1 fullSync=3696 topAgeP95=3.01 queueP95=0.01 behindEnd=274 maxRanges=1 avgBatch=82.8
+coalesce=0.5 W=65535 L=1.25 lambda=1000 offline=3600 backlog=3600000 firstVisible=5.1 fullSync=null topAgeP95=1778.66 queueP95=0.04 behindEnd=8599810 maxRanges=16 avgBatch=499.5
+coalesce=0.5 W=65535 L=2.5 lambda=1000 offline=3600 backlog=3600000 firstVisible=10.1 fullSync=null topAgeP95=3114.14 queueP95=0 behindEnd=8599500 maxRanges=16 avgBatch=499.3
+coalesce=0.5 W=65535 L=1.25 lambda=100 offline=28800 backlog=2880000 firstVisible=5.1 fullSync=null topAgeP95=7.68 queueP95=0.04 behindEnd=3379981 maxRanges=2 avgBatch=373.7
+coalesce=0.5 W=65535 L=2.5 lambda=100 offline=28800 backlog=2880000 firstVisible=10.1 fullSync=null topAgeP95=3.01 queueP95=0.01 behindEnd=3379950 maxRanges=1 avgBatch=92.9
+coalesce=0.5 W=65535 L=1.25 lambda=3000 offline=600 backlog=1800000 firstVisible=5.1 fullSync=null topAgeP95=3223.84 queueP95=0.05 behindEnd=16799430 maxRanges=16 avgBatch=499.8
+coalesce=0.5 W=65535 L=2.5 lambda=3000 offline=600 backlog=1800000 firstVisible=10.1 fullSync=null topAgeP95=3405.72 queueP95=0 behindEnd=16798500 maxRanges=16 avgBatch=499.8
+coalesce=0.5 W=1048576 L=1.25 lambda=100 offline=3600 backlog=360000 firstVisible=5.1 fullSync=82 topAgeP95=1.8 queueP95=0.12 behindEnd=162 maxRanges=1 avgBatch=82.7
+coalesce=0.5 W=1048576 L=2.5 lambda=100 offline=3600 backlog=360000 firstVisible=10.1 fullSync=105 topAgeP95=3.53 queueP95=0.11 behindEnd=286 maxRanges=1 avgBatch=82.9
+coalesce=0.5 W=1048576 L=1.25 lambda=1000 offline=3600 backlog=3600000 firstVisible=5.1 fullSync=957 topAgeP95=1.86 queueP95=0.12 behindEnd=1380 maxRanges=2 avgBatch=455
+coalesce=0.5 W=1048576 L=2.5 lambda=1000 offline=3600 backlog=3600000 firstVisible=10.1 fullSync=1283 topAgeP95=3.78 queueP95=0.11 behindEnd=2620 maxRanges=2 avgBatch=455.5
+coalesce=0.5 W=1048576 L=1.25 lambda=100 offline=28800 backlog=2880000 firstVisible=5.1 fullSync=620 topAgeP95=1.79 queueP95=0.12 behindEnd=128 maxRanges=1 avgBatch=219.4
+coalesce=0.5 W=1048576 L=2.5 lambda=100 offline=28800 backlog=2880000 firstVisible=10.1 fullSync=767 topAgeP95=3.45 queueP95=0.11 behindEnd=268 maxRanges=1 avgBatch=222.5
+coalesce=0.5 W=1048576 L=1.25 lambda=3000 offline=600 backlog=1800000 firstVisible=5.1 fullSync=1022 topAgeP95=1.62 queueP95=0.12 behindEnd=4440 maxRanges=2 avgBatch=301.9
+coalesce=0.5 W=1048576 L=2.5 lambda=3000 offline=600 backlog=1800000 firstVisible=10.1 fullSync=2081 topAgeP95=3.22 queueP95=0.11 behindEnd=8220 maxRanges=4 avgBatch=321.1
+
+== cap
+cap=4 lambda=6000 topAgeEnd=92.9 behindEnd=8998859 maxRanges=4 avgBatch=499.1 rowsPerSec=4809
+cap=4 lambda=8000 topAgeEnd=350.7 behindEnd=11998479 maxRanges=4 avgBatch=499.5 rowsPerSec=4809
+cap=16 lambda=6000 topAgeEnd=175.6 behindEnd=8998859 maxRanges=16 avgBatch=499 rowsPerSec=4809
+cap=16 lambda=8000 topAgeEnd=332.5 behindEnd=11998479 maxRanges=16 avgBatch=499.6 rowsPerSec=4809
+
+== snapshot
+rows=100000 W=65535 share=1 MB=5 sec=193
+rows=100000 W=65535 share=10 MB=5 sec=202
+rows=100000 W=1048576 share=1 MB=5 sec=24
+rows=100000 W=1048576 share=10 MB=5 sec=202
+rows=1000000 W=65535 share=1 MB=49.6 sec=1896
+rows=1000000 W=65535 share=10 MB=49.6 sec=1988
+rows=1000000 W=1048576 share=1 MB=49.6 sec=202
+rows=1000000 W=1048576 share=10 MB=49.6 sec=1988
+rows=5000000 W=65535 share=1 MB=248 sec=9464
+rows=5000000 W=65535 share=10 MB=248 sec=9924
+rows=5000000 W=1048576 share=1 MB=248 sec=996
+rows=5000000 W=1048576 share=10 MB=248 sec=9924
+
+== up
+name=одна правка t=3 tP95=2.5 wastedKB=0 attempts=1
+name=одна правка за імпортом 10k t=176 tP95=176.1 wastedKB=0 attempts=11
+name=одна правка за імпортом 10k, вниз зайнятий t=325 tP95=324.8 wastedKB=0 attempts=11
+name=масове видалення 100k t=502 tP95=501.9 wastedKB=0 attempts=100
+name=архів 100k (ключ+expected) t=593 tP95=593.3 wastedKB=0 attempts=100
+name=імпорт 10k, пачка 1024 КБ, обрив ~2 хв t=261 tP95=536.3 wastedKB=829 attempts=4.1
+name=імпорт 10k, пачка 256 КБ, обрив ~2 хв t=192 tP95=249.6 wastedKB=198 attempts=6.5
+name=імпорт 10k, пачка 64 КБ, обрив ~2 хв t=215 tP95=239.3 wastedKB=67 attempts=21.7
+name=імпорт 10k, пачка 16 КБ, обрив ~2 хв t=370 tP95=390.2 wastedKB=36 attempts=82.9
+name=імпорт 10k, пачка 1024 КБ, обрив ~5 хв t=188 tP95=301.8 wastedKB=267 attempts=2.6
+name=імпорт 10k, пачка 256 КБ, обрив ~5 хв t=173 tP95=207.2 wastedKB=75 attempts=5.6
+name=імпорт 10k, пачка 64 КБ, обрив ~5 хв t=205 tP95=222.8 wastedKB=27 attempts=20.7
+name=імпорт 10k, пачка 16 КБ, обрив ~5 хв t=358 tP95=373.3 wastedKB=15 attempts=81.2
+name=імпорт 10k, пачка 1024 КБ, обрив ~15 хв t=164 tP95=247.3 wastedKB=84 attempts=2.2
+name=імпорт 10k, пачка 256 КБ, обрив ~15 хв t=165 tP95=192.4 wastedKB=26 attempts=5.2
+name=імпорт 10k, пачка 64 КБ, обрив ~15 хв t=201 tP95=212.6 wastedKB=9 attempts=20.2
+name=імпорт 10k, пачка 16 КБ, обрив ~15 хв t=352 tP95=362.2 wastedKB=5 attempts=80.4

@@ -1,0 +1,1041 @@
+<title>Пісочниця синхронізації</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@600&display=swap">
+<style>
+/* Layout: пульт зверху, сценарій з кроками, три колонки "власник | клієнт 1 | клієнт 2", журнал протоколу знизу */
+:root{
+  --bg:#f2f4f5; --surface:#ffffff; --surface-2:#eaeef1; --ink:#17212a; --muted:#5b6974; --line:#d6dde2;
+  --accent:#2a5bd7; --own:#a8640a; --c1:#2a5bd7; --c2:#0d8571;
+  --ok:#1d8048; --warn:#a96d10; --bad:#c03636;
+  --f-display:"Unbounded","Golos Text",system-ui,sans-serif;
+  --f-body:"Golos Text",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10151a; --surface:#172028; --surface-2:#1f2a33; --ink:#e2e9ee; --muted:#92a0ab; --line:#2b3742;
+  --accent:#7ea4ff; --own:#e2a650; --c1:#7ea4ff; --c2:#40c4a8; --ok:#55c483; --warn:#e2b453; --bad:#f07d7d; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10151a; --surface:#172028; --surface-2:#1f2a33; --ink:#e2e9ee; --muted:#92a0ab; --line:#2b3742;
+  --accent:#7ea4ff; --own:#e2a650; --c1:#7ea4ff; --c2:#40c4a8; --ok:#55c483; --warn:#e2b453; --bad:#f07d7d; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--f-body)}
+.wrap{max-width:1560px;margin:0 auto;padding-inline:16px;padding-block:18px 40px;display:flex;flex-direction:column;gap:14px}
+h1{font:600 20px/1.2 var(--f-display);margin:0;letter-spacing:-.01em;text-wrap:balance}
+h2{font:600 15px/1.3 var(--f-body);margin:0}
+h3{font:600 11px/1.3 var(--f-body);margin:0;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.mono,code{font-family:var(--f-mono);font-size:12px}
+code{background:var(--surface-2);padding:0 4px;border-radius:4px}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:5px 10px;line-height:1.2}
+button:hover{border-color:var(--muted)}
+button:focus-visible,select:focus-visible,input:focus-visible,.cell:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--surface);font-weight:600}
+button.sm{padding:2px 7px;font-size:12px;border-radius:6px}
+button:disabled{opacity:.45;cursor:default}
+select{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:4px 6px}
+
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px);margin-inline:-16px;padding:8px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.bar .sp{flex:1}
+.sbar{flex:1 1 100%;display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr) auto;gap:6px 12px;align-items:start;border-top:1px solid var(--line);padding-top:8px}
+@media (max-width:760px){.sbar{grid-template-columns:minmax(0,1fr)}}
+.sbar select{font-weight:600;max-width:100%}
+.sbar .dots{display:flex;gap:4px;margin-top:6px}
+.sbar .dots i{width:18px;height:5px;border-radius:3px;background:var(--line)}
+.sbar .dots i.done{background:var(--ok)} .sbar .dots i.next{background:var(--accent)}
+.sbar .txt{font-size:13px;max-height:4.4em;overflow:auto;min-width:0}
+.sbar .txt b{font-weight:600}
+.allsteps{grid-column:1/-1;max-height:42vh;overflow:auto;border-top:1px dashed var(--line);padding-top:8px}
+.allsteps ol{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.allsteps li{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;font-size:13px}
+.allsteps li>span{font:500 11px var(--f-mono);width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);color:var(--muted)}
+.allsteps li.done>span{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok)}
+.allsteps li.next>span{background:var(--accent);color:var(--surface)}
+.allsteps p{margin:2px 0 0;color:var(--muted)}
+.allsteps li.done p,.allsteps li.next p{color:var(--ink)}
+#copybox{width:100%;height:160px;margin-bottom:8px;font:12px var(--f-mono);border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:8px}
+.sbar .acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.bar .hint{font-size:12px;color:var(--muted)}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;justify-content:space-between}
+.top p{margin:4px 0 0;color:var(--muted);max-width:75ch}
+.ctrl{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.clock{font:500 13px var(--f-mono);font-variant-numeric:tabular-nums;padding:5px 10px;border-radius:7px;background:var(--surface-2)}
+
+.scen{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:14px}
+@media (max-width:860px){.scen{grid-template-columns:minmax(0,1fr)}}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.scen-list{display:flex;flex-direction:column;gap:3px}
+.scen-list button{text-align:left;border-color:transparent;background:transparent;padding:6px 8px}
+.scen-list button:hover{background:var(--surface-2)}
+.scen-list button.on{background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--ink);font-weight:600}
+.story h2{font-size:17px}
+.story .intro{margin:6px 0 10px;color:var(--muted);max-width:90ch}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;counter-reset:st}
+.steps li{display:grid;grid-template-columns:26px minmax(0,1fr);gap:8px;counter-increment:st;align-items:start}
+.steps li::before{content:counter(st);font:500 12px var(--f-mono);width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);color:var(--muted)}
+.steps li.done::before{background:color-mix(in srgb,var(--ok) 20%,transparent);color:var(--ok)}
+.steps li.next::before{background:var(--accent);color:var(--surface)}
+.steps .t{font-weight:600}
+.steps li.todo .t{color:var(--muted);font-weight:500}
+.steps .x{margin:3px 0 0;max-width:95ch}
+.steps .go{margin-top:6px}
+
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
+@media (max-width:1180px){.grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.grid .owner{grid-column:1/-1}}
+@media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;display:flex;flex-direction:column}
+.panel>.hd{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;border-top:4px solid var(--who);border-radius:10px 10px 0 0}
+.panel>.bd{padding:10px 12px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.owner{--who:var(--own)} .c1{--who:var(--c1)} .c2{--who:var(--c2)}
+.who{font-weight:600;color:var(--who)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+.pill.bad{background:color-mix(in srgb,var(--bad) 15%,transparent);color:var(--bad)}
+.pill.info{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+.meta{display:flex;flex-wrap:wrap;gap:6px}
+.kv{font:12px var(--f-mono);font-variant-numeric:tabular-nums;background:var(--surface-2);border-radius:6px;padding:2px 7px}
+.kv b{font-weight:500;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;margin-left:auto}
+.switch input{appearance:none;width:34px;height:20px;border-radius:999px;background:var(--line);position:relative;cursor:pointer;margin:0;transition:background .15s}
+.switch input::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--surface);transition:left .15s}
+.switch input:checked{background:var(--ok)}
+.switch input:checked::after{left:17px}
+label.chk{display:inline-flex;gap:5px;align-items:center;font-size:12px;color:var(--muted)}
+
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line)}
+.tabs button{border:0;border-radius:6px 6px 0 0;background:transparent;padding:5px 10px;color:var(--muted);font-size:13px}
+.tabs button.on{background:var(--surface-2);color:var(--ink);font-weight:600}
+.tw{overflow:auto;max-height:300px;border:1px solid var(--line);border-radius:8px}
+.tw.short{max-height:170px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:4px 7px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{position:sticky;top:0;background:var(--surface-2);font-weight:500;color:var(--muted);font-size:11.5px;z-index:1}
+tr:last-child td{border-bottom:0}
+td.num{font-variant-numeric:tabular-nums;text-align:right}
+td.sv{font:12px var(--f-mono);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+td.id{font:11.5px var(--f-mono);color:var(--muted)}
+.cell{cursor:pointer;border-radius:4px;padding:1px 3px;margin:-1px -3px}
+.cell:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+tr.fl td{background:color-mix(in srgb,var(--warn) 16%,transparent)}
+tr.q td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+tr.qs td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.orph{color:var(--muted);font-style:italic}
+.tag{font-size:11px;padding:1px 6px;border-radius:5px;background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);white-space:nowrap}
+.tag.arch{background:color-mix(in srgb,var(--c2) 16%,transparent);color:var(--c2)}
+tr.ar td{color:var(--muted)}
+tr.ar td:first-child{box-shadow:inset 3px 0 0 var(--c2)}
+.tag.sent{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent)}
+.empty{padding:16px;text-align:center;color:var(--muted);font-size:13px}
+.prog{height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden}
+.prog i{display:block;height:100%;background:var(--who)}
+details>summary{cursor:pointer;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:2px 0}
+details{display:flex;flex-direction:column;gap:6px}
+details[open]>summary{margin-bottom:6px}
+.notes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.notes li{font-size:12.5px;padding:5px 8px;border-radius:6px;background:color-mix(in srgb,var(--bad) 10%,transparent);border-left:3px solid var(--bad)}
+.notes li.i{background:color-mix(in srgb,var(--accent) 9%,transparent);border-left-color:var(--accent)}
+.notes time{font:11px var(--f-mono);color:var(--muted);margin-right:6px}
+.wire{display:flex;flex-wrap:wrap;gap:4px;min-height:22px;align-items:center}
+.msg{font:11px var(--f-mono);padding:1px 6px;border-radius:5px;border:1px solid var(--line);background:var(--surface-2)}
+.msg.up{border-color:color-mix(in srgb,var(--who) 50%,transparent)}
+
+.log .lines{font:12px/1.55 var(--f-mono);max-height:300px;overflow:auto;display:flex;flex-direction:column}
+.log .ln{display:grid;grid-template-columns:70px 78px minmax(0,1fr);gap:8px;padding:1px 4px;border-radius:4px}
+.log .ln:nth-child(odd){background:color-mix(in srgb,var(--surface-2) 55%,transparent)}
+.log .ln .w{font-weight:500}
+.log .ln.owner .w{color:var(--own)} .log .ln.c1 .w{color:var(--c1)} .log .ln.c2 .w{color:var(--c2)}
+.log .ln.warn .m{color:var(--warn)} .log .ln.bad .m{color:var(--bad)} .log .ln.ok .m{color:var(--ok)}
+.log .ln .m{white-space:pre-wrap;word-break:break-word}
+.log .ln .t{color:var(--muted);font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;gap:6px;align-items:center}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+
+.modal{position:fixed;inset:0;background:color-mix(in srgb,var(--ink) 35%,transparent);display:grid;place-items:center;padding:16px;z-index:10}
+.modal form{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;width:min(380px,100%);display:flex;flex-direction:column;gap:10px}
+.modal label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.modal input,.modal select{border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:var(--surface);font-size:14px;color:var(--ink)}
+.modal .row{justify-content:flex-end}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Пісочниця синхронізації</h1>
+      <p>Симуляція з дизайн-документа: власник з тригерами і tombstones, два клієнти з локальними репліками, чергою дій і потоком змін. Оберіть сценарій і проходьте його кроками або вмикайте зв'язок і редагуйте дані самі.</p>
+    </div>
+  </header>
+  <div class="bar" role="toolbar" aria-label="Керування симуляцією">
+    <span class="clock" id="clock">14:05:00</span>
+    <button data-act="back" id="backbtn" title="Скасувати останній такт або дію (←)">← Назад</button>
+    <button data-act="tick" title="Уперед (→)">Такт →</button>
+    <label class="chk" for="single" title="Кожна доставка, відправка чи подія окремим тактом"><input type="checkbox" id="single" data-chg="mode" checked>1 дія за такт</label>
+    <button id="play" class="primary" data-act="play">Пауза</button>
+    <label class="chk" for="speed">Швидкість
+      <select id="speed" data-chg="speed">
+        <option value="1400">0,5×</option><option value="700" selected>1×</option><option value="350">2×</option><option value="160">4×</option>
+      </select>
+    </label>
+    <div class="sbar" id="story"></div>
+  </div>
+
+
+  <main class="grid">
+    <section class="panel owner" id="p-owner"></section>
+    <section class="panel c1" id="p-c1"></section>
+    <section class="panel c2" id="p-c2"></section>
+  </main>
+
+  <section class="box log">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <div class="row"><h3>Протокол і події</h3><button class="sm" data-act="copylog">Скопіювати журнал</button><span class="small muted" id="copymsg" role="status"></span></div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--own)"></i>Власник</span>
+        <span><i class="sw" style="background:var(--c1)"></i>Клієнт 1</span>
+        <span><i class="sw" style="background:var(--c2)"></i>Клієнт 2</span>
+        <span>→ клієнт шле власнику, ← власник шле клієнту</span>
+      </div>
+    </div>
+    <textarea id="copybox" readonly hidden aria-label="Текст журналу для копіювання"></textarea>
+    <div class="lines" id="log"></div>
+  </section>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <form id="mform">
+    <h2 id="mtitle">Редагування</h2>
+    <div id="mfields" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div class="row"><button type="button" data-act="mclose">Скасувати</button><button type="submit" class="primary">Зберегти</button></div>
+  </form>
+</div>
+
+<script>
+"use strict";
+// ---------- константи моделі ----------
+const TABLES=['Category','Item','Log'];
+const TLABEL={Category:'Категорії',Item:'Товари',Log:'Журнал'};
+const COLS={Category:['name'],Item:['name','price','status','categoryId'],Log:['text']};
+const FKS={Item:{categoryId:'Category'}};
+const CNAME={name:'назва',price:'ціна',status:'статус',categoryId:'категорія',text:'запис'};
+const STATUSES=['новий','активний','архів'];
+const RET=30, NB=3, NA=5, CHUNKS=6;
+const KIND={create:'створення',patch:'патч',delete:'видалення',archive:'в архів',pdelete:'видалення за умовою'};
+const LAGW=10; // у дизайні 3 хв зростання відставання, у демо 10 тактів
+const condText=k=>k.in?`Id ∈ {${k.in.length} ключів}`:`${k.col} = '${k.eq}'`;
+const condMatch=(k,r)=>k.in?k.in.includes(r.Id):r[k.col]===k.eq;
+const WHO={owner:'Власник',c1:'Клієнт 1',c2:'Клієнт 2'};
+const AUTO_NAMES=['Кабель USB','Лампа','Монітор','Клавіатура','Ящик','Фарба','Стілець','Коробка','Етикетки','Батарейки','Шафа','Сейф'];
+
+let S=null, timer=null, playing=true;
+const closedD=new Set();const op=k=>closedD.has(k)?'':'open';
+const $=s=>document.querySelector(s);
+const clone=o=>JSON.parse(JSON.stringify(o));
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rnd=()=>S.rng();
+const pick=a=>a[Math.floor(rnd()*a.length)];
+function gid(){S.idc++;return S.idc.toString(16).padStart(4,'0')+Math.floor(rnd()*65536).toString(16).padStart(4,'0')}
+function fmt(t){const s=5*60+t;const h=14+Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return `${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`}
+function log(who,text,cls=''){S.logSeq++;S.log.push({t:S.T,who,text,cls});if(S.log.length>400)S.log.shift()}
+function later(n,fn){S.timers.push({at:S.T+n,fn})}
+function when(cond,fn){S.watch.push({cond,fn})}
+
+// ---------- стан ----------
+function makeOwner(){return{instanceId:'inst-'+Math.floor(rnd()*0xffffff).toString(16).padStart(6,'0'),schema:1,version:0,purged:0,day:0,
+  rows:{Category:{},Item:{},Log:{}},tomb:{},clients:{},subs:{},streams:{},snapshots:{},flash:{},tab:'Item',logN:0}}
+function makeClient(id){return{id,link:false,latency:2,newSchema:false,state:'offline',offlineSince:0,replica:null,outbox:[],nextSeq:1,nextLid:1,lagHist:[],lagWarn:false,
+  notes:[],loseNextReply:false,dl:null,flushed:false,inflight:null,ackTick:0,ackDirty:false,openTable:'Item',remaining:0,sel:[],flash:{},archive:{Category:{},Item:{},Log:{}},archRetry:[]}}
+function fresh(){
+  S={T0:Math.random(),T:0,E:[],logSeq:0,acts:0,single:true,rng:mulberry32(42),idc:0x0190,net:[],log:[],timers:[],watch:[],owner:null,clients:{},autoPurge:true,scen:null,step:0};
+  S.owner=makeOwner();
+  const cat={};
+  for(const n of ['Офіс','Склад','Архів']){const id=gid();cat[n]=id;oInsert('Category',{Id:id,name:n})}
+  for(const [n,p,s,c] of [['Степлер',120,'активний','Офіс'],['Папір A4',240,'активний','Офіс'],['Маркери',85,'новий','Офіс'],['Палета',450,'активний','Склад'],
+    ['Стрейч-плівка',310,'активний','Склад'],['Скотч',40,'новий','Склад'],['Старий принтер',900,'архів','Архів'],['Факс',300,'архів','Архів'],['Каталог 2019',15,'архів','Офіс']])
+    oInsert('Item',{Id:gid(),name:n,price:p,status:s,categoryId:cat[c]});
+  for(let i=0;i<3;i++)autoLog(1,true);
+  S.owner.flash={};S.owner.pages=Object.values(S.owner.rows).reduce((n,t)=>n+Object.keys(t).length,0)+4;S.owner.free=0;S.autoVac=true;
+  S.clients.c1=makeClient('c1');S.clients.c2=makeClient('c2');
+}
+function syncNow(c){
+  const o=S.owner;
+  c.replica={instanceId:o.instanceId,rows:clone(o.rows),cursors:Object.fromEntries(TABLES.map(t=>[t,{cursor:o.version,ranges:[]}]))};
+  o.clients[c.id]={acked:o.version,applied:0,last:o.day};
+  c.link=true;c.state='online';
+  o.subs[c.id]={cid:c.id,open:[c.openTable],mirror:clone(c.replica.cursors),phase:'online',sentUpTo:o.version};
+}
+const minCursor=c=>Math.min(...TABLES.map(t=>c.replica.cursors[t].cursor));
+const byName=(rows,n)=>Object.values(rows).find(r=>r.name===n);
+const oItem=n=>byName(S.owner.rows.Item,n);
+const oCat=n=>byName(S.owner.rows.Category,n);
+const cItem=(c,n)=>byName(c.replica.rows.Item,n);
+
+// ---------- власник: запис через "тригери" ----------
+function oInsert(tbl,row){const o=S.owner;row={...row};row.SyncVersion=++o.version;o.rows[tbl][row.Id]=row;delete o.tomb[tbl+'|'+row.Id];o.flash[tbl+'|'+row.Id]=S.T;if(o.pages!=null){if(o.free>0)o.free--;else o.pages++}}
+function oUpdate(tbl,id,patch){const o=S.owner,r=o.rows[tbl][id];if(!r)return false;Object.assign(r,patch);r.SyncVersion=++o.version;o.flash[tbl+'|'+id]=S.T;return true}
+function oUpsert(tbl,row){if(S.owner.rows[tbl][row.Id]){const p={...row};delete p.Id;delete p.SyncVersion;oUpdate(tbl,row.Id,p)}else{const r={...row};delete r.SyncVersion;oInsert(tbl,r)}}
+function oDelete(tbl,id,depth=0){
+  const o=S.owner,r=o.rows[tbl][id];if(!r)return [];
+  const gone=[r.name||r.text||id];
+  for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===tbl)
+    for(const ch of Object.values(o.rows[ct]))if(ch[col]===id)gone.push(...oDelete(ct,ch.Id,depth+1));
+  delete o.rows[tbl][id];if(o.pages!=null)o.free++;
+  const v=++o.version;o.tomb[tbl+'|'+id]={tbl,pk:id,version:v,deletedAt:o.day,label:r.name||r.text||''};
+  return gone;
+}
+// автоматика
+function autoPrice(id,price){const r=S.owner.rows.Item[id];if(!r)return;const p=price??(10+Math.floor(rnd()*99)*10);oUpdate('Item',id,{price:p});log('owner',`автоматика: «${r.name}».price = ${p}, SyncVersion ${r.SyncVersion}`)}
+function autoStatus(id,st){const r=S.owner.rows.Item[id];if(!r)return;const s=st??STATUSES[(STATUSES.indexOf(r.status)+1)%3];oUpdate('Item',id,{status:s});log('owner',`автоматика: «${r.name}».status = ${s}, SyncVersion ${r.SyncVersion}`)}
+function autoNewItem(name,status){const o=S.owner;const cats=Object.values(o.rows.Category);if(!cats.length)return;const id=gid();
+  const n=name||pick(AUTO_NAMES);oInsert('Item',{Id:id,name:n,price:10+Math.floor(rnd()*60)*10,status:status||'новий',categoryId:pick(cats).Id});log('owner',`автоматика створила «${n}», SyncVersion ${o.version}`)}
+function autoLog(k=1,quiet){for(let i=0;i<k;i++){S.owner.logN++;oInsert('Log',{Id:gid(),text:`Автоматика: перерахунок залишків #${S.owner.logN}`})}if(!quiet)log('owner',`автоматика додала ${k} записів у журнал`)}
+function autoDelete(tbl,id){const r=S.owner.rows[tbl][id];if(!r)return;const g=oDelete(tbl,id);log('owner',`автоматика видалила ${g.map(x=>'«'+x+'»').join(', ')}${g.length>1?' (каскад)':''}, tombstones: ${g.length}`,'warn')}
+function autoFlow(n){const o=S.owner;const items=Object.values(o.rows.Item);
+  for(let i=0;i<n;i++){if(i%2===0){o.logN++;oInsert('Item',{Id:gid(),name:pick(AUTO_NAMES)+' '+o.logN,price:100,status:'новий',categoryId:pick(Object.values(o.rows.Category)).Id})}
+    else{const r=pick(items);oUpdate('Item',r.Id,{price:10+Math.floor(rnd()*99)*10})}}
+  log('owner',`автоматика: потік, +${n} змін у «Товарах», голова ${o.version}${S.flow.left?`, лишилось тактів потоку: ${S.flow.left}`:', потік зупинено'}`)}
+function autoBurst(){const o=S.owner;const items=Object.values(o.rows.Item);
+  for(let i=0;i<5;i++){const r=pick(items);if(rnd()<.5)oUpdate('Item',r.Id,{price:10+Math.floor(rnd()*99)*10});else oUpdate('Item',r.Id,{status:pick(STATUSES)})}
+  for(let i=0;i<2;i++){const id=gid();oInsert('Item',{Id:id,name:pick(AUTO_NAMES),price:100,status:'новий',categoryId:pick(Object.values(o.rows.Category)).Id})}
+  S.owner.logN;for(let i=0;i<10;i++){o.logN++;oInsert('Log',{Id:gid(),text:`Автоматика: перерахунок залишків #${o.logN}`})}
+  log('owner',`автоматика: пакет із 17 змін (5 правок, 2 нові товари, 10 записів журналу), голова ${o.version}`)}
+function purge(manual){
+  const o=S.owner;const lim=o.day-RET;
+  for(const [cid,cl] of Object.entries(o.clients))if(cl.last<lim){delete o.clients[cid];log('owner',`_sync_clients: ${WHO[cid]} не бачили понад ${RET} днів, запис видалено`,'warn')}
+  const live=Object.values(o.clients);const floor=live.length?Math.min(...live.map(c=>c.acked)):Infinity;
+  let n=0,mx=o.purged,byAge=0;
+  for(const [k,t] of Object.entries(o.tomb)){const old=t.deletedAt<lim;if(t.version<=floor||old){delete o.tomb[k];n++;if(old&&t.version>floor)byAge++;mx=Math.max(mx,t.version)}}
+  o.purged=mx;
+  if(n)log('owner',`очищення: видалено ${n} tombstones (floor = MIN(acked_version) = ${floor===Infinity?'∞':floor}${byAge?`, ${byAge} за терміном`:''}), purged_version = ${o.purged}`);
+  else if(manual)log('owner',`очищення: нічого видаляти, floor = ${floor===Infinity?'∞':floor}`);
+}
+function dayJump(){const o=S.owner;o.day+=31;for(const cid of Object.keys(o.subs))if(o.clients[cid])o.clients[cid].last=o.day;
+  o.snapshots={};log('owner',`минуло 31 день, сьогодні день ${o.day}`);purge(true)}
+
+// ---------- мережа ----------
+function send(cid,dir,type,p,label=''){const c=S.clients[cid];S.net.push({cid,dir,type,p:clone(p),at:S.T+c.latency,label});log(cid==='x'?'owner':(dir==='up'?cid:'owner'),`${dir==='up'?'→':'←'} ${type}${label?' · '+label:''}${dir==='down'?'  ['+WHO[cid]+']':''}`)}
+function setLink(cid,on){
+  const c=S.clients[cid],o=S.owner;if(c.link===on)return;c.link=on;
+  if(!on){const lost=S.net.filter(m=>m.cid===cid).length;S.net=S.net.filter(m=>m.cid!==cid);delete o.subs[cid];delete o.streams[cid];
+    c.state='offline';c.offlineSince=S.T;c.inflight=null;log(cid,`зв'язок втрачено${lost?`, у дорозі загублено ${lost} повідомл.`:''}`,'warn')}
+  else log(cid,'зв\'язок є');
+}
+
+// ---------- такт ----------
+// Кожен такт мережі розкладається на окремі дії (доставка повідомлення, крок власника, крок клієнта, служби).
+// У режимі "1 дія за такт" кнопка виконує одну видиму дію, інакше весь такт.
+function buildPhase(){
+  S.T++;const E=[];
+  for(const m of S.net.filter(m=>m.at<=S.T))E.push(()=>{if(!S.net.includes(m))return;S.net=S.net.filter(x=>x!==m);
+    if(!S.clients[m.cid].link)return;m.dir==='up'?ownerRecv(m):clientRecv(m);return 'act'});
+  E.push(()=>ownerStep());
+  for(const c of Object.values(S.clients))E.push(()=>clientStep(c));
+  E.push(()=>{if(S.flow&&S.flow.left>0){S.flow.left--;autoFlow(S.flow.per)}});
+  E.push(()=>{if(S.autoPurge&&S.T%15===0)purge()});
+  E.push(()=>{const o=S.owner;if(S.autoVac&&S.T%2===0&&o.free>0){const k=Math.min(2,o.free);o.free-=k;o.pages-=k;log('owner',`PRAGMA incremental_vacuum(${k}): файл ${o.pages} стор., вільних ${o.free}`)}});
+  E.push(()=>{const tm=S.timers.filter(x=>x.at<=S.T);S.timers=S.timers.filter(x=>x.at>S.T);tm.forEach(x=>x.fn())});
+  E.push(()=>{const w=S.watch.filter(x=>x.cond());S.watch=S.watch.filter(x=>!w.includes(x));w.forEach(x=>x.fn())});
+  S.E=E;
+}
+function runOne(){const n=S.logSeq;const r=S.E.shift()();if(Array.isArray(r))S.E.unshift(...r);return r==='act'||S.logSeq!==n}
+function tick(){if(!S.E.length)buildPhase();while(S.E.length)runOne()}
+// порожні такти (нічого не відбулось) пропускаються, але не більше 30 поспіль
+function stepOne(){let idle=0;for(;;){if(!S.E.length){if(idle++>=30)return;buildPhase()}if(runOne()){S.acts++;return}}}
+
+// ---------- власник: SyncService ----------
+function ownerRecv(m){
+  const o=S.owner,cid=m.cid,p=m.p;
+  if(m.type==='Start'){
+    // окремого Handshake нема: перше повідомлення потоку несе схему, instance_id і курсори
+    const minC=p.cursors?Math.min(...TABLES.map(t=>p.cursors[t].cursor)):null;
+    let st='Ok',why='';
+    if(p.schema!==o.schema){st='SchemaMismatch';why=`схема клієнта ${p.schema}, власника ${o.schema}`}
+    else if(!p.instanceId){st='SnapshotRequired';why='репліки нема'}
+    else if(p.instanceId!==o.instanceId){st='SnapshotRequired';why='інший instance_id'}
+    else if(minC<o.purged){st='SnapshotRequired';why=`курсор ${minC} < purged_version ${o.purged}`}
+    else if(minC>o.version){st='SnapshotRequired';why=`курсор ${minC} > version ${o.version}`}
+    if(st!=='Ok'){const kb=Math.max(1,Math.round(Object.values(o.rows).reduce((n,t)=>n+Object.keys(t).length,0)*50/1024));
+      send(cid,'down',st,{status:st,why,sizeKB:kb},`${why}${st==='SnapshotRequired'?`, знімок ~${kb} КБ`:''}; потік закрито`);return}
+    if(!o.clients[cid])o.clients[cid]={acked:minC,applied:0,last:o.day};o.clients[cid].last=o.day;
+    const sub={cid,open:p.open,mirror:clone(p.cursors),phase:'catchup',sentUpTo:0,synced:{},extra:[]};o.subs[cid]=sub;
+    log('owner',`Subscribe ${WHO[cid]}: Start прийнято, голова ${o.version}; прогалини ${TABLES.map(t=>`${t} ${gapsText(sub.mirror[t],o.version)}`).join(', ')}`);
+  }
+  else if(m.type==='SnapshotReq'){
+    let snap=p.id&&o.snapshots[p.id];
+    if(snap){o.streams[cid]={id:p.id,next:p.offset};log('owner',`знімок ${p.id}: продовження з шматка ${p.offset+1}`)}
+    else{
+      const id='snap-'+Math.floor(rnd()*0xffff).toString(16);
+      snap=o.snapshots[id]={V:o.version,data:clone(o.rows),total:CHUNKS,instanceId:o.instanceId};
+      o.clients[cid]={acked:o.version,applied:o.clients[cid]?.applied||0,last:o.day};
+      o.streams[cid]={id,next:0};
+      log('owner',`VACUUM INTO → знімок ${id}, V = ${o.version}. ${WHO[cid]} зареєстровано з acked_version = ${o.version}`);
+    }
+  }
+  else if(m.type==='OpenTables'){const sub=o.subs[cid];if(sub){sub.open=p.open;log('owner',`порядок досинхронізації: ${prioTables(sub).join(' → ')}`)}}
+  else if(m.type==='Ack'){if(!o.clients[cid])o.clients[cid]={acked:p.min,applied:0,last:o.day};o.clients[cid].acked=p.min;o.clients[cid].last=o.day}
+  else if(m.type==='Apply')ownerApply(cid,p.actions);
+}
+function prio(sub,t){return sub.open.includes(t)||sub.open.some(x=>FKS[x]&&Object.values(FKS[x]).includes(t))?0:1}
+function prioTables(sub){return TABLES.slice().sort((a,b)=>prio(sub,a)-prio(sub,b))}
+// курсор C і отримані відрізки (lo, hi] вище за C; невідправлене це прогалини між ними
+function gapsOf(k,H){const g=[];let top=H;for(const [lo,hi] of k.ranges.slice().sort((x,y)=>y[1]-x[1])){if(top>hi)g.push([hi,top]);top=lo}if(top>k.cursor)g.push([k.cursor,top]);return g}
+function addRange(k,lo,hi){if(hi<=lo)return;const r=[...k.ranges,[lo,hi]].sort((x,y)=>x[0]-y[0]);const m=[];
+  for(const x of r){const l=m[m.length-1];if(l&&x[0]<=l[1])l[1]=Math.max(l[1],x[1]);else m.push([x[0],x[1]])}
+  while(m.length&&m[0][0]<=k.cursor){k.cursor=Math.max(k.cursor,m[0][1]);m.shift()}
+  k.ranges=m.sort((x,y)=>y[1]-x[1]);}
+function gapsText(k,H){const g=gapsOf(k,H);return g.length?g.map(([a,b])=>`(${a},${b}]`).join(' '):'нема'}
+function takeExtra(sub){const x=sub.extra;sub.extra=[];return x}
+function applyExtra(c,p){for(const [t,a,b] of p.extra||[])addRange(c.replica.cursors[t],a,b)}
+function rangeItems(tbl,lo,hi){ // lo < v < hi
+  const o=S.owner,out=[];
+  for(const r of Object.values(o.rows[tbl]))if(r.SyncVersion>lo&&r.SyncVersion<hi)out.push({v:r.SyncVersion,row:clone(r)});
+  for(const t of Object.values(o.tomb))if(t.tbl===tbl&&t.version>lo&&t.version<hi)out.push({v:t.version,tomb:{pk:t.pk,version:t.version}});
+  return out;
+}
+function remaining(sub){const H=S.owner.version;let n=0;for(const t of TABLES)for(const [a,b] of gapsOf(sub.mirror[t],H))n+=rangeItems(t,a,b+1).length;return n}
+function ownerStep(){const o=S.owner;
+  return [...Object.keys(o.streams).map(cid=>()=>streamStep(cid)),...Object.keys(o.subs).map(cid=>()=>subStep(cid))]}
+function streamStep(cid){const o=S.owner,st=o.streams[cid];if(!st)return;const sn=o.snapshots[st.id];if(!sn){delete o.streams[cid];return}
+  const last=st.next===sn.total-1;
+  send(cid,'down','SnapshotChunk',{id:st.id,offset:st.next,total:sn.total,V:sn.V,instanceId:sn.instanceId,data:last?sn.data:null},`шматок ${st.next+1}/${sn.total}${last?', хеш OK':''}`);
+  if(++st.next>=sn.total)delete o.streams[cid];}
+function subStep(cid){const sub=S.owner.subs[cid];if(!sub)return;
+    if(sub.phase==='catchup'){
+      const H=S.owner.version;
+      for(const t of prioTables(sub)){
+        const k=sub.mirror[t],gs=gapsOf(k,H);
+        if(!gs.some(([a,b])=>rangeItems(t,a,b+1).length)){
+          if(!sub.synced[t]){k.cursor=H;k.ranges=[];sub.synced[t]=1;send(sub.cid,'down','TableSynced',{tbl:t,V:H,extra:takeExtra(sub)},`${t}, прогалин нема, курсор = ${H}`);return}
+          // таблиця вже синхронна, а голова зросла через інші таблиці: порожній проміжок закривається попутно з наступним повідомленням
+          for(const [a,b] of gs){sub.extra.push([t,a,b]);addRange(k,a,b)}
+          continue}
+        sub.synced[t]=0;
+        // найвищі невідправлені версії, ліміту відрізків нема (запобіжник ~10 000 у демо не досягається).
+        // Свіжий хвіст, менший за пачку, не займає окреме повідомлення: їде разом з пачкою старого проміжку.
+        const ne=gs.filter(([a,b])=>rangeItems(t,a,b+1).length);
+        let main=ne[0],tail=null;
+        if(ne.length>1&&ne[0][1]===H&&rangeItems(t,ne[0][0],ne[0][1]+1).length<NB){tail=ne[0];main=ne[1]}
+        const [ga,gb]=main;const all=rangeItems(t,ga,gb+1).sort((x,y)=>y.v-x.v);const items=all.slice(0,NB);
+        const lo=all.length>NB?items[items.length-1].v-1:ga;
+        const tailItems=tail?rangeItems(t,tail[0],tail[1]+1).sort((x,y)=>y.v-x.v):[];
+        const covers=[[lo,gb]];for(const [a,b] of gs)if(b>gb)covers.push([a,b]); // вище за пачку: хвіст і порожні прогалини
+        for(const [a,b] of covers)addRange(k,a,b);
+        const sent=[...tailItems,...items];
+        const rows=sent.filter(x=>x.row).map(x=>x.row),tombs=sent.filter(x=>x.tomb).map(x=>x.tomb);
+        send(sub.cid,'down','Batch',{phase:'catchup',tbl:t,covers,rows,tombs,remaining:remaining(sub),extra:takeExtra(sub)},
+          `${t}, версії ${items.map(x=>x.v).join(', ')}${tail?` + свіжий хвіст ${tailItems.map(x=>x.v).join(', ')} у тому ж повідомленні`:''}${tombs.length?` (tombstones: ${tombs.length})`:''}, закриває ${covers.map(([a,b])=>`(${a},${b}]`).join(' ')}`);
+        return}
+      sub.phase='online';sub.sentUpTo=H;send(sub.cid,'down','Progress',{remaining:0,done:true,extra:takeExtra(sub)},'досинхронізацію завершено');return
+    }else{
+      let all=[];for(const t of TABLES)for(const x of rangeItems(t,sub.sentUpTo,Infinity))all.push({...x,tbl:t});
+      if(!all.length)return;
+      all=all.sort((a,b)=>a.v-b.v).slice(0,NB);sub.sentUpTo=all[all.length-1].v;
+      send(sub.cid,'down','Batch',{phase:'online',upTo:sub.sentUpTo,entries:all},`онлайн, ${all.map(x=>x.tbl+' v'+x.v+(x.tomb?' ✕':'')).join(', ')}; Head(${sub.sentUpTo}): курсори таблиць без відрізків піднімаються до ${sub.sentUpTo}`);
+    }
+}
+function ownerApply(cid,actions){
+  const o=S.owner;const cl=o.clients[cid]||(o.clients[cid]={acked:o.purged,applied:0,last:o.day});cl.last=o.day;
+  const acts=actions.slice().sort((a,b)=>a.seq-b.seq);const st={};const from=cl.applied;
+  const creates={};for(const a of acts)if(a.kind==='create'&&a.seq>cl.applied)creates[a.tbl+'|'+a.pk]=a;
+  for(const a of acts){
+    if(a.seq<=cl.applied){st[a.seq]={status:'Skipped',reason:'вже застосовано (seq ≤ applied_seq)'};continue}
+    if(a.kind==='create'&&o.tomb[a.tbl+'|'+a.pk])st[a.seq]={status:'Rejected',reason:'запис видалено'};
+    if(a.kind==='patch'&&!o.rows[a.tbl][a.pk]&&!creates[a.tbl+'|'+a.pk])st[a.seq]={status:'Ignored',reason:'запис видалено'};
+  }
+  // перенесення в архів одним предикатом: DELETE ... WHERE SyncVersion <= V AND Id IN (набір із замиканням по FK)
+  for(const a of acts.filter(a=>a.kind==='archive'&&!st[a.seq])){
+    const its=a.items.map(([t,pk])=>({tbl:t,pk,why:null}));
+    for(const it of its){const r=o.rows[it.tbl][it.pk];if(!r)it.why='gone';else if(r.SyncVersion>a.V)it.why='changed'}
+    let ch2=true;while(ch2){ch2=false;for(const it of its){if(it.why)continue;
+      for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===it.tbl)
+        for(const kid of Object.values(o.rows[ct]))if(kid[col]===it.pk){const ki=its.find(x=>x.tbl===ct&&x.pk===kid.Id);
+          if(!it.why&&(!ki||ki.why)){it.why='children';ch2=true}}}}
+    for(const it of its.filter(x=>!x.why).sort((x,y)=>(FKS[x.tbl]?0:1)-(FKS[y.tbl]?0:1)))oDelete(it.tbl,it.pk);
+    const changed=its.filter(x=>x.why==='changed').map(x=>[x.tbl,x.pk]),children=its.filter(x=>x.why==='children').map(x=>[x.tbl,x.pk]);
+    st[a.seq]={status:'Applied',deleted:its.filter(x=>!x.why).length,changed,children,
+      reason:[changed.length?`Rejected: changed ${changed.map(([t,k])=>rowLabel(null,t,k)).join(', ')}`:'',children.length?`has children ${children.map(([t,k])=>rowLabel(null,t,k)).join(', ')}`:''].filter(Boolean).join('; ')}}
+  // масове видалення за умовою: DELETE ... WHERE SyncVersion <= V AND <умова>
+  for(const a of acts.filter(a=>a.kind==='pdelete'&&!st[a.seq])){
+    const m=Object.values(o.rows[a.tbl]).filter(r=>condMatch(a.cond,r));const del=m.filter(r=>r.SyncVersion<=a.V),kept=m.filter(r=>r.SyncVersion>a.V);
+    del.forEach(r=>{if(o.rows[a.tbl][r.Id])oDelete(a.tbl,r.Id)});
+    st[a.seq]={status:'Applied',deleted:del.length,changed:kept.map(r=>[a.tbl,r.Id]),changedNames:kept.map(r=>r.name),
+      reason:kept.length?`Rejected: changed ${kept.map(r=>'«'+r.name+'» v'+r.SyncVersion).join(', ')} (новіші за V ${a.V})`:''}}
+  let ch=true; // явна перевірка FK з урахуванням створень у цій же пачці
+  while(ch){ch=false;for(const a of acts){if(st[a.seq]||a.kind==='delete'||a.kind==='archive'||a.kind==='pdelete')continue;
+    for(const [col,pt] of Object.entries(FKS[a.tbl]||{})){if(!(col in a.values))continue;const pid=a.values[col];
+      const inBatch=creates[pt+'|'+pid];const ok=(o.rows[pt][pid]&&!acts.some(d=>d.kind==='delete'&&d.tbl===pt&&d.pk===pid&&!st[d.seq]))||(inBatch&&!st[inBatch.seq]);
+      if(!ok){st[a.seq]={status:'Rejected',reason:'батьківський запис видалено'};ch=true}}}}
+  for(const a of acts){if(st[a.seq])continue;st[a.seq]={status:'Applied'};
+    if(a.kind==='create')oUpsert(a.tbl,{Id:a.pk,...a.values});
+    else if(a.kind==='patch'){if(o.rows[a.tbl][a.pk])oUpdate(a.tbl,a.pk,a.values)}
+    else oDelete(a.tbl,a.pk);}
+  cl.applied=Math.max(cl.applied,...acts.map(a=>a.seq));
+  const results=acts.map(a=>({seq:a.seq,tbl:a.tbl,pk:a.pk,kind:a.kind,...st[a.seq]}));
+  log('owner',`Apply від ${WHO[cid]}: ${results.map(r=>`#${r.seq} ${KIND[r.kind]} ${r.status}${r.deleted!=null?`, видалено ${r.deleted}`:''}${r.reason?' ('+r.reason+')':''}`).join('; ')}. applied_seq ${from} → ${cl.applied}, version ${o.version}`,
+    results.some(r=>r.status==='Rejected'||r.status==='Ignored'||r.changed?.length||r.children?.length)?'warn':'');
+  const c=S.clients[cid];
+  if(c.loseNextReply){c.loseNextReply=false;log('owner','✕ відповідь ApplyReply загубилась у мережі','bad');return}
+  send(cid,'down','ApplyReply',{applied_up_to_seq:cl.applied,results},`applied_up_to_seq = ${cl.applied}`);
+}
+
+// ---------- клієнт: SyncAgent ----------
+function clientStep(c){
+  if(!c.link)return;
+  if(c.state==='offline'){sendStart(c);return}
+  return [
+    ()=>{if(c.inflight&&S.T>c.inflight.timeoutAt){log(c.id,`відповіді на Apply нема, повторна відправка тих самих дій`,'warn');c.inflight=null}},
+    ()=>{if(c.state==='online'&&c.archRetry.length)archRetryStep(c)},
+    ()=>{if(['flush','catchup','online'].includes(c.state))maybeApply(c)},
+    ()=>{if(c.state==='flush'&&!c.inflight&&(c.flushed||!c.outbox.length))requestSnapshot(c)},
+    ()=>lagStep(c),
+    ()=>{if((c.state==='catchup'||c.state==='online')&&c.ackDirty&&S.T-c.ackTick>=4){c.ackTick=S.T;c.ackDirty=false;send(c.id,'up','Ack',{min:minCursor(c)},`мін. курсор ${minCursor(c)}`)}},
+  ].map(f=>()=>{if(c.link)return f()});
+}
+function sendStart(c){
+  const r=c.replica;c.state='start';
+  send(c.id,'up','Start',{schema:c.newSchema?2:1,instanceId:r?.instanceId||null,cursors:r?clone(r.cursors):null,open:[c.openTable]},
+    r?`схема ${c.newSchema?2:1}, instance_id ${r.instanceId}, `+TABLES.map(t=>{const k=r.cursors[t];return `${t}=${k.cursor}${k.ranges.length?' + '+k.ranges.map(([a,b])=>`(${a},${b}]`).join(' '):''}`}).join(', ')+`; відкрита ${c.openTable}`
+     :`схема ${c.newSchema?2:1}, репліки нема`)}
+// "канал не встигає": залишок досинхронізації не спадає LAGW тактів поспіль і за цей час виріс
+function lagStep(c){
+  if(c.state!=='catchup'){c.lagHist=[];if(c.lagWarn){c.lagWarn=false}return}
+  c.lagHist.push(c.remaining);if(c.lagHist.length>LAGW)c.lagHist.shift();
+  const h=c.lagHist,grow=h.length>=LAGW&&h[h.length-1]>h[0]&&h.every((x,i)=>!i||x>=h[i-1]);
+  if(grow&&!c.lagWarn)log(c.id,`канал не встигає: відстаємо на ${c.remaining} змін, росте ${LAGW} тактів поспіль`,'warn');
+  if(!grow&&c.lagWarn&&h[h.length-1]<h[0])c.lagWarn=false;else if(grow)c.lagWarn=true;
+}
+function requestSnapshot(c){c.state='snapshot';send(c.id,'up','SnapshotReq',{id:c.dl?.id||null,offset:c.dl?.offset||0},c.dl?`${c.dl.id}, з шматка ${c.dl.offset+1}`:'новий')}
+function maybeApply(c){
+  if(c.inflight||!c.outbox.length)return;
+  // повторна відправка спершу; далі інтерактивні дії незалежно від порядку створення, потім масові.
+  // seq дається при першій відправці, тому власник завжди бачить seq у зростаючому порядку і applied_seq лишається одним числом
+  const ob=c.outbox.slice().sort((a,b)=>(a.seq??1e9)-(b.seq??1e9)||(a.cls||1)-(b.cls||1)||a.lid-b.lid);const batch=[];const inB=new Set();
+  const add=e=>{if(inB.has(e))return;inB.add(e);
+    for(const [col,pt] of Object.entries(FKS[e.tbl]||{})){const pid=e.pk&&c.replica.rows[e.tbl][e.pk]?.[col];
+      if((e.kind==='create'||e.columns.includes(col))&&pid){const pe=c.outbox.find(x=>x.tbl===pt&&x.pk===pid&&x.kind==='create'&&!x.sent);if(pe)add(pe)}}
+    batch.push(e)};
+  for(const e of ob){if(batch.length>=NA)break;add(e)}
+  for(const e of batch)if(e.seq==null)e.seq=c.nextSeq++;
+  const actions=batch.map(e=>{
+    if(e.kind==='archive')return{seq:e.seq,kind:e.kind,tbl:e.tbl,items:e.items,V:e.V};
+    if(e.kind==='pdelete')return{seq:e.seq,kind:e.kind,tbl:e.tbl,cond:e.cond,V:e.V};
+    const r=c.replica.rows[e.tbl][e.pk];let values=null;
+    if(e.kind==='create'&&r){values={};for(const k of COLS[e.tbl])values[k]=r[k]}
+    if(e.kind==='patch'&&r){values={};for(const k of e.columns)values[k]=r[k]}
+    return{seq:e.seq,tbl:e.tbl,pk:e.pk,kind:e.kind,columns:e.columns,values}}).filter(a=>a.kind!=='create'&&a.kind!=='patch'||a.values);
+  if(!actions.length)return;
+  batch.forEach(e=>e.sent=1);
+  c.inflight={seqs:actions.map(a=>a.seq),timeoutAt:S.T+2*c.latency+4};
+  send(c.id,'up','Apply',{actions},actions.map(a=>{const e=batch.find(x=>x.seq===a.seq);return `#${a.seq} ${e.cls===2?'[масова] ':''}${KIND[a.kind]} ${obLabel(c,e)}${a.values?' '+JSON.stringify(a.values).replace(/"/g,''):''}${a.V!=null?`, SyncVersion ≤ ${a.V}`:''}`}).join('; '));
+}
+function obLabel(c,e){
+  if(e.kind==='archive')return `${e.items.length} записів: ${e.items.map(([t,k])=>rowLabel(c,t,k)).join(', ')}`;
+  if(e.kind==='pdelete')return `${e.tbl} де ${condText(e.cond)}`;
+  return rowLabel(c,e.tbl,e.pk)}
+function rowLabel(c,tbl,pk){const r=c?.replica?.rows[tbl]?.[pk]||S.owner.rows[tbl][pk]||(c&&c.archive[tbl][pk]);return r?`«${r.name||r.text}»`:pk}
+function obFind(c,tbl,pk){return c.outbox.find(e=>e.items?e.items.some(x=>x[0]===tbl&&x[1]===pk):(e.pk!=null&&e.tbl===tbl&&e.pk===pk))}
+function obRemove(c,e){c.outbox=c.outbox.filter(x=>x!==e)}
+function note(c,text,info){c.notes.unshift({t:S.T,text,info:!!info});log(c.id,text,info?'':'bad')}
+function clientRecv(m){
+  const c=S.clients[m.cid],p=m.p;
+  if(c.state==='start'&&['Batch','TableSynced','Progress'].includes(m.type)){c.state='catchup';log(c.id,'Start прийнято: потік пішов, Apply можна слати паралельно')}
+  if(m.type==='SchemaMismatch'){c.state='mismatch';log(c.id,'несумісна версія: потік закрито, синк зупинено, черга зберігається','warn')}
+  else if(m.type==='SnapshotRequired'){
+    const sec=Math.max(1,Math.round(p.sizeKB/250));
+    log(c.id,`знімок ~${p.sizeKB} КБ, за виміряною швидкістю ≈ ${sec} с, менше за 5 хв: беру файл (інакше порожня репліка і звичайна досинхронізація)`);
+    if(c.replica&&c.outbox.length){c.state='flush';c.flushed=false;log(c.id,'потрібен знімок: спершу відправляю чергу дій')}else requestSnapshot(c)}
+  else if(m.type==='SnapshotChunk'){
+    if(!c.dl||c.dl.id!==p.id)c.dl={id:p.id,offset:0,total:p.total,V:p.V};
+    if(p.offset!==c.dl.offset)return;
+    c.dl.offset++;
+    if(p.data)installSnapshot(c,p);
+  }
+  else if(m.type==='Batch'){
+    if(!c.replica)return;applyExtra(c,p);
+    let n=0;
+    if(p.phase==='catchup'){
+      for(const r of p.rows)n+=applyRow(c,p.tbl,r);for(const t of p.tombs)n+=applyTomb(c,p.tbl,t);
+      const cur=c.replica.cursors[p.tbl];for(const [a,b] of p.covers)addRange(cur,a,b);
+      c.remaining=p.remaining;
+    }else{
+      for(const e of p.entries)n+=e.row?applyRow(c,e.tbl,e.row):applyTomb(c,e.tbl,e.tomb);
+      for(const t of TABLES){const k=c.replica.cursors[t];if(!k.ranges.length)k.cursor=Math.max(k.cursor,p.upTo)}
+    }
+    c.ackDirty=true;
+    log(c.id,`застосовано Batch: ${n} з ${p.phase==='catchup'?p.rows.length+p.tombs.length:p.entries.length} змін, решта вже були або захищені чергою`.replace(/: (\d+) з \1 змін, решта.*$/,': $1 змін'));
+  }
+  else if(m.type==='TableSynced'){const k=c.replica.cursors[p.tbl];k.cursor=p.V;k.ranges=[];applyExtra(c,p);c.ackDirty=true}
+  else if(m.type==='Progress'){c.remaining=p.remaining;if(c.replica)applyExtra(c,p);if(p.done){c.state='online';log(c.id,'усі таблиці досинхронізовано, репліка цілісна','ok')}}
+  else if(m.type==='ApplyReply'){
+    for(const r of p.results){
+      if(r.kind==='archive'&&(r.changed?.length||r.children?.length)){const e=c.outbox.find(x=>x.seq===r.seq);
+        for(const [w,l] of [['changed',r.changed],['children',r.children]])for(const [t,k] of l||[])c.archRetry.push({tbl:t,pk:k,why:w,tries:(e?.tries||0)+1});
+        log(c.id,`лишились на власнику: ${[...(r.changed||[]),...(r.children||[])].map(([t,k])=>rowLabel(c,t,k)).join(', ')} (${r.reason}), перекопіюю і повторю`,'warn')}
+      else if(r.kind==='pdelete'&&r.changed?.length)note(c,`не видалено ${r.changed.length}: ${r.changedNames.map(n=>'«'+n+'»').join(', ')} змінено або створено на інстансі після того, як ви бачили дані; вони лишаються і приїдуть потоком`)
+      else if(r.status==='Rejected'){const e=c.outbox.find(x=>x.seq===r.seq);const gone=removeLocal(c,r.tbl,r.pk);if(e)obRemove(c,e);
+        note(c,`не збережено: ${gone.join(', ')} (${r.reason})`)}
+      else if(r.status==='Ignored'){const e=c.outbox.find(x=>x.seq===r.seq);if(e)obRemove(c,e);note(c,`правку запису ${rowLabel(c,r.tbl,r.pk)} втрачено: його видалено на інстансі`)}
+    }
+    const before=c.outbox.length;
+    c.outbox=c.outbox.filter(e=>!(e.sent&&e.seq<=p.applied_up_to_seq));
+    log(c.id,`ApplyReply: з черги прибрано ${before-c.outbox.length} рядк. (seq ≤ ${p.applied_up_to_seq}), лишилось ${c.outbox.length}`,'ok');
+    c.inflight=null;if(c.state==='flush')c.flushed=true;
+  }
+}
+function removeLocal(c,tbl,pk){
+  const r=c.replica.rows[tbl][pk];if(!r)return [];const gone=['«'+(r.name||r.text)+'»'];
+  delete c.replica.rows[tbl][pk];const e=obFind(c,tbl,pk);if(e)obRemove(c,e);c.sel=c.sel.filter(x=>x!==pk);
+  for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===tbl)
+    for(const ch of Object.values(c.replica.rows[ct]))if(ch[col]===pk)gone.push(...removeLocal(c,ct,ch.Id));
+  return gone;
+}
+function applyRow(c,tbl,r){
+  const rows=c.replica.rows[tbl],e=obFind(c,tbl,r.Id),loc=rows[r.Id];
+  if(e&&(e.kind==='delete'||e.kind==='create'))return 0;
+  if(loc&&loc.SyncVersion>=r.SyncVersion)return 0;
+  if(!loc)rows[r.Id]=clone(r);
+  else{for(const k of COLS[tbl])if(!(e&&e.kind==='patch'&&e.columns.includes(k)))loc[k]=r[k];loc.SyncVersion=r.SyncVersion;
+    if(e&&e.kind==='patch')log(c.id,`рядок ${rowLabel(c,tbl,r.Id)} v${r.SyncVersion}: колонки ${e.columns.join(', ')} не перезаписано, вони в черзі`)}
+  c.flash[tbl+'|'+r.Id]=S.T;return 1;
+}
+function applyTomb(c,tbl,t){
+  const rows=c.replica.rows[tbl],loc=rows[t.pk],e=obFind(c,tbl,t.pk);
+  if(!loc){if(e&&e.kind==='patch'){obRemove(c,e);note(c,`правку запису ${t.pk} втрачено: його видалено на інстансі`)}return 0}
+  if(loc.SyncVersion>=t.version)return 0;
+  const lbl=rowLabel(c,tbl,t.pk);delete rows[t.pk];c.sel=c.sel.filter(x=>x!==t.pk);
+  if(e&&e.kind==='patch'){obRemove(c,e);note(c,`правку запису ${lbl} втрачено: його видалено на інстансі`)}
+  return 1;
+}
+function installSnapshot(c,p){
+  const old=c.replica,rows=clone(p.data);let moved=0;
+  for(const e of c.outbox){const src=old?.rows[e.tbl]?.[e.pk];
+    if(e.kind==='create'&&src){rows[e.tbl][e.pk]=clone(src);moved++}
+    else if(e.kind==='patch'&&src&&rows[e.tbl][e.pk]){for(const k of e.columns)rows[e.tbl][e.pk][k]=src[k];moved++}
+    else if(e.kind==='delete'){delete rows[e.tbl][e.pk];moved++}
+    else if(e.kind==='pdelete'){for(const r of Object.values(rows[e.tbl]))if(condMatch(e.cond,r)&&r.SyncVersion<=e.V)delete rows[e.tbl][r.Id];moved++}}
+  c.replica={instanceId:p.instanceId,rows,cursors:Object.fromEntries(TABLES.map(t=>[t,{cursor:p.V,ranges:[]}]))};
+  c.dl=null;c.flash={};
+  log(c.id,`знімок перевірено і підмінено атомарно: курсори = ${p.V}${c.outbox.length?`, у нову репліку перенесено ${moved} дій зі значеннями`:''}`,'ok');
+  sendStart(c);
+}
+
+// ---------- клієнт: WriteRouter ----------
+function obPut(c,tbl,pk,kind,cols=[],cls=1){
+  const e=obFind(c,tbl,pk);
+  if(!e){c.outbox.push({lid:c.nextLid++,seq:null,cls,tbl,pk,kind,columns:cols,sent:0});return}
+  e.cls=Math.min(e.cls||1,cls);
+  let nk,nc=[];
+  if(e.kind==='create'){if(kind==='patch')nk='create';else{if(!e.sent){obRemove(c,e);log(c.id,'створення і видалення схлопнулись: власник нічого не дізнається');return}nk='delete'}}
+  else if(e.kind==='patch'){if(kind==='patch'){nk='patch';nc=[...new Set([...e.columns,...cols])]}else nk='delete'}
+  else return;
+  if(e.sent){obRemove(c,e);c.outbox.push({lid:c.nextLid++,seq:null,cls:e.cls,tbl,pk,kind:nk,columns:nc,sent:0});
+    log(c.id,`дія #${e.seq} уже в дорозі: рядок черги замінено новим (${KIND[nk]}${nc.length?' '+nc.join(', '):''})`,'warn')}
+  else{e.kind=nk;e.columns=nc}
+}
+function cEdit(c,tbl,id,col,val){
+  const r=c.replica?.rows[tbl][id];if(!r)return;
+  if(obFind(c,tbl,id)?.kind==='archive'){note(c,'запис саме переноситься в архів, правку не прийнято');return}
+  const pt=FKS[tbl]?.[col];if(pt&&!c.replica.rows[pt][val]){note(c,'дані ще синхронізуються, спробуйте пізніше');return}
+  const nm=r.name||r.text;r[col]=val;obPut(c,tbl,id,'patch',[col]);c.flash[tbl+'|'+id]=S.T;
+  log(c.id,`користувач: «${nm}».${col} = ${col==='categoryId'?c.replica.rows.Category[val]?.name:val}`);
+}
+function cCreate(c,tbl,vals){
+  for(const [col,pt] of Object.entries(FKS[tbl]||{}))if(!c.replica.rows[pt][vals[col]]){note(c,'дані ще синхронізуються, спробуйте пізніше');return null}
+  const id=gid();c.replica.rows[tbl][id]={Id:id,...vals,SyncVersion:0};obPut(c,tbl,id,'create');c.flash[tbl+'|'+id]=S.T;
+  log(c.id,`користувач створив «${vals.name}» (${TLABEL[tbl]}), Id ${id}, SyncVersion 0`);return id;
+}
+function cDelete(c,tbl,id,quiet,cls=1,noQueue=false){
+  const r=c.replica?.rows[tbl][id];if(!r)return 0;
+  if(obFind(c,tbl,id)?.kind==='archive')return 0;
+  let kids=0;
+  for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===tbl)
+    for(const ch of Object.values(c.replica.rows[ct]))if(ch[col]===id){delete c.replica.rows[ct][ch.Id];const e=obFind(c,ct,ch.Id);if(e)obRemove(c,e);kids++}
+  delete c.replica.rows[tbl][id];c.sel=c.sel.filter(x=>x!==id);if(!noQueue)obPut(c,tbl,id,'delete',[],cls);
+  if(!quiet)log(c.id,`користувач видалив «${r.name}»${kids?`, локальний каскад прибрав ще ${kids}, у чергу йде тільки батько`:''}`);
+  return 1;
+}
+function cBulk(c,ids,cond){const k=c.replica.cursors.Item;const names=ids.map(id=>c.replica.rows.Item[id]?.name).filter(Boolean);if(!ids.length)return;
+  if(k.ranges.length){ids.forEach(id=>cDelete(c,'Item',id,true,2));
+    log(c.id,`масове видалення: у «Товарах» є відрізки вище курсора, тобто репліка не повна, тому в чергу пішли ключі: ${names.map(n=>'«'+n+'»').join(', ')}`);return}
+  // рядки з власними діями в черзі видаляються ключем, решта одним предикатом
+  const own=ids.filter(id=>obFind(c,'Item',id));own.forEach(id=>cDelete(c,'Item',id,true,2));
+  ids.filter(id=>!own.includes(id)).forEach(id=>cDelete(c,'Item',id,true,2,true));
+  c.outbox.push({lid:c.nextLid++,seq:null,cls:2,tbl:'Item',pk:null,kind:'pdelete',cond,V:k.cursor,columns:[],sent:0});
+  log(c.id,`масове видалення ${names.map(n=>'«'+n+'»').join(', ')}: у чергу одна дія з умовою ${condText(cond)} і SyncVersion ≤ ${k.cursor}${own.length?`, ключами ще ${own.length} (мають свої дії в черзі)`:''}`)}
+function setOpen(c,t){c.openTable=t;if(c.link&&c.state==='catchup')send(c.id,'up','OpenTables',{open:[t]},t)}
+
+// ---------- сценарії ----------
+const C=id=>S.clients[id];
+// ---------- перенесення в архів (X.archive.db клієнта) ----------
+function childrenOf(rows,tbl,id){const out=[];for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===tbl)
+  for(const ch of Object.values(rows[ct]))if(ch[col]===id)out.push([ct,ch.Id]);return out}
+function archiveRows(c,items,tries=0){
+  if(!tries&&!(c.link&&c.state==='online'&&!c.outbox.length)){note(c,'перенесення доступне, коли інстанс на зв\'язку, повністю досинхронізований і черга порожня');return}
+  const set=[];const add=(t,id)=>{if(set.some(x=>x[0]===t&&x[1]===id)||!c.replica.rows[t][id])return;set.push([t,id]);childrenOf(c.replica.rows,t,id).forEach(([ct,cid])=>add(ct,cid))};
+  items.forEach(([t,id])=>add(t,id));if(!set.length)return;
+  let refs=0;
+  for(const [t,id] of set){const r=c.replica.rows[t][id];c.archive[t][id]={...clone(r),_ref:false};
+    for(const [col,pt] of Object.entries(FKS[t]||{})){const pid=r[col];if(set.some(x=>x[0]===pt&&x[1]===pid))continue;const pr=c.replica.rows[pt][pid];
+      if(pr&&(!c.archive[pt][pid]||c.archive[pt][pid]._ref)){c.archive[pt][pid]={...clone(pr),_ref:true};refs++}}}
+  const todo=set.filter(([t,id])=>!obFind(c,t,id));const V=minCursor(c);
+  if(todo.length)c.outbox.push({lid:c.nextLid++,seq:null,cls:2,tbl:todo[0][0],pk:null,kind:'archive',items:todo,V,columns:[],sent:0,tries});
+  c.sel=c.sel.filter(x=>!set.some(y=>y[1]===x));
+  log(c.id,`${tries?'перекопіювання':'перенесення в архів'}: ${set.map(([t,id])=>rowLabel(c,t,id)+' v'+c.replica.rows[t][id].SyncVersion).join(', ')} скопійовано в ${c.id}.archive.db${refs?`, довідкових: ${refs}`:''}; у черзі одна дія kind 4: Id ∈ набір і SyncVersion ≤ ${minCursor(c)}`);
+}
+function archRetryStep(c){
+  const drop=[];
+  for(const pass of ['changed','children'])for(const rt of c.archRetry){if(rt.why!==pass||drop.includes(rt))continue;
+    const row=c.replica.rows[rt.tbl][rt.pk],copy=c.archive[rt.tbl][rt.pk];
+    if(!row){drop.push(rt);continue}
+    const ready=pass==='changed'?(!copy||row.SyncVersion>copy.SyncVersion)
+      :!c.archRetry.some(x=>x!==rt&&!drop.includes(x)&&childrenOf(c.replica.rows,rt.tbl,rt.pk).some(([t,id])=>t===x.tbl&&id===x.pk));
+    if(!ready)continue;drop.push(rt);
+    if(rt.tries>=3){note(c,`${rowLabel(c,rt.tbl,rt.pk)} лишився на власнику: автоматика постійно його змінює`);continue}
+    archiveRows(c,[[rt.tbl,rt.pk]],rt.tries);}
+  c.archRetry=c.archRetry.filter(x=>!drop.includes(x));
+}
+
+const SCEN=[
+ {id:'free',title:'Вільний режим',intro:'Обидва клієнти синхронні. Вимикайте зв\'язок перемикачем, клацайте по клітинках, щоб редагувати, запускайте автоматику на власнику. Позначка зліва на рядку: жовта означає дію в черзі, синя означає дію в дорозі.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[]},
+ {id:'offline',title:'Офлайн-черга і схлопування',intro:'Сто змін одного запису передаються один раз. Черга зберігає тільки "що змінено", значення агент читає з репліки в момент відправки.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Вимкнути зв\'язок Клієнта 1',do(){setLink('c1',false)},x:'Дані лишаються доступні з локальної репліки. Статус показує «Нема зв\'язку з …».'},
+  {t:'Чотири правки «Степлера»',do(){const c=C('c1'),r=cItem(c,'Степлер');for(const p of [130,140,150])cEdit(c,'Item',r.Id,'price',p);cEdit(c,'Item',r.Id,'name','Степлер №10')},
+   x:'У _sync_outbox один рядок: патч з колонками price і name. Значень у черзі нема.'},
+  {t:'Увімкнути зв\'язок',do(){setLink('c1',true)},x:'Окремого Handshake нема: перше повідомлення Start несе схему, instance_id і курсори, і власник одразу відповідає першою пачкою. Після неї клієнт паралельно починає Apply. Apply везе одну дію з останніми значеннями: 150 і «Степлер №10». Власник ставить рядку нову SyncVersion, і зміна через Subscribe доходить до обох клієнтів.'}]},
+ {id:'conflict',title:'Конфлікт у колонках',intro:'Клієнт шле тільки змінені колонки. У тій самій колонці виграє той, хто останнім доїхав до власника.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 офлайн змінює ціну паперу',do(){setLink('c1',false);const c=C('c1');cEdit(c,'Item',cItem(c,'Папір A4').Id,'price',260)},x:'Патч з колонкою price чекає в черзі.'},
+  {t:'Автоматика змінює статус і ціну паперу',do(){const r=oItem('Папір A4');autoStatus(r.Id,'архів');autoPrice(r.Id,199)},x:'Статус це інша колонка, ціна та сама. Клієнт 2 бачить обидві зміни автоматики.'},
+  {t:'Увімкнути зв\'язок Клієнта 1',do(){setLink('c1',true)},x:'Рядок з власника приїжджає, але price у черзі, тому клієнт оновлює тільки статус. Потім Apply доставляє ціну 260: вона доїхала останньою і виграє, статус «архів» лишається.'},
+  {t:'Автоматика знову змінює ціну',do(){autoPrice(oItem('Папір A4').Id,205)},x:'Наступний прохід автоматики перезаписує правку клієнта. Так прийнято в дизайні: ручних правок на власнику нема, base version не потрібна.'}]},
+ {id:'delete',title:'Видалення виграє',intro:'Видалення сильніше за будь-яку правку, з будь-якого боку.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 офлайн править «Маркери» і видаляє «Скотч»',do(){setLink('c1',false);const c=C('c1');cEdit(c,'Item',cItem(c,'Маркери').Id,'name','Маркери (12 шт)');cDelete(c,'Item',cItem(c,'Скотч').Id)},
+   x:'Видалений локально запис зникає одразу. У черзі патч і видалення.'},
+  {t:'Автоматика видаляє «Маркери» і змінює ціну «Скотчу»',do(){autoDelete('Item',oItem('Маркери').Id);autoPrice(oItem('Скотч').Id,45)},x:'На власнику з\'являється tombstone Маркерів.'},
+  {t:'Увімкнути зв\'язок',do(){setLink('c1',true)},x:'Tombstone Маркерів прибирає запис і правку з черги, користувач бачить повідомлення. Якщо першим доїде Apply, власник відповість Ignored з тим самим повідомленням. Рядок «Скотчу» з новою ціною не вставляється, бо в черзі видалення, а Apply видаляє його на власнику, і tombstone доходить до Клієнта 2.'}]},
+ {id:'fk',title:'Ланцюжок FK і видалений батько',intro:'Офлайн створений ланцюжок доїжджає цілісно, а запис під видаленим батьком відкидається.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 офлайн створює категорію «Новинки», товар «Дрон» у ній і товар «Сканер» в «Архіві»',do(){setLink('c1',false);const c=C('c1');
+    const n=cCreate(c,'Category',{name:'Новинки'});cCreate(c,'Item',{name:'Дрон',price:4200,status:'новий',categoryId:n});
+    cCreate(c,'Item',{name:'Сканер',price:1500,status:'новий',categoryId:byName(c.replica.rows.Category,'Архів').Id})},x:'Три створення в черзі, новим рядкам SyncVersion = 0.'},
+  {t:'Автоматика видаляє категорію «Архів»',do(){autoDelete('Category',oCat('Архів').Id)},x:'Каскад FK на власнику видаляє і товари категорії. Тригер дає tombstone кожному.'},
+  {t:'Увімкнути зв\'язок',do(){setLink('c1',true)},x:'Пачка Apply закрита по залежностях: «Новинки» і «Дрон» застосовуються разом. «Сканер» отримує Rejected з причиною «батьківський запис видалено». Клієнт прибирає його з репліки і показує в повідомленнях.'}]},
+ {id:'lost',title:'Втрачена відповідь Apply',intro:'Повторна відправка безпечна: власник пропускає дії з seq ≤ applied_seq.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Загубити наступну відповідь і змінити ціну «Палети»',do(){const c=C('c1');c.loseNextReply=true;cEdit(c,'Item',cItem(c,'Палета').Id,'price',470)},
+   x:'Власник застосує дію і підніме applied_seq, але ApplyReply не дійде. Рядок черги лишається з sent = 1. Після тайм-ауту агент шле ту саму дію з тим самим seq, власник відповідає Skipped, і версія вдруге не росте.'}]},
+ {id:'inflight',title:'Правка, дія якої в дорозі',intro:'Якщо запис змінили, поки його дія летить до власника, правка не губиться.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'));C('c1').latency=6},steps:[
+  {t:'Змінити ціну «Стрейч-плівки», а поки Apply летить, змінити назву',do(){const c=C('c1'),id=cItem(c,'Стрейч-плівка').Id;cEdit(c,'Item',id,'price',333);
+    when(()=>obFind(c,'Item',id)?.sent===1,()=>later(1,()=>cEdit(c,'Item',id,'name','Стрейч-плівка 500 мм')))},
+   x:'Затримка Клієнта 1 тут 6 тактів. Рядок черги з sent = 1 видаляється, вставляється новий з новим seq і колонками price, name. Відповідь на першу відправку прибирає тільки seq ≤ applied_up_to_seq, нова правка їде наступною пачкою.'}]},
+ {id:'catchup',title:'Досинхронізація з обривом',intro:'Після перерви найсвіжіші дані з\'являються першими, а обрив не змушує тягнути отримане знову.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 2 офлайн, автоматика робить 17 змін',do(){setLink('c2',false);autoBurst()},x:'Курсори Клієнта 2 відстали від голови власника.'},
+  {t:'Увімкнути зв\'язок Клієнта 2 (обрив станеться сам)',do(){const c=C('c2');setLink('c2',true);
+    when(()=>c.replica.cursors.Item.ranges.length>0&&c.replica.cursors.Item.ranges.at(-1)[0]-c.replica.cursors.Item.cursor>3,()=>setLink('c2',false))},
+   x:'Власник щоразу бере поточну голову і шле найвищі невідправлені версії, від нових до старих, по 3 записи. Спершу відкриті «Товари» разом з «Категоріями», на які вони посилаються, «Журнал» наприкінці. Посеред досинхронізації зв\'язок рветься: у _sync_ranges лишається отриманий відрізок над курсором.'},
+  {t:'Автоматика змінює ще два товари',do(){autoPrice(oItem('Степлер').Id,135);autoStatus(oItem('Палета').Id,'архів')},x:'Нові версії більші за H.'},
+  {t:'Увімкнути зв\'язок знову',do(){setLink('c2',true)},x:'Start передає курсор і відрізки. Власник спершу шле нові зміни з верхньої прогалини, потім продовжує ту саму прогалину під відрізком. Уже отримане повторно не їде. Перемкніть вкладку на «Журнал», поки йде досинхронізація: OpenTables змінить порядок з наступної пачки.'}]},
+ {id:'flow',title:'Зміни швидші за пачку',intro:'Поки клієнт досинхронізується, автоматика створює більше змін за такт, ніж уміщує одна пачка. Найновіше однаково їде першим, а курсор плюс відрізки не дають тягнути отримане знову. Ліміту відрізків нема: замість нього статус чесно каже, що канал не встигає.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 2 офлайн, автоматика робить 17 змін',do(){setLink('c2',false);autoBurst()},x:'Курсор «Товарів» у Клієнта 2 відстав, відрізків ще нема.'},
+  {t:'Увімкнути зв\'язок і запустити потік: 4 зміни в «Товарах» щотакту',do(){setLink('c2',true);when(()=>C('c2').state==='catchup',()=>{S.flow={left:18,per:4};log('owner','автоматика: запущено потік, 4 зміни щотакту')})},
+   x:'Пачка вміщує 3 записи, а потік дає 4 за такт. Перед кожною пачкою власник бере свіжу голову і шле верхню прогалину. Попередній шматок не встигає з\'єднатися з новим, тому в _sync_ranges з\'являється новий відрізок за кожну пачку. Ліміту немає, і власник не перемикається на старі проміжки: найновіше лишається видимим. Залишок росте, і коли він не спадає 10 тактів поспіль (у дизайні 3 хв), статус змінюється на «Канал не встигає: відстаємо на N змін, росте».'},
+  {t:'Обірвати зв\'язок посеред досинхронізації',do(){setLink('c2',false)},x:'Потік на власнику триває. Клієнт зберіг курсор і всі відрізки у тій самій транзакції, що й рядки.'},
+  {t:'Відновити зв\'язок',do(){setLink('c2',true)},x:'Start передає курсор і відрізки. Власник продовжує з верхньої прогалини, нічого з уже отриманого не їде вдруге. Коли потік зупиниться, попередження зникне, пачки дотягнуть прогалини донизу, відрізки зіллються з курсором, і прийде TableSynced.'}]},
+ {id:'lag',title:'Відставання понад 30 днів',intro:'Tombstones чистяться після підтвердження всіма клієнтами або за терміном. Клієнт, що відстав, бере знімок і не губить черги.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 2 офлайн змінює ціну «Палети», автоматика видаляє два товари',do(){setLink('c2',false);const c=C('c2');cEdit(c,'Item',cItem(c,'Палета').Id,'price',999);
+    autoDelete('Item',oItem('Скотч').Id);autoDelete('Item',oItem('Маркери').Id);later(8,()=>purge(true))},
+   x:'Клієнт 1 підтвердить tombstones за кілька тактів, але очищення їх не видалить: floor = MIN(acked_version), а Клієнт 2 їх ще не отримав.'},
+  {t:'Перемотати на 31 день уперед',do(){dayJump()},x:'Клієнт 2 не з\'являвся понад 30 днів, тому його рядок зникає з _sync_clients. Тепер floor рахується лише по Клієнту 1, tombstones видаляються, і purged_version стає вищою за курсор Клієнта 2. Tombstones, старші за 30 днів, зникли б і без цього.'},
+  {t:'Увімкнути зв\'язок Клієнта 2',do(){const c=C('c2');setLink('c2',true);
+    when(()=>c.dl&&c.dl.offset>=2,()=>cEdit(c,'Item',cItem(c,'Папір A4').Id,'name','Папір A4 (500 арк.)'))},
+   x:'Start: курсор < purged_version, тому власник відповідає SnapshotRequired і закриває потік. Агент спершу відправляє чергу (ціна «Палети»), потім завантажує знімок. Посеред завантаження користувач перейменовує папір у старій репліці: дія стає в чергу і переноситься в нову репліку разом зі значенням.'}]},
+ {id:'bulk',title:'Масове видалення за умовою',intro:'Масове видалення їде однією дією: умова і версія V, до якої репліка повна. Власник видаляє тільки те, що клієнт бачив, а правка користувача не чекає за масовою дією.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 офлайн видаляє всі товари зі статусом «архів»',do(){setLink('c1',false);const c=C('c1');cBulk(c,Object.values(c.replica.rows.Item).filter(r=>r.status==='архів').map(r=>r.Id),{col:'status',eq:'архів'})},
+   x:'Записи зникли з репліки, а в чергу пішла одна масова дія: status = \'архів\' і SyncVersion ≤ V, де V це курсор «Товарів». Ключі не передаються.'},
+  {t:'Клієнт 1 міняє ціну «Степлера»',do(){const c=C('c1');cEdit(c,'Item',cItem(c,'Степлер').Id,'price',135)},x:'Ця правка інтерактивна. Вона створена пізніше за масову дію, але в пачці піде першою: seq дається при відправці, тому вона отримає #1.'},
+  {t:'Автоматика створює «Архівну шафу» зі статусом «архів»',do(){autoNewItem('Архівна шафа','архів')},x:'Цей запис підпадає під умову, але користувач його не бачив, і його SyncVersion більша за V.'},
+  {t:'Увімкнути зв\'язок',do(){setLink('c1',true)},x:'Apply везе #1 правку ціни і #2 масове видалення. Власник виконує DELETE ... WHERE SyncVersion ≤ V AND status = \'архів\': три записи, які бачив користувач, видалено. «Архівна шафа» новіша за V, тому лишається і повертається як Rejected: changed. Клієнт показує, що її не видалено, і вона приїжджає потоком.'}]},
+ {id:'snapshot',title:'Новий клієнт: знімок',intro:'Клієнт без репліки отримує знімок шматками і продовжує його після обриву з того ж зміщення.',
+  setup(){syncNow(C('c1'))},steps:[
+  {t:'Увімкнути зв\'язок Клієнта 2',do(){const c=C('c2');setLink('c2',true);
+    when(()=>c.dl&&c.dl.offset>=2,()=>autoPrice(oItem('Степлер').Id,175));
+    when(()=>c.dl&&c.dl.offset>=3,()=>{setLink('c2',false);later(4,()=>setLink('c2',true))})},
+   x:'Репліки нема, тому на Start власник відповідає SnapshotRequired з розміром знімка. Файл малий: за виміряною швидкістю менше 5 хв, тому клієнт бере файл, а не порожню репліку. Власник робить VACUUM INTO, реєструє клієнта з acked_version = V і віддає файл по шматку. Поки файл їде, автоматика змінює «Степлер». На третьому шматку зв\'язок рветься, а після відновлення завантаження продовжується з четвертого за snapshot_id. Після підміни файлу Subscribe довозить зміну «Степлера», яка новіша за V.'}]},
+ {id:'archive',title:'Перенесення в архів',intro:'Користувач забирає частину даних собі й звільняє місце на власнику. Записи спершу копіюються в архів клієнта (X.archive.db), який синк не чіпає, і тільки потім власнику йде умовне видалення.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 переносить в архів категорію «Архів» і товар «Каталог 2019»',do(){const c=C('c1');archiveRows(c,[['Category',byName(c.replica.rows.Category,'Архів').Id],['Item',cItem(c,'Каталог 2019').Id]]);
+    when(()=>c.outbox.some(e=>e.kind==='archive'&&e.sent),()=>autoPrice(oItem('Факс').Id,320))},
+   x:'Замикання по FK додає дочірні «Старий принтер» і «Факс». «Офіс», на який посилається «Каталог 2019», копіюється як довідковий і на власнику не видаляється. У чергу йде одна дія: Id ∈ набір і SyncVersion ≤ V. Поки Apply летить, автоматика змінює ціну «Факсу». Власник видаляє рядки набору з SyncVersion ≤ V: «Факс» новіший і повертається як Rejected: changed, тому лишається і його батько «Архів» (has children), решта видаляється. Свіжа версія «Факсу» приїжджає потоком, клієнт перекопіює її і повторює дію разом з «Архівом».'},
+  {t:'Подивитись на результат',do(){},x:'Tombstones прибрали записи з обох реплік. У Клієнта 1 вони лишились в архіві, і шар злиття показує їх у таблицях з позначкою «архів»: це тепер єдина копія. На власнику видалення звільнили сторінки, а фонова задача PRAGMA incremental_vacuum повертає їх порціями, і файл зменшується без блокування автоматики.'}]},
+ {id:'schema',title:'Несумісна версія',intro:'Перше повідомлення Start несе версію схеми. При розбіжності власник відповідає SchemaMismatch і закриває потік, синк зупиняється, а черга зберігається.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 офлайн змінює ціну і оновлюється до нової схеми',do(){setLink('c1',false);const c=C('c1');cEdit(c,'Item',cItem(c,'Скотч').Id,'price',55);c.newSchema=true},x:'Дія в черзі.'},
+  {t:'Увімкнути зв\'язок',do(){setLink('c1',true)},x:'Власник відповідає SchemaMismatch. Статус: «Оновіть додаток на інстансі або клієнті». Черга не відправляється і не губиться. Зніміть позначку «нова схема» в налаштуваннях клієнта, вимкніть і ввімкніть зв\'язок, щоб продовжити.'}]},
+];
+
+// ---------- відображення ----------
+function statusPill(c){
+  if(!c.link){return c.state==='offline'&&c.replica?`<span class="pill bad"><i class="dot"></i>Нема зв'язку з ${fmt(c.offlineSince)}</span>`:`<span class="pill bad"><i class="dot"></i>Нема зв'язку</span>`}
+  if(c.state==='mismatch')return `<span class="pill bad">Оновіть додаток на інстансі або клієнті</span>`;
+  if(c.state==='start')return `<span class="pill info">Start…</span>`;
+  if(c.state==='flush')return `<span class="pill warn">Відправка черги перед знімком</span>`;
+  if(c.state==='snapshot'){const p=c.dl?Math.round(c.dl.offset/c.dl.total*100):0;return `<span class="pill info">Завантаження, ${p} %</span>`}
+  if(c.state==='catchup')return c.lagWarn?`<span class="pill bad">Канал не встигає: відстаємо на ${c.remaining} змін, росте</span>`:`<span class="pill warn">Досинхронізація, лишилось ${c.remaining} змін</span>`;
+  return `<span class="pill ok">✓ Синхронно</span>`;
+}
+function wire(cid){const ms=S.net.filter(m=>m.cid===cid);if(!ms.length)return '<span class="small muted">у мережі нічого нема</span>';
+  return ms.slice(0,10).map(m=>`<span class="msg ${m.dir}">${m.dir==='up'?'→':'←'} ${m.type}</span>`).join('')+(ms.length>10?`<span class="small muted">+${ms.length-10}</span>`:'')}
+function catName(rows,id){const r=rows.Category[id];return r?esc(r.name):'<span class="orph">—</span>'}
+const fl=(f,k)=>f[k]!=null&&S.T-f[k]<=2;
+function tabs(who,cur){return `<div class="tabs">${TABLES.map(t=>`<button class="${t===cur?'on':''}" data-act="tab" data-who="${who}" data-t="${t}">${TLABEL[t]}</button>`).join('')}</div>`}
+
+function renderOwner(){
+  const o=S.owner,t=o.tab;
+  const rows=Object.values(o.rows[t]).sort((a,b)=>t==='Log'?b.SyncVersion-a.SyncVersion:a.Id<b.Id?-1:1).slice(0,t==='Log'?14:99);
+  let tb;
+  if(t==='Item')tb=`<tr><th>Назва</th><th>Ціна</th><th>Статус</th><th>Категорія</th><th>SyncVersion</th><th>Автоматика</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Item|'+r.Id)?'fl':''}">
+    <td>${esc(r.name)}</td><td class="num">${r.price}</td><td>${r.status}</td><td>${catName(o.rows,r.categoryId)}</td><td class="sv">${r.SyncVersion}</td>
+    <td><div class="row" style="flex-wrap:nowrap"><button class="sm" data-act="oPrice" data-id="${r.Id}">ціна</button><button class="sm" data-act="oStatus" data-id="${r.Id}">статус</button><button class="sm" data-act="oDel" data-t="Item" data-id="${r.Id}" aria-label="Видалити">✕</button></div></td></tr>`).join('');
+  else if(t==='Category')tb=`<tr><th>Назва</th><th>Id</th><th>SyncVersion</th><th>Автоматика</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Category|'+r.Id)?'fl':''}"><td>${esc(r.name)}</td><td class="id">${r.Id}</td><td class="sv">${r.SyncVersion}</td><td><button class="sm" data-act="oDel" data-t="Category" data-id="${r.Id}">видалити з каскадом</button></td></tr>`).join('');
+  else tb=`<tr><th>Запис</th><th>SyncVersion</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Log|'+r.Id)?'fl':''}"><td>${esc(r.text)}</td><td class="sv">${r.SyncVersion}</td></tr>`).join('');
+  const tombs=Object.values(o.tomb).sort((a,b)=>b.version-a.version);
+  const cls=Object.entries(o.clients);
+  const subs=Object.values(o.subs).map(s=>`<span class="kv"><b>${WHO[s.cid]}</b> ${s.phase==='catchup'?`досинхронізація, прогалини: ${prioTables(s).map(t=>`${t} ${gapsText(s.mirror[t],o.version)}`).join('; ')}`:`онлайн, відправлено до v${s.sentUpTo}`}</span>`).join('')
+    +Object.entries(o.streams).map(([cid,st])=>`<span class="kv"><b>${WHO[cid]}</b> знімок ${st.id}, шматок ${st.next+1}/${CHUNKS}</span>`).join('');
+  $('#p-owner').innerHTML=`<div class="hd"><span class="who">Власник</span><span class="small muted">headless, gRPC</span>
+    <div class="meta" style="margin-left:auto"><span class="kv"><b>instance_id</b> ${o.instanceId}</span><span class="kv"><b>version</b> ${o.version}</span><span class="kv"><b>purged_version</b> ${o.purged}</span><span class="kv"><b>день</b> ${o.day}</span><span class="kv"><b>файл</b> ${o.pages} стор.</span><span class="kv"><b>вільних</b> ${o.free}</span></div></div>
+   <div class="bd">
+    <div class="row"><span class="small muted">Автоматика:</span><button class="sm" data-act="oNew">новий товар</button><button class="sm" data-act="oLog">+5 у журнал</button><button class="sm" data-act="oBurst">пакет із 17 змін</button></div>
+    <div class="row"><span class="small muted">Служба:</span><button class="sm" data-act="purge">очищення tombstones</button><button class="sm" data-act="day">+31 день</button>
+      <label class="chk" for="autopurge"><input type="checkbox" id="autopurge" data-chg="autopurge" ${S.autoPurge?'checked':''}>очищення кожні 15 тактів</label>
+      <label class="chk" for="autovac"><input type="checkbox" id="autovac" data-chg="autovac" ${S.autoVac?'checked':''}>auto_vacuum = INCREMENTAL</label></div>
+    <div class="small muted">Ручне редагування на власнику вимкнене, тут пише тільки автоматика. Кожен запис проходить через тригер, який дає рядку нову SyncVersion.</div>
+    ${tabs('owner',t)}
+    <div class="tw"><table>${tb}</table>${rows.length?'':'<div class="empty">Таблиця порожня</div>'}</div>
+    <div class="meta">${subs||'<span class="small muted">активних потоків нема</span>'}</div>
+    <details data-k="otomb" ${op(`otomb`)}><summary>_sync_tombstones (${tombs.length})</summary>
+      <div class="tw short">${tombs.length?`<table><tr><th>tbl</th><th>pk</th><th>що було</th><th>version</th><th>deleted_at</th></tr>${tombs.map(x=>`<tr><td>${x.tbl}</td><td class="id">${x.pk}</td><td>${esc(x.label)}</td><td class="sv">${x.version}</td><td class="sv">день ${x.deletedAt}</td></tr>`).join('')}</table>`:'<div class="empty">Порожньо</div>'}</div></details>
+    <details data-k="oclients" ${op(`oclients`)}><summary>_sync_clients (${cls.length})</summary>
+      <div class="tw short">${cls.length?`<table><tr><th>client_id</th><th>acked_version</th><th>applied_seq</th><th>last_seen</th></tr>${cls.map(([k,v])=>`<tr><td>${WHO[k]}</td><td class="sv">${v.acked}</td><td class="sv">${v.applied}</td><td class="sv">день ${v.last}</td></tr>`).join('')}</table>`:'<div class="empty">Клієнтів нема</div>'}</div></details>
+   </div>`;
+}
+function renderClient(c){
+  const el=$('#p-'+c.id);const rp=c.replica;const t=c.openTable;
+  const pend=c.outbox.length,dels=c.outbox.filter(e=>e.kind==='delete').length;
+  let body;
+  if(!rp){const p=c.dl?Math.round(c.dl.offset/c.dl.total*100):0;
+    body=c.dl||c.state==='snapshot'?`<div class="empty">Завантаження знімка, ${p} %. Дані цього інстансу ще не показуються.<div class="prog" style="margin-top:8px"><i style="width:${p}%"></i></div></div>`
+      :`<div class="empty">Репліки ще нема. Увімкніть зв'язок, і клієнт завантажить знімок власника.</div>`}
+  else{
+    const arch=Object.values(c.archive[t]).filter(r=>!rp.rows[t][r.Id]&&(t==='Category'||!r._ref)).map(r=>({...r,_arch:true}));
+    const rows=[...Object.values(rp.rows[t]),...arch].sort((a,b)=>t==='Log'?b.SyncVersion-a.SyncVersion:a.Id<b.Id?-1:1).slice(0,t==='Log'?14:99);
+    const allCats={...c.archive.Category,...rp.rows.Category};
+    const mark=r=>{if(r._arch)return 'ar';const e=obFind(c,t,r.Id);return e?(e.sent?'qs':'q'):''};
+    const tag=r=>{if(r._arch)return `<span class="tag arch">архів${r._ref?', довідковий':''}</span>`;const e=obFind(c,t,r.Id);return e?`<span class="tag ${e.sent?'sent':''}">${e.kind==='archive'?'переноситься':e.sent?'в дорозі':'черга'}</span>`:''};
+    const cell=(r,col,v)=>r._arch?v:`<span class="cell" tabindex="0" role="button" data-act="edit" data-c="${c.id}" data-t="${t}" data-id="${r.Id}" data-col="${col}">${v}</span>`;
+    let tb;
+    if(t==='Item')tb=`<tr><th></th><th>Назва</th><th>Ціна</th><th>Статус</th><th>Категорія</th><th>SV</th><th></th></tr>`+rows.map(r=>`<tr class="${mark(r)} ${fl(c.flash,'Item|'+r.Id)?'fl':''}">
+      <td>${r._arch?'':`<input type="checkbox" id="sel-${c.id}-${r.Id}" aria-label="Вибрати" data-chg="sel" data-c="${c.id}" data-id="${r.Id}" ${c.sel.includes(r.Id)?'checked':''}>`}</td>
+      <td>${cell(r,'name',esc(r.name))}</td><td class="num">${cell(r,'price',r.price)}</td><td>${cell(r,'status',r.status)}</td><td>${cell(r,'categoryId',catName({Category:allCats},r.categoryId))}</td>
+      <td class="sv">${r.SyncVersion}</td><td>${tag(r)}</td></tr>`).join('');
+    else if(t==='Category')tb=`<tr><th>Назва</th><th>SV</th><th></th><th></th></tr>`+rows.map(r=>`<tr class="${mark(r)} ${fl(c.flash,'Category|'+r.Id)?'fl':''}"><td>${cell(r,'name',esc(r.name))}</td><td class="sv">${r.SyncVersion}</td><td>${tag(r)}</td><td>${r._arch?'':`<div class="row" style="flex-wrap:nowrap"><button class="sm" data-act="archCat" data-c="${c.id}" data-id="${r.Id}">в архів</button><button class="sm" data-act="cDel" data-c="${c.id}" data-t="Category" data-id="${r.Id}">видалити</button></div>`}</td></tr>`).join('');
+    else tb=`<tr><th>Запис</th><th>SV</th></tr>`+rows.map(r=>`<tr class="${fl(c.flash,'Log|'+r.Id)?'fl':''}"><td>${esc(r.text)}</td><td class="sv">${r.SyncVersion}</td></tr>`).join('');
+    body=`${c.state==='snapshot'&&c.dl?`<div class="small muted">Знімок завантажується (${Math.round(c.dl.offset/c.dl.total*100)} %), поки що працюєте зі старою реплікою. Нові дії йдуть у її чергу.</div><div class="prog"><i style="width:${c.dl.offset/c.dl.total*100}%"></i></div>`:''}
+    ${tabs(c.id,t)}
+    <div class="tw"><table>${tb}</table>${rows.length?'':'<div class="empty">Таблиця порожня</div>'}</div>
+    <div class="row">${t==='Item'?`<button class="sm" data-act="addItem" data-c="${c.id}">+ товар</button><button class="sm" data-act="delSel" data-c="${c.id}" ${c.sel.length?'':'disabled'}>видалити вибрані (${c.sel.length})</button><button class="sm" data-act="delArch" data-c="${c.id}">видалити всі «архів»</button><button class="sm" data-act="archSel" data-c="${c.id}" ${c.sel.length?'':'disabled'}>перенести вибрані в архів (${c.sel.length})</button>`:''}${t==='Category'?`<button class="sm" data-act="addCat" data-c="${c.id}">+ категорія</button>`:''}</div>
+    <details data-k="outbox-${c.id}" ${op(`outbox-${c.id}`)}><summary>_sync_outbox (${pend})</summary>
+      <div class="tw short">${pend?`<table><tr><th>seq</th><th>cls</th><th>tbl</th><th>запис</th><th>kind</th><th>columns</th><th>sent</th></tr>${c.outbox.slice().sort((a,b)=>(a.seq??1e9)-(b.seq??1e9)||(a.cls||1)-(b.cls||1)||a.lid-b.lid).map(e=>`<tr><td class="sv">${e.seq??'—'}</td><td>${e.cls===2?'масова':'інтерактивна'}</td><td>${e.tbl}</td><td>${esc(obLabel(c,e))}${e.V!=null?` <span class="mono">SV ≤ ${e.V}</span>`:''}</td><td>${KIND[e.kind]}</td><td class="mono">${e.columns.join(', ')||'—'}</td><td class="sv">${e.sent}</td></tr>`).join('')}</table>`:'<div class="empty">Черга порожня</div>'}</div></details>
+    ${(()=>{const n=TABLES.reduce((k,x)=>k+Object.keys(c.archive[x]).length,0);if(!n)return '';const ar=TABLES.flatMap(x=>Object.values(c.archive[x]).map(r=>[x,r]));
+      return `<details data-k="arch-${c.id}" ${op(`arch-${c.id}`)}><summary>${c.id}.archive.db (${n})</summary><div class="small muted">Файл клієнта, власник про нього не знає. Синк його не чіпає, tombstones не видаляють звідси записи.</div>
+      <div class="tw short"><table><tr><th>tbl</th><th>запис</th><th>скопійована SV</th><th></th></tr>${ar.map(([x,r])=>`<tr><td>${x}</td><td>${esc(r.name||r.text)}</td><td class="sv">${r.SyncVersion}</td><td>${r._ref?'<span class="tag arch">довідковий</span>':rp.rows[x][r.Id]?'<span class="tag">ще на власнику</span>':''}</td></tr>`).join('')}</table></div></details>`})()}
+    <details data-k="cursors-${c.id}" ${op(`cursors-${c.id}`)}><summary>_sync_cursors</summary>
+      <div class="tw short"><table><tr><th>tbl</th><th>cursor</th><th>_sync_ranges (lo, hi]</th></tr>${TABLES.map(x=>{const k=rp.cursors[x];return `<tr><td>${x}</td><td class="sv">${k.cursor}</td><td class="mono">${k.ranges.length?k.ranges.map(([a,b])=>`(${a}, ${b}]`).join(' '):'—'}</td></tr>`}).join('')}</table></div></details>`}
+  el.innerHTML=`<div class="hd"><span class="who">${WHO[c.id]}</span>${statusPill(c)}
+     <label class="switch" for="link-${c.id}"><input type="checkbox" id="link-${c.id}" data-chg="link" data-c="${c.id}" ${c.link?'checked':''}>зв'язок</label></div>
+   <div class="bd">
+    <div class="row">${pend?`<span class="pill warn">${pend} змін очікують відправки</span>`:'<span class="pill">усе відправлено</span>'}${dels?`<span class="pill warn">видалення ${dels} записів очікує відправки</span>`:''}</div>
+    <div class="row small">
+      <label class="chk" for="lat-${c.id}">затримка
+        <select id="lat-${c.id}" data-chg="lat" data-c="${c.id}">${[1,2,4,6,10].map(v=>`<option value="${v}" ${c.latency===v?'selected':''}>${v} такт.</option>`).join('')}</select></label>
+      <label class="chk" for="lose-${c.id}"><input type="checkbox" id="lose-${c.id}" data-chg="lose" data-c="${c.id}" ${c.loseNextReply?'checked':''}>загубити наступну відповідь Apply</label>
+      <label class="chk" for="sch-${c.id}"><input type="checkbox" id="sch-${c.id}" data-chg="schema" data-c="${c.id}" ${c.newSchema?'checked':''}>нова схема</label>
+    </div>
+    <div class="wire">${wire(c.id)}</div>
+    ${body}
+    ${c.notes.length?`<details data-k="notes-${c.id}" ${op(`notes-${c.id}`)}><summary>Відкинуті дії і повідомлення (${c.notes.length})</summary><ul class="notes">${c.notes.slice(0,8).map(n=>`<li class="${n.info?'i':''}"><time>${fmt(n.t)}</time>${esc(n.text)}</li>`).join('')}</ul></details>`:''}
+   </div>`;
+}
+let showAll=false;
+function renderStory(){
+  const key=S.scen.id+'|'+S.step+'|'+S.T0+'|'+showAll;if(renderStory.k===key)return;renderStory.k=key;
+  const sc=S.scen,n=sc.steps.length,done=S.step>=n,last=S.step>0?sc.steps[S.step-1]:null,next=sc.steps[S.step];
+  const txt=!n?sc.intro:last?`<b>Крок ${S.step}: ${last.t}.</b> ${last.x}`:`${sc.intro}`;
+  $('#story').innerHTML=`<div><select id="scensel" data-chg="scen" aria-label="Сценарій">${SCEN.map(s=>`<option value="${s.id}" ${s===sc?'selected':''}>${s.title}</option>`).join('')}</select>
+      ${n?`<div class="dots" aria-hidden="true">${sc.steps.map((_,i)=>`<i class="${i<S.step?'done':i===S.step?'next':''}"></i>`).join('')}</div>`:''}</div>
+    <div class="txt">${txt}${n&&!done?`<div class="muted small" style="margin-top:3px">Далі, крок ${S.step+1} з ${n}: ${next.t}</div>`:''}${n&&done?'<div class="muted small" style="margin-top:3px">Сценарій виконано. Можна діяти вручну або обрати інший.</div>':''}</div>
+    <div class="acts">${n&&!done?`<button class="primary" data-act="next">Виконати крок ${S.step+1}</button>`:''}${n?`<button class="sm" data-act="allsteps" aria-expanded="${showAll}">${showAll?'сховати кроки':'усі кроки'}</button>`:''}<button class="sm" data-act="scen" data-id="${sc.id}">заново</button></div>
+    ${n&&showAll?`<div class="allsteps"><ol>${sc.steps.map((st,i)=>`<li class="${i<S.step?'done':i===S.step?'next':''}"><span>${i+1}</span><div><b>${st.t}</b>${i<S.step?' <span class="tag arch">виконано</span>':i===S.step?' <span class="tag sent">наступний</span>':''}<p>${st.x}</p></div></li>`).join('')}</ol></div>`:''}`;
+}
+let lastLogLen=-1,lastLogT=-1;
+function renderLog(){
+  if(S.log.length===lastLogLen&&S.log[S.log.length-1]?.t===lastLogT)return;lastLogLen=S.log.length;lastLogT=S.log[S.log.length-1]?.t;
+  $('#log').innerHTML=S.log.slice(-200).reverse().map(l=>`<div class="ln ${l.who} ${l.cls}"><span class="t">${fmt(l.t)}</span><span class="w">${WHO[l.who]}</span><span class="m">${esc(l.text)}</span></div>`).join('');
+}
+function render(){
+  $('#clock').textContent=fmt(S.T)+(S.single?` · дія ${S.acts}`:` · такт ${S.T}`);$('#single').checked=S.single;$('#backbtn').disabled=!OPS.length;
+  renderStory();renderOwner();renderClient(S.clients.c1);renderClient(S.clients.c2);lastLogLen=-1;renderLog();
+}
+
+// ---------- модальне вікно ----------
+let mSave=null;
+function openModal(title,fields,onSave){
+  $('#mtitle').textContent=title;
+  $('#mfields').innerHTML=fields.map(f=>`<label for="mf-${f.k}">${f.l}${f.type==='select'?`<select id="mf-${f.k}">${f.opts.map(([v,l])=>`<option value="${esc(v)}" ${v==f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>`
+    :`<input id="mf-${f.k}" type="${f.type||'text'}" value="${esc(f.v??'')}" ${f.type==='number'?'min="0" step="1"':''} required>`}</label>`).join('');
+  mSave=()=>{const v={};for(const f of fields){const x=$('#mf-'+f.k).value;v[f.k]=f.type==='number'?Number(x):x}onSave(v)};
+  $('#modal').hidden=false;setTimeout(()=>$('#mfields input,#mfields select')?.focus(),0);
+}
+function closeModal(){$('#modal').hidden=true;mSave=null}
+$('#mform').addEventListener('submit',e=>{e.preventDefault();if(mSave)mSave();closeModal();render()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#modal').hidden)closeModal();
+  if((e.key==='Enter'||e.key===' ')&&e.target.classList?.contains('cell')){e.preventDefault();e.target.click()}});
+const statusOpts=STATUSES.map(s=>[s,s]);
+const catOpts=c=>Object.values(c.replica.rows.Category).map(r=>[r.Id,r.name]);
+function itemFields(c,r={}){return[{k:'name',l:'Назва',v:r.name||''},{k:'price',l:'Ціна',type:'number',v:r.price??100},{k:'status',l:'Статус',type:'select',opts:statusOpts,v:r.status||'новий'},{k:'categoryId',l:'Категорія',type:'select',opts:catOpts(c),v:r.categoryId}]}
+
+// ---------- журнал операцій: крок назад = відтворення з початку без останньої операції ----------
+let OPS=[];
+function doOp(op){
+  const c=op.c&&S.clients[op.c];
+  switch(op.k){
+    case 'tick':S.single?stepOne():tick();break;
+    case 'mode':S.single=op.on;break;
+    case 'step':{const sc=S.scen;if(S.step>=sc.steps.length)break;const st=sc.steps[S.step];S.step++;log('owner',`— крок ${S.step}: ${st.t}`,'ok');st.do();break}
+    case 'edit':cEdit(c,op.t,op.id,op.col,op.val);break;
+    case 'create':cCreate(c,op.t,op.vals);break;
+    case 'tab':if(op.who==='owner')S.owner.tab=op.t;else setOpen(S.clients[op.who],op.t);break;
+    case 'cDel':cDelete(c,op.t,op.id);break;
+    case 'delSel':cBulk(c,c.sel.slice(),{col:'Id',in:c.sel.slice()});c.sel=[];break;
+    case 'delArch':cBulk(c,Object.values(c.replica.rows.Item).filter(r=>r.status==='архів').map(r=>r.Id),{col:'status',eq:'архів'});break;
+    case 'oPrice':autoPrice(op.id);break;
+    case 'oStatus':autoStatus(op.id);break;
+    case 'oDel':autoDelete(op.t,op.id);break;
+    case 'oNew':autoNewItem();break;
+    case 'oLog':autoLog(5);break;
+    case 'oBurst':autoBurst();break;
+    case 'purge':purge(true);break;
+    case 'day':dayJump();break;
+    case 'link':setLink(op.c,op.on);break;
+    case 'lat':c.latency=op.v;break;
+    case 'lose':c.loseNextReply=op.on;break;
+    case 'schema':c.newSchema=op.on;break;
+    case 'autopurge':S.autoPurge=op.on;break;
+    case 'autovac':S.autoVac=op.on;break;
+    case 'archive':archiveRows(c,op.items);break;
+    case 'sel':c.sel=op.on?[...c.sel,op.id]:c.sel.filter(x=>x!==op.id);break;
+  }
+}
+function rec(op){OPS.push(op);doOp(op);render()}
+function startScen(id){
+  const sc=SCEN.find(s=>s.id===id);fresh();S.scen=sc;S.step=0;sc.setup();OPS=[];
+  log('owner',`сценарій «${sc.title}»: старт, власник version = ${S.owner.version}`,'ok');render();
+}
+function nextStep(){rec({k:'step'})}
+function back(){
+  if(!OPS.length)return;
+  setPlaying(false);
+  let n=OPS.length-1;
+  // разом з тактом відкочуються і зміни вибору чи вкладок, зроблені після нього
+  while(n>0&&['tab','sel'].includes(OPS[n].k))n--;
+  const keep=OPS.slice(0,n);const sc=S.scen;
+  fresh();S.scen=sc;S.step=0;sc.setup();log('owner',`сценарій «${sc.title}»: старт, власник version = ${S.owner.version}`,'ok');
+  for(const op of keep)doOp(op);
+  OPS=keep;render();
+}
+function setPlaying(v){playing=v;$('#play').textContent=playing?'Пауза':'Пуск';schedule()}
+
+// ---------- події ----------
+document.addEventListener('click',e=>{
+  const a=e.target.closest('[data-act]');if(!a)return;const d=a.dataset,c=d.c&&S.clients[d.c];
+  switch(d.act){
+    case 'play':setPlaying(!playing);return;
+    case 'tick':setPlaying(false);rec({k:'tick'});return;
+    case 'back':back();return;
+    case 'scen':startScen(d.id);return;
+    case 'next':nextStep();return;
+    case 'tab':rec({k:'tab',who:d.who,t:d.t});return;
+    case 'edit':{const r=c.replica.rows[d.t][d.id];if(!r)return;const col=d.col;
+      const f=col==='price'?{k:col,l:'Ціна',type:'number',v:r.price}:col==='status'?{k:col,l:'Статус',type:'select',opts:statusOpts,v:r.status}
+        :col==='categoryId'?{k:col,l:'Категорія',type:'select',opts:catOpts(c),v:r.categoryId}:{k:col,l:'Назва',v:r.name};
+      openModal(`${WHO[c.id]}: ${CNAME[col]} «${r.name}»`,[f],v=>rec({k:'edit',c:c.id,t:d.t,id:d.id,col,val:v[col]}));return}
+    case 'addItem':openModal(`${WHO[c.id]}: новий товар`,itemFields(c),v=>rec({k:'create',c:c.id,t:'Item',vals:v}));return;
+    case 'addCat':openModal(`${WHO[c.id]}: нова категорія`,[{k:'name',l:'Назва',v:''}],v=>rec({k:'create',c:c.id,t:'Category',vals:v}));return;
+    case 'cDel':case 'oDel':rec({k:d.act,c:d.c,t:d.t,id:d.id});return;
+    case 'oPrice':case 'oStatus':rec({k:d.act,id:d.id});return;
+    case 'delSel':case 'delArch':rec({k:d.act,c:d.c});return;
+    case 'oNew':case 'oLog':case 'oBurst':case 'purge':case 'day':rec({k:d.act});return;
+    case 'archSel':rec({k:'archive',c:d.c,items:c.sel.map(id=>['Item',id])});return;
+    case 'archCat':rec({k:'archive',c:d.c,items:[['Category',d.id]]});return;
+    case 'allsteps':showAll=!showAll;renderStory();return;
+    case 'copylog':copyLog();return;
+    case 'mclose':closeModal();return;
+  }
+});
+document.addEventListener('change',e=>{
+  const d=e.target.dataset;if(!d.chg)return;const el=e.target;
+  if(d.chg==='speed'){schedule();return}
+  if(d.chg==='scen'){startScen(el.value);return}
+  if(d.chg==='lat')rec({k:'lat',c:d.c,v:Number(el.value)});
+  else if(d.chg==='sel')rec({k:'sel',c:d.c,id:d.id,on:el.checked});
+  else if(d.chg==='mode')rec({k:'mode',on:el.checked});
+  else if(d.chg==='autopurge'||d.chg==='autovac')rec({k:d.chg,on:el.checked});
+  else rec({k:d.chg,c:d.c,on:el.checked});
+});
+document.addEventListener('toggle',e=>{const k=e.target.dataset?.k;if(!k)return;e.target.open?closedD.delete(k):closedD.add(k)},true);
+document.addEventListener('keydown',e=>{if(!$('#modal').hidden||e.target.matches('input,select,textarea'))return;
+  if(e.key==='ArrowRight'){e.preventDefault();setPlaying(false);rec({k:'tick'})}
+  if(e.key==='ArrowLeft'){e.preventDefault();back()}});
+function caseText(){
+  const sc=S.scen,L=[];
+  L.push(`Сценарій: ${sc.title}`);if(sc.intro)L.push(sc.intro);
+  if(sc.steps.length){L.push(`Виконано кроків: ${S.step} з ${sc.steps.length}`);sc.steps.forEach((st,i)=>L.push(`${i+1}. ${i<S.step?'[виконано] ':''}${st.t}`))}
+  const o=S.owner;
+  L.push('',`Стан на ${fmt(S.T)} (такт ${S.T}${S.single?`, дія ${S.acts}`:''}):`);
+  L.push(`Власник: version ${o.version}, purged_version ${o.purged}, день ${o.day}, tombstones ${Object.keys(o.tomb).length}, файл ${o.pages} стор. (вільних ${o.free}), клієнти: ${Object.entries(o.clients).map(([k,v])=>`${WHO[k]} acked ${v.acked} applied_seq ${v.applied}`).join('; ')||'—'}`);
+  for(const c of Object.values(S.clients)){
+    L.push(`${WHO[c.id]}: ${c.link?'на зв\'язку':'без зв\'язку'}, стан ${c.state}, затримка ${c.latency}`+(c.replica?`, курсори ${TABLES.map(t=>{const k=c.replica.cursors[t];return `${t}=${k.cursor}${k.ranges.length?' + '+k.ranges.map(([a,b])=>`(${a},${b}]`).join(' '):''}`}).join(', ')}`:', репліки нема'));
+    if(c.outbox.length)L.push(`  черга: ${c.outbox.map(e=>`#${e.seq??'—'} ${e.cls===2?'[масова] ':''}${KIND[e.kind]} ${obLabel(c,e)}${e.V!=null?' SV≤'+e.V:''}${e.columns.length?' ['+e.columns.join(', ')+']':''}${e.sent?' sent':''}`).join('; ')}`);
+    if(c.notes.length)L.push(`  повідомлення: ${c.notes.map(n=>n.text).join('; ')}`);
+  }
+  L.push('','Журнал:');
+  for(const l of S.log)L.push(`${fmt(l.t)} [${WHO[l.who]}] ${l.text}`);
+  return L.join('\n');
+}
+function copyLog(){
+  const t=caseText(),box=$('#copybox'),msg=$('#copymsg');
+  const fallback=()=>{box.value=t;box.hidden=false;box.focus();box.select();msg.textContent='Текст виділено нижче, скопіюйте Ctrl+C'};
+  try{navigator.clipboard.writeText(t).then(()=>{box.hidden=true;msg.textContent='Скопійовано: сценарій, стан і журнал'},fallback)}catch(e){fallback()}
+  setTimeout(()=>{if(msg.textContent.startsWith('Скопійовано'))msg.textContent=''},4000);
+}
+function schedule(){clearInterval(timer);if(playing)timer=setInterval(()=>{if(!$('#modal').hidden)return;rec({k:'tick'})},Number($('#speed').value))}
+
+window.__sim={get S(){return S},get OPS(){return OPS},tick:()=>rec({k:'tick'}),batch:()=>{S.single=false},startScen,nextStep,back,SCEN,setPlaying};
+startScen('free');schedule();
+</script>

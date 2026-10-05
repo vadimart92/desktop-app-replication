@@ -1,0 +1,100 @@
+[
+ {
+  "kind": "narrow",
+  "n": 1,
+  "rawPerRow": 77,
+  "gzPerRow": 100,
+  "ratio": 0.81
+ },
+ {
+  "kind": "narrow",
+  "n": 3,
+  "rawPerRow": 83,
+  "gzPerRow": 78,
+  "ratio": 1.09
+ },
+ {
+  "kind": "narrow",
+  "n": 10,
+  "rawPerRow": 82.8,
+  "gzPerRow": 62.7,
+  "ratio": 1.33
+ },
+ {
+  "kind": "narrow",
+  "n": 50,
+  "rawPerRow": 82.7,
+  "gzPerRow": 42.1,
+  "ratio": 1.97
+ },
+ {
+  "kind": "narrow",
+  "n": 200,
+  "rawPerRow": 83.8,
+  "gzPerRow": 33.4,
+  "ratio": 2.51
+ },
+ {
+  "kind": "narrow",
+  "n": 1000,
+  "rawPerRow": 83.4,
+  "gzPerRow": 31,
+  "ratio": 2.69
+ },
+ {
+  "kind": "narrow",
+  "n": 5000,
+  "rawPerRow": 83.3,
+  "gzPerRow": 30.6,
+  "ratio": 2.72
+ },
+ {
+  "kind": "wide",
+  "n": 1,
+  "rawPerRow": 239,
+  "gzPerRow": 198,
+  "ratio": 1.24
+ },
+ {
+  "kind": "wide",
+  "n": 3,
+  "rawPerRow": 260.3,
+  "gzPerRow": 134,
+  "ratio": 1.97
+ },
+ {
+  "kind": "wide",
+  "n": 10,
+  "rawPerRow": 245.8,
+  "gzPerRow": 92.7,
+  "ratio": 2.67
+ },
+ {
+  "kind": "wide",
+  "n": 50,
+  "rawPerRow": 247.3,
+  "gzPerRow": 65.1,
+  "ratio": 3.81
+ },
+ {
+  "kind": "wide",
+  "n": 200,
+  "rawPerRow": 247.5,
+  "gzPerRow": 53.9,
+  "ratio": 4.59
+ },
+ {
+  "kind": "wide",
+  "n": 1000,
+  "rawPerRow": 247.9,
+  "gzPerRow": 50.4,
+  "ratio": 4.92
+ },
+ {
+  "kind": "wide",
+  "n": 5000,
+  "rawPerRow": 248.1,
+  "gzPerRow": 49.6,
+  "ratio": 5
+ }
+]
