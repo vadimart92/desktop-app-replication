@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "createdAt": "2026-10-05T20:40:07.9750544+00:00",
+  "updatedAt": "2026-10-05T20:40:07.9814505+00:00",
+  "description": "Initial baseline created by 'slopwatch init' on 2026-10-05 20:40:07 UTC",
+  "entries": [
+    {
+      "hash": "6a7a260450bad1b5",
+      "ruleId": "SW005",
+      "filePath": "src/Directory.Build.props",
+      "lineNumber": 7,
+      "codeSnippet": "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
+      "message": "TreatWarningsAsErrors is disabled - warnings will not fail the build",
+      "baselinedAt": "2026-10-05T20:40:07.9812255+00:00"
+    },
+    {
+      "hash": "7b64d86bd005a9da",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Client/SyncAgent.cs",
+      "lineNumber": 333,
+      "codeSnippet": "catch { /* the first failure is rethrown below */ }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9813922+00:00"
+    },
+    {
+      "hash": "49479122a8f064b7",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Client/SyncAgent.cs",
+      "lineNumber": 979,
+      "codeSnippet": "catch { }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9814032+00:00"
+    },
+    {
+      "hash": "e93eb0841a85c516",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Net/ShapedStream.cs",
+      "lineNumber": 107,
+      "codeSnippet": "catch (Exception) when (_cts.IsCancellationRequested) { }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9814082+00:00"
+    },
+    {
+      "hash": "205003d37c95762c",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Owner/OwnerHost.cs",
+      "lineNumber": 92,
+      "codeSnippet": "catch (OperationCanceledException) { }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9814168+00:00"
+    },
+    {
+      "hash": "cf9784b4bad91791",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Owner/OwnerHost.cs",
+      "lineNumber": 103,
+      "codeSnippet": "catch { }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9814211+00:00"
+    },
+    {
+      "hash": "2451574d75ff05c7",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Owner/SnapshotStore.cs",
+      "lineNumber": 79,
+      "codeSnippet": "catch (IOException) { }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9814408+00:00"
+    },
+    {
+      "hash": "ffb287f066754cb4",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Owner/SubscribeSession.cs",
+      "lineNumber": 66,
+      "codeSnippet": "catch { /* stream closed */ }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.981445+00:00"
+    },
+    {
+      "hash": "a4902b939b291638",
+      "ruleId": "SW003",
+      "filePath": "src/Sample.Lab/Lab.cs",
+      "lineNumber": 93,
+      "codeSnippet": "catch (OperationCanceledException) { }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-05T20:40:07.9814502+00:00"
+    }
+  ]
+}
