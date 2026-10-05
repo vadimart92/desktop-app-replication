@@ -43,7 +43,7 @@ public sealed class OwnerStore
         return c;
     }
 
-    // ---------- install ----------
+    // Install.
 
     /// <summary>
     /// Creates the service tables, (re)creates the triggers (a table rebuild in SQLite drops them, 5.2),
@@ -57,7 +57,7 @@ public sealed class OwnerStore
         c.Exec("PRAGMA journal_mode = WAL;");
         if (c.Scalar<long>("PRAGMA auto_vacuum;") != 2)
         {
-            // one-off, needs a full VACUUM (11.5)
+            // One-off, needs a full VACUUM (11.5).
             c.Exec("PRAGMA auto_vacuum = INCREMENTAL;");
             c.Exec("VACUUM;");
         }
@@ -143,7 +143,7 @@ public sealed class OwnerStore
 
     private static string NewInstanceId() => "inst-" + Guid.NewGuid().ToString("N")[..12];
 
-    // ---------- version file outside the database (5.3, "version went back") ----------
+    // Version file outside the database (5.3, "version went back").
 
     private string VersionFilePath => DbPath + ".syncstate";
 
@@ -154,10 +154,10 @@ public sealed class OwnerStore
         string[] parts = File.ReadAllText(VersionFilePath).Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length != 2 || !long.TryParse(parts[1], out long fileVersion))
             return;
-        (string? id, long version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
+        (string id, long version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
         if (parts[0] == id && version < fileVersion)
         {
-            // the database was restored or replaced: clients must take a new snapshot
+            // The database was restored or replaced: clients must take a new snapshot.
             c.Exec("UPDATE _sync_meta SET instance_id = @id", null, ("@id", NewInstanceId()));
             c.Exec("DELETE FROM _sync_client_cursors; DELETE FROM _sync_clients;");
         }
@@ -171,13 +171,13 @@ public sealed class OwnerStore
 
     private void WriteVersionFile(SqliteConnection c)
     {
-        (string? id, long version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
+        (string id, long version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
         string tmp = VersionFilePath + ".tmp";
         File.WriteAllText(tmp, $"{id} {version}");
         File.Move(tmp, VersionFilePath, overwrite: true);
     }
 
-    // ---------- reading ----------
+    // Reading.
 
     public long Head(SqliteConnection c, SqliteTransaction? tx = null) => c.Scalar<long>("SELECT version FROM _sync_meta", tx);
 
@@ -201,7 +201,7 @@ public sealed class OwnerStore
 
     public long FileSizeBytes(SqliteConnection c) => c.Scalar<long>("PRAGMA page_count") * c.Scalar<long>("PRAGMA page_size");
 
-    // ---------- clients ----------
+    // Clients.
 
     internal void MarkSubscribed(string clientId, bool on)
     {
@@ -221,7 +221,7 @@ public sealed class OwnerStore
             INSERT INTO _sync_clients(client_id, acked_version, applied_seq, last_seen) VALUES (@c, @a, 0, @n)
             ON CONFLICT(client_id) DO UPDATE SET acked_version = @a, last_seen = @n
             """, tx, ("@c", clientId), ("@a", min), ("@n", now));
-        foreach ((string? tbl, long cur) in cursors)
+        foreach ((string tbl, long cur) in cursors)
         {
             c.Exec("INSERT INTO _sync_client_cursors(client_id, tbl, cursor) VALUES (@c, @t, @v) ON CONFLICT(client_id, tbl) DO UPDATE SET cursor = @v",
                 tx, ("@c", clientId), ("@t", tbl), ("@v", cur));
@@ -253,13 +253,13 @@ public sealed class OwnerStore
     {
         using SqliteConnection c = Open();
         using SqliteTransaction tx = c.BeginTransaction();
-        foreach (string? id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
+        foreach (string id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
             Touch(c, tx, id);
         RecomputeFloor(c, tx);
         tx.Commit();
     }
 
-    // ---------- tombstone cleanup (10.2) ----------
+    // Tombstone cleanup (10.2).
 
     public sealed record PurgeResult(int Tombstones, int Clients, long PurgedVersion, long Floor);
 
@@ -271,7 +271,7 @@ public sealed class OwnerStore
         int clients;
         using (SqliteTransaction tx = c.BeginTransaction())
         {
-            foreach (string? id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
+            foreach (string id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
                 Touch(c, tx, id);
             c.Exec("DELETE FROM _sync_client_cursors WHERE client_id IN (SELECT client_id FROM _sync_clients WHERE last_seen < @cut)", tx, ("@cut", cutoff));
             clients = c.Exec("DELETE FROM _sync_clients WHERE last_seen < @cut", tx, ("@cut", cutoff));
@@ -283,7 +283,7 @@ public sealed class OwnerStore
         int total = 0;
         while (true)
         {
-            // short transactions of ~1000 rows so the application's writer is not held
+            // Short transactions of ~1000 rows so the application's writer is not held.
             using SqliteTransaction tx = c.BeginTransaction();
             var batch = new List<(string Tbl, string Pk, long V)>();
             using (SqliteCommand cmd = c.Cmd("SELECT tbl, pk, version FROM _sync_tombstones WHERE version <= @f OR deleted_at < @cut LIMIT 1000", tx, ("@f", floor), ("@cut", cutoff)))
@@ -295,7 +295,7 @@ public sealed class OwnerStore
 
             if (batch.Count == 0)
                 break;
-            foreach ((string? tbl, string? pk, long _) in batch)
+            foreach ((string tbl, string pk, long _) in batch)
                 c.Exec("DELETE FROM _sync_tombstones WHERE tbl = @t AND pk = @p", tx, ("@t", tbl), ("@p", pk));
             c.Exec("UPDATE _sync_meta SET purged_version = MAX(purged_version, @v)", tx, ("@v", batch.Max(x => x.V)));
             tx.Commit();

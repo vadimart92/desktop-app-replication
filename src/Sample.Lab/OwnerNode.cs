@@ -13,8 +13,8 @@ namespace Sample.Lab;
 /// </summary>
 public sealed class OwnerNode : IAsyncDisposable
 {
-    private static readonly string[] AutoNames = ["Ліхтарик", "Батарейки", "Клей", "Блокнот", "Лампа", "Кабель", "Фарба", "Рукавиці"];
-    private static readonly string[] Statuses = ["новий", "активний", "архів"];
+    private static readonly string[] s_autoNames = ["Ліхтарик", "Батарейки", "Клей", "Блокнот", "Лампа", "Кабель", "Фарба", "Рукавиці"];
+    private static readonly string[] s_statuses = ["новий", "активний", "архів"];
     private readonly Random _rnd = new(42);
     private int _logN;
 
@@ -62,7 +62,7 @@ public sealed class OwnerNode : IAsyncDisposable
         await using SampleDbContext db = Db();
         Dictionary<string, Category> cats = new[] { "Офіс", "Склад", "Архів" }.ToDictionary(n => n, n => new Category { Name = n });
         db.Categories.AddRange(cats.Values);
-        foreach ((string? n, long p, string? s, string? c) in new[]
+        foreach ((string n, long p, string s, string c) in new[]
                  {
                      ("Степлер", 120L, "активний", "Офіс"), ("Папір A4", 240L, "активний", "Офіс"), ("Маркери", 85L, "новий", "Офіс"),
                      ("Палета", 450L, "активний", "Склад"), ("Стрейч-плівка", 310L, "активний", "Склад"), ("Скотч", 40L, "новий", "Склад"),
@@ -87,7 +87,7 @@ public sealed class OwnerNode : IAsyncDisposable
     private static async Task<Item> ItemAsync(SampleDbContext db, string name) =>
         await db.Items.FirstOrDefaultAsync(x => x.Name == name) ?? throw new InvalidOperationException($"на власнику нема «{name}»");
 
-    // ---------- automation ----------
+    // Automation.
 
     /// <summary>SaveChanges path.</summary>
     public async Task SetPriceAsync(string name, long? price = null)
@@ -104,7 +104,7 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         await using SampleDbContext db = Db();
         Item it = await ItemAsync(db, name);
-        string s = status ?? Statuses[(Array.IndexOf(Statuses, it.Status) + 1) % Statuses.Length];
+        string s = status ?? s_statuses[(Array.IndexOf(s_statuses, it.Status) + 1) % s_statuses.Length];
         await db.Items.Where(x => x.Id == it.Id).ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, s).SetProperty(x => x.ModifiedOn, DateTime.UtcNow));
         Say($"«{name}».Status = {s} (ExecuteUpdate)");
     }
@@ -123,7 +123,7 @@ public sealed class OwnerNode : IAsyncDisposable
         await using SampleDbContext db = Db();
         List<Category> cats = await db.Categories.ToListAsync();
         Category cat = category is null ? cats[_rnd.Next(cats.Count)] : cats.First(c => c.Name == category);
-        var it = new Item { Name = name ?? AutoNames[_rnd.Next(AutoNames.Length)], Price = 10 + _rnd.Next(60) * 10, Status = status, CategoryId = cat.Id };
+        var it = new Item { Name = name ?? s_autoNames[_rnd.Next(s_autoNames.Length)], Price = 10 + _rnd.Next(60) * 10, Status = status, CategoryId = cat.Id };
         db.Items.Add(it);
         await db.SaveChangesAsync();
         Say($"створено «{it.Name}» ({status}, {cat.Name})");
@@ -171,11 +171,11 @@ public sealed class OwnerNode : IAsyncDisposable
             if (_rnd.Next(2) == 0)
                 it.Price = 10 + _rnd.Next(99) * 10;
             else
-                it.Status = Statuses[_rnd.Next(3)];
+                it.Status = s_statuses[_rnd.Next(3)];
             await db.SaveChangesAsync();
         }
         for (int i = 0; i < 2; i++)
-            db.Items.Add(new Item { Name = AutoNames[_rnd.Next(AutoNames.Length)], Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
+            db.Items.Add(new Item { Name = s_autoNames[_rnd.Next(s_autoNames.Length)], Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
         await db.SaveChangesAsync();
         for (int i = 0; i < 10; i++)
         {
@@ -194,7 +194,7 @@ public sealed class OwnerNode : IAsyncDisposable
         for (int i = 0; i < perRound; i++)
         {
             if (i % 2 == 0)
-                db.Items.Add(new Item { Name = $"{AutoNames[_rnd.Next(AutoNames.Length)]} {++_logN}", Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
+                db.Items.Add(new Item { Name = $"{s_autoNames[_rnd.Next(s_autoNames.Length)]} {++_logN}", Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
             else
                 items[_rnd.Next(items.Count)].Price = 10 + _rnd.Next(99) * 10;
             await db.SaveChangesAsync();

@@ -72,7 +72,9 @@ public sealed class ClientNode : IAsyncDisposable
     }
 
     public Task SetPriceAsync(string name, long price) => EditItemAsync(name, x => x.Price = price, $"Price = {price}");
+
     public Task SetStatusAsync(string name, string status) => EditItemAsync(name, x => x.Status = status, $"Status = {status}");
+
     public Task RenameAsync(string name, string newName) => EditItemAsync(name, x => x.Name = newName, $"Name = «{newName}»");
 
     public async Task<Guid> CreateCategoryAsync(string name)
@@ -112,7 +114,7 @@ public sealed class ClientNode : IAsyncDisposable
         Say($"видалив категорію «{name}» (локальний каскад прибрав товари, у чергу йде тільки категорія)");
     }
 
-    // ---------- by id, for the UI ----------
+    // By id, for the UI.
 
     public async Task UpdateItemAsync(Guid id, string name, long price, string status)
     {
@@ -174,7 +176,7 @@ public sealed class ClientNode : IAsyncDisposable
     {
         await using SampleDbContext db = Db();
         var ids = new List<(string, Guid)>();
-        foreach ((string? t, string? n) in rows)
+        foreach ((string t, string n) in rows)
             ids.Add((t, t == "Category" ? (await Mine<Category>(db).FirstAsync(x => x.Name == n)).Id : (await ItemAsync(db, n)).Id));
         Say($"переносить в архів: {string.Join(", ", rows.Select(r => $"«{r.Name}»"))}");
         return await Agent.ArchiveAsync(ids);

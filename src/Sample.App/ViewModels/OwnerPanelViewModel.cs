@@ -9,6 +9,21 @@ namespace Sample.App.ViewModels;
 /// <summary>The owner: its rows with the sync columns, tombstones, known clients, and the automation buttons.</summary>
 public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObject
 {
+    [ObservableProperty]
+    private RowView? _selectedItem;
+
+    [ObservableProperty]
+    private RowView? _selectedCategory;
+
+    [ObservableProperty]
+    private string _meta = "";
+
+    [ObservableProperty]
+    private string _traffic = "";
+
+    [ObservableProperty]
+    private string? _error;
+
     public OwnerNode Owner { get; } = owner;
 
     public ObservableCollection<RowView> Items { get; } = [];
@@ -16,12 +31,6 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
     public ObservableCollection<RowView> Log { get; } = [];
     public ObservableCollection<TombstoneView> Tombstones { get; } = [];
     public ObservableCollection<ClientView> Clients { get; } = [];
-
-    [ObservableProperty] private RowView? _selectedItem;
-    [ObservableProperty] private RowView? _selectedCategory;
-    [ObservableProperty] private string _meta = "";
-    [ObservableProperty] private string _traffic = "";
-    [ObservableProperty] private string? _error;
 
     public string Title => $"Власник · {Owner.Address}";
 
@@ -62,15 +71,36 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
         }
     }
 
-    [RelayCommand] private Task NewItem() => Run(() => Owner.NewItemAsync());
-    [RelayCommand] private Task AddLog() => Run(() => Owner.AddLogAsync(5));
-    [RelayCommand] private Task Burst() => Run(Owner.BurstAsync);
-    [RelayCommand] private Task Price() => Run(() => SelectedItem is { } r ? Owner.SetPriceAsync(r.Label) : Task.CompletedTask);
-    [RelayCommand] private Task Status() => Run(() => SelectedItem is { } r ? Owner.SetStatusAsync(r.Label) : Task.CompletedTask);
-    [RelayCommand] private Task DeleteItem() => Run(() => SelectedItem is { } r ? Owner.DeleteItemAsync(r.Label) : Task.CompletedTask);
-    [RelayCommand] private Task DeleteCategory() => Run(() => SelectedCategory is { } r ? Owner.DeleteCategoryAsync(r.Label) : Task.CompletedTask);
-    [RelayCommand] private Task Purge() => Run(Owner.PurgeAsync);
-    [RelayCommand] private void PlusDay() => Owner.AdvanceClock(TimeSpan.FromDays(1));
-    [RelayCommand] private void Plus31Days() => Owner.AdvanceClock(TimeSpan.FromDays(31));
-    [RelayCommand] private void Vacuum() => Owner.Store.IncrementalVacuum(64);
+    [RelayCommand]
+    private Task NewItem() => Run(() => Owner.NewItemAsync());
+
+    [RelayCommand]
+    private Task AddLog() => Run(() => Owner.AddLogAsync(5));
+
+    [RelayCommand]
+    private Task Burst() => Run(Owner.BurstAsync);
+
+    [RelayCommand]
+    private Task Price() => Run(() => SelectedItem is { } r ? Owner.SetPriceAsync(r.Label) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task Status() => Run(() => SelectedItem is { } r ? Owner.SetStatusAsync(r.Label) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task DeleteItem() => Run(() => SelectedItem is { } r ? Owner.DeleteItemAsync(r.Label) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task DeleteCategory() => Run(() => SelectedCategory is { } r ? Owner.DeleteCategoryAsync(r.Label) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task Purge() => Run(Owner.PurgeAsync);
+
+    [RelayCommand]
+    private void PlusDay() => Owner.AdvanceClock(TimeSpan.FromDays(1));
+
+    [RelayCommand]
+    private void Plus31Days() => Owner.AdvanceClock(TimeSpan.FromDays(31));
+
+    [RelayCommand]
+    private void Vacuum() => Owner.Store.IncrementalVacuum(64);
 }

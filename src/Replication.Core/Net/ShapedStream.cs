@@ -12,10 +12,10 @@ public sealed class NetworkProfile
     public long UpBitsPerSecond { get; set; }
     public long DownBitsPerSecond { get; set; }
 
-    public static NetworkProfile Local() => new();
+    public static NetworkProfile Local() => new NetworkProfile();
 
     /// <summary>1.5 s each way, 70 kbit/s up, 2 Mbit/s down.</summary>
-    public static NetworkProfile Target() => new() { Latency = TimeSpan.FromMilliseconds(1500), UpBitsPerSecond = 70_000, DownBitsPerSecond = 2_000_000 };
+    public static NetworkProfile Target() => new NetworkProfile { Latency = TimeSpan.FromMilliseconds(1500), UpBitsPerSecond = 70_000, DownBitsPerSecond = 2_000_000 };
 
     public void CopyFrom(NetworkProfile p)
     {
@@ -38,8 +38,6 @@ public sealed class NetworkProfile
 /// </summary>
 internal sealed class ShapedStream : Stream
 {
-    private sealed record Chunk(byte[] Data, int Length, DateTimeOffset DeliverAt);
-
     private readonly Stream _inner;
     private readonly WireMeter _meter;
     private readonly NetworkProfile _profile;
@@ -53,6 +51,8 @@ internal sealed class ShapedStream : Stream
     private int _currentOffset;
     private readonly Task _upPump;
     private readonly Task _downPump;
+
+    private sealed record Chunk(byte[] Data, int Length, DateTimeOffset DeliverAt);
 
     public ShapedStream(Stream inner, WireMeter meter, NetworkProfile profile)
     {
@@ -161,14 +161,22 @@ internal sealed class ShapedStream : Stream
     public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer, offset, count).GetAwaiter().GetResult();
 
     public override Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+
     public override void Flush() { }
 
     public override bool CanRead => true;
     public override bool CanWrite => true;
     public override bool CanSeek => false;
     public override long Length => throw new NotSupportedException();
-    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
     public override void SetLength(long value) => throw new NotSupportedException();
 
     protected override void Dispose(bool disposing)

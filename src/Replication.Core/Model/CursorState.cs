@@ -23,7 +23,7 @@ public sealed class CursorState
     /// <summary>Received ranges above the cursor, ascending, not touching each other or the cursor.</summary>
     public List<(long Lo, long Hi)> Ranges { get; } = [];
 
-    public CursorState Clone() => new(Cursor, Ranges);
+    public CursorState Clone() => new CursorState(Cursor, Ranges);
 
     /// <summary>Adds (lo, hi] and merges: ranges that touch merge, a range that reaches the cursor lifts it.</summary>
     public void AddRange(long lo, long hi)
@@ -84,7 +84,7 @@ public sealed class CursorState
         long prev = Cursor;
         foreach ((long lo, long hi) in Ranges)
         {
-            // compact: differences between neighbouring bounds, varint (6.4, "how many ranges accumulate")
+            // Compact: differences between neighbouring bounds, varint (6.4, "how many ranges accumulate").
             tc.RangeDeltas.Add(lo - prev);
             tc.RangeDeltas.Add(hi - lo);
             prev = hi;

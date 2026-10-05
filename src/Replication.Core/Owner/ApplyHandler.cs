@@ -24,8 +24,10 @@ internal sealed class ApplyHandler(OwnerStore store)
     public ApplyReply Apply(ApplyRequest req)
     {
         using SqliteConnection c = store.Open();
-        using SqliteTransaction tx = c.BeginTransaction(); // BEGIN IMMEDIATE
-        c.Exec("PRAGMA defer_foreign_keys = ON;", tx); // the order of actions inside a batch does not matter
+        // BEGIN IMMEDIATE.
+        using SqliteTransaction tx = c.BeginTransaction();
+        // The order of actions inside a batch does not matter.
+        c.Exec("PRAGMA defer_foreign_keys = ON;", tx);
 
         string cid = req.ClientId;
         long now = store.Now(c, tx);
@@ -52,7 +54,7 @@ internal sealed class ApplyHandler(OwnerStore store)
         Dictionary<(string Tbl, string), Protocol.Action> creates = fresh.Where(a => a.Kind == ActionKind.Create).ToDictionary(a => (a.Tbl, PkText(a.Pk)));
         HashSet<(string Tbl, string)> deletes = fresh.Where(a => a.Kind == ActionKind.Delete).Select(a => (a.Tbl, PkText(a.Pk))).ToHashSet();
 
-        foreach (Protocol.Action? a in actions)
+        foreach (Protocol.Action a in actions)
         {
             if (!Model.TryGet(a.Tbl, out SyncTable? t) && a.Kind is not ActionKind.Archive)
             {
@@ -61,7 +63,7 @@ internal sealed class ApplyHandler(OwnerStore store)
             }
             if (a.Seq <= applied)
             {
-                // a retry after a lost reply: the version is returned only while it is still this client's (6.5)
+                // A retry after a lost reply: the version is returned only while it is still this client's (6.5).
                 ActionResult res = Res(a, ResultStatus.Skipped, Reasons.AlreadyApplied);
                 if (a.Pk.Length > 0 && a.Kind is ActionKind.Create or ActionKind.Patch && OwnerReader.Row(c, tx, t, PkText(a.Pk)) is { } row && row.Origin == cid)
                     (res.HasVersion, res.Version) = (true, row.Version);
@@ -71,21 +73,26 @@ internal sealed class ApplyHandler(OwnerStore store)
             }
             string? pk = a.Pk.Length > 0 ? PkText(a.Pk) : null;
             if (a.Kind == ActionKind.Create && OwnerReader.Tombstone(c, tx, t, pk!) is not null)
-                Res(a, ResultStatus.Rejected, Reasons.Deleted); // delete wins over a create retry (9.1)
+            {
+                // Delete wins over a create retry (9.1).
+                Res(a, ResultStatus.Rejected, Reasons.Deleted);
+            }
             else if (a.Kind == ActionKind.Patch && OwnerReader.Row(c, tx, t, pk!) is null && !creates.ContainsKey((a.Tbl, pk!)))
+            {
                 Res(a, ResultStatus.Ignored, Reasons.Deleted);
+            }
         }
 
-        foreach (Protocol.Action? a in fresh.Where(a => a.Kind == ActionKind.Archive && !results.ContainsKey(a.Seq)))
+        foreach (Protocol.Action a in fresh.Where(a => a.Kind == ActionKind.Archive && !results.ContainsKey(a.Seq)))
             results[a.Seq] = Archive(c, tx, a);
-        foreach (Protocol.Action? a in fresh.Where(a => a.Kind == ActionKind.PredicateDelete && !results.ContainsKey(a.Seq)))
+        foreach (Protocol.Action a in fresh.Where(a => a.Kind == ActionKind.PredicateDelete && !results.ContainsKey(a.Seq)))
             results[a.Seq] = PredicateDelete(c, tx, a, cid);
 
-        // explicit FK check by the EF model, counting creates in the same batch; a rejected parent rejects its children
+        // Explicit FK check by the EF model, counting creates in the same batch; a rejected parent rejects its children.
         for (bool changed = true; changed;)
         {
             changed = false;
-            foreach (Protocol.Action? a in fresh.Where(a => a.Kind is ActionKind.Create or ActionKind.Patch && !results.ContainsKey(a.Seq)))
+            foreach (Protocol.Action a in fresh.Where(a => a.Kind is ActionKind.Create or ActionKind.Patch && !results.ContainsKey(a.Seq)))
             {
                 SyncTable t = Model[a.Tbl];
                 for (int i = 0; i < a.Columns.Count; i++)
@@ -106,7 +113,7 @@ internal sealed class ApplyHandler(OwnerStore store)
             }
         }
 
-        foreach (Protocol.Action? a in fresh.Where(a => !results.ContainsKey(a.Seq)))
+        foreach (Protocol.Action a in fresh.Where(a => !results.ContainsKey(a.Seq)))
         {
             SyncTable t = Model[a.Tbl];
             string pk = PkText(a.Pk);
@@ -117,11 +124,12 @@ internal sealed class ApplyHandler(OwnerStore store)
                 switch (a.Kind)
                 {
                     case ActionKind.Create:
-                        Upsert(c, tx, t, pk, a, cid); // a new row always carries this client's origin
+                        // A new row always carries this client's origin.
+                        Upsert(c, tx, t, pk, a, cid);
                         break;
                     case ActionKind.Patch:
                     {
-                        // SyncOrigin = client only if it already had the previous state of the row (5.2, "no echo")
+                        // SyncOrigin = client only if it already had the previous state of the row (5.2, "no echo").
                         OwnerItem? prev = OwnerReader.Row(c, tx, t, pk);
                         string? origin = prev is null || prev.Version <= CursorOf(t.Name) ? cid : null;
                         Patch(c, tx, t, pk, a, origin);
@@ -140,8 +148,9 @@ internal sealed class ApplyHandler(OwnerStore store)
                     (res.HasVersion, res.Version) = (true, row.Version);
                 c.Exec("RELEASE act", tx);
             }
-            catch (SqliteException e) when (e.SqliteErrorCode == 19) // SQLITE_CONSTRAINT: a unique index on a business column (9)
+            catch (SqliteException e) when (e.SqliteErrorCode == 19)
             {
+                // SQLITE_CONSTRAINT: a unique index on a business column (9).
                 c.Exec("ROLLBACK TO act; RELEASE act;", tx);
                 Res(a, ResultStatus.Rejected, Reasons.Unique);
             }
@@ -216,7 +225,7 @@ internal sealed class ApplyHandler(OwnerStore store)
             changed = false;
             foreach ((string Tbl, string Pk) it in items.Where(x => !why.ContainsKey(x)))
             {
-                foreach ((SyncTable? child, SyncForeignKey? fk) in Model.ChildrenOf(it.Tbl))
+                foreach ((SyncTable child, SyncForeignKey fk) in Model.ChildrenOf(it.Tbl))
                 {
                     using SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p", tx, ("@p", it.Pk));
                     using SqliteDataReader r = cmd.ExecuteReader();
@@ -237,7 +246,7 @@ internal sealed class ApplyHandler(OwnerStore store)
         }
         List<(string Tbl, string Pk)> toDelete = items.Where(x => !why.ContainsKey(x)).OrderBy(x => Model.Tables.ToList().FindIndex(t => t.Name == x.Tbl) * -1).ToList();
         int deleted = 0;
-        foreach ((string? tbl, string? pk) in toDelete)
+        foreach ((string tbl, string pk) in toDelete)
             deleted += c.Exec($"DELETE FROM {Q(tbl)} WHERE Id = @id AND SyncVersion <= @v", tx, ("@id", pk), ("@v", a.ExpectedVersion));
         var res = new ActionResult { Seq = a.Seq, Status = ResultStatus.Applied, Deleted = deleted };
         res.Changed.AddRange(why.Where(x => x.Value == "changed").Select(x => Ref(x.Key.Item1, x.Key.Item2)));
@@ -262,7 +271,7 @@ internal sealed class ApplyHandler(OwnerStore store)
         string condSql = where.Count > 0 ? string.Join(" AND ", where) : "1";
         long before = store.Head(c, tx);
         int deleted = c.Exec($"DELETE FROM {Q(t.Name)} WHERE SyncVersion <= @V AND {condSql}", tx, [.. args, ("@V", a.ExpectedVersion)]);
-        // the client already removed these rows (and their cascade) itself
+        // The client already removed these rows (and their cascade) itself.
         c.Exec("UPDATE _sync_tombstones SET origin = @c WHERE version > @b", tx, ("@c", cid), ("@b", before));
         var res = new ActionResult { Seq = a.Seq, Status = ResultStatus.Applied, Deleted = deleted };
         using SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE {condSql}", tx, [.. args]);

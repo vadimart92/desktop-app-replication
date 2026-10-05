@@ -11,9 +11,23 @@ using static Replication.Model.Wire;
 
 namespace Replication.Client;
 
-public enum AgentState { Offline, Connecting, Flushing, Snapshot, Catchup, Online, SchemaMismatch }
+public enum AgentState
+{
+    Offline,
+    Connecting,
+    Flushing,
+    Snapshot,
+    Catchup,
+    Online,
+    SchemaMismatch
+}
 
-public enum SnapshotMode { Auto, File, EmptyReplica }
+public enum SnapshotMode
+{
+    Auto,
+    File,
+    EmptyReplica
+}
 
 public sealed class AgentOptions
 {
@@ -50,7 +64,7 @@ public sealed record AgentStatus(
 /// </summary>
 public sealed class SyncAgent : IAsyncDisposable
 {
-    private static readonly Metadata Gzip = new() { { "grpc-internal-encoding-request", "gzip" } };
+    private static readonly Metadata s_gzip = new() { { "grpc-internal-encoding-request", "gzip" } };
 
     private sealed record Download(string Id, string Path, long Total);
 
@@ -135,7 +149,7 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private Dictionary<string, CursorState> NewCursors() => _store.Model.Tables.ToDictionary(t => t.Name, _ => new CursorState(0), StringComparer.Ordinal);
 
-    // ---------- control ----------
+    // Control.
 
     public bool LinkEnabled
     {
@@ -216,7 +230,7 @@ public sealed class SyncAgent : IAsyncDisposable
         _linkSignal.Set();
     }
 
-    // ---------- main loop ----------
+    // Main loop.
 
     private async Task RunAsync(CancellationToken life)
     {
@@ -309,7 +323,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             ct.ThrowIfCancellationRequested();
             SetState(AgentState.Connecting);
-            using AsyncDuplexStreamingCall<SubscribeMessage, ChangeMessage> call = client.Subscribe(Gzip, cancellationToken: ct);
+            using AsyncDuplexStreamingCall<SubscribeMessage, ChangeMessage> call = client.Subscribe(s_gzip, cancellationToken: ct);
             var writeGate = new SemaphoreSlim(1, 1);
             async Task Write(SubscribeMessage m)
             {
@@ -376,7 +390,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             lock (_cursors)
             {
-                foreach ((string? t, CursorState? k) in _cursors)
+                foreach ((string t, CursorState k) in _cursors)
                     s.Cursors.Add(k.ToWire(t));
             }
         }
@@ -412,7 +426,7 @@ public sealed class SyncAgent : IAsyncDisposable
             var ack = new Ack();
             lock (_cursors)
             {
-                foreach ((string? t, CursorState? k) in _cursors)
+                foreach ((string t, CursorState k) in _cursors)
                     ack.Cursors.Add(k.ToWire(t, withRanges: false));
             }
 
@@ -423,7 +437,7 @@ public sealed class SyncAgent : IAsyncDisposable
         }
     }
 
-    // ---------- receiving (7) ----------
+    // Receiving (7).
 
     private async Task HandleAsync(ChangeMessage m)
     {
@@ -436,7 +450,7 @@ public sealed class SyncAgent : IAsyncDisposable
             using SqliteTransaction tx = _conn.BeginTransaction();
             lock (_cursors)
             {
-                foreach (RangeExtra? x in m.Extra)
+                foreach (RangeExtra x in m.Extra)
                     _cursors[x.Tbl].AddRange(x.Lo, x.Hi);
                 switch (m.BodyCase)
                 {
@@ -445,7 +459,7 @@ public sealed class SyncAgent : IAsyncDisposable
                         int n = w.ApplyBatch(_conn, tx, b);
                         if (_cursors.TryGetValue(b.Tbl, out CursorState? k))
                         {
-                            foreach (RangeExtra? c in b.Covers)
+                            foreach (RangeExtra c in b.Covers)
                                 k.AddRange(c.Lo, c.Hi);
                         }
 
@@ -468,10 +482,10 @@ public sealed class SyncAgent : IAsyncDisposable
                             text = "усі таблиці досинхронізовано, репліка цілісна";
                         break;
                 }
-                foreach ((string? t, CursorState? k) in _cursors)
+                foreach ((string t, CursorState k) in _cursors)
                     _store.SaveCursor(_conn, tx, _instance!, t, k);
                 // a confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1)
-                foreach ((string? t, CursorState? k) in _cursors)
+                foreach ((string t, CursorState k) in _cursors)
                 {
                     _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND sent = 2 AND expected_version <= @c", tx,
                         ("@i", _instance), ("@t", t), ("@c", k.Cursor));
@@ -516,7 +530,7 @@ public sealed class SyncAgent : IAsyncDisposable
             _lagWarning = false;
     }
 
-    // ---------- sending (6.5, 8) ----------
+    // Sending (6.5, 8).
 
     private async Task ApplyLoopAsync(Sync.SyncClient client, CancellationToken ct)
     {
@@ -545,7 +559,7 @@ public sealed class SyncAgent : IAsyncDisposable
     /// <summary>Sends one batch: retries first, then interactive actions, then bulk ones, closed over FK dependencies.</summary>
     private async Task<bool> SendOnceAsync(Sync.SyncClient client, CancellationToken ct)
     {
-        (ApplyRequest? req, List<OutboxEntry>? entries) = await BuildBatchAsync();
+        (ApplyRequest? req, List<OutboxEntry> entries) = await BuildBatchAsync();
         if (req is null)
             return false;
         int size = req.CalculateSize();
@@ -555,7 +569,7 @@ public sealed class SyncAgent : IAsyncDisposable
         ApplyReply reply;
         try
         {
-            reply = await client.ApplyAsync(req, Gzip, DateTime.UtcNow + Options.ApplyTimeout, ct);
+            reply = await client.ApplyAsync(req, s_gzip, DateTime.UtcNow + Options.ApplyTimeout, ct);
         }
         catch (RpcException e) when (e.StatusCode is StatusCode.DeadlineExceeded or StatusCode.Unavailable && !ct.IsCancellationRequested)
         {
@@ -611,7 +625,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     return;
                 if (_store.Model.TryGet(e.Table, out SyncTable? t) && e.Kind is OutboxKind.Create or OutboxKind.Patch && e.Pk is not null)
                 {
-                    foreach (SyncForeignKey? fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
+                    foreach (SyncForeignKey fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
                     {
                         // a create this row points to must go in the same or an earlier batch (8.4)
                         string? pid = _conn.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
@@ -625,7 +639,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 batch.Add(e);
                 size += a?.CalculateSize() ?? 0;
             }
-            foreach (OutboxEntry? e in all)
+            foreach (OutboxEntry e in all)
             {
                 if (size >= budget && batch.Count > 0)
                     break;
@@ -705,7 +719,7 @@ public sealed class SyncAgent : IAsyncDisposable
             using SqliteTransaction tx = _conn.BeginTransaction();
             Dictionary<long, OutboxEntry> bySeq = sent.ToDictionary(e => e.Seq!.Value);
             var versions = new List<string>();
-            foreach (ActionResult? r in reply.Results)
+            foreach (ActionResult r in reply.Results)
             {
                 if (!bySeq.TryGetValue(r.Seq, out OutboxEntry? e))
                     continue;
@@ -767,7 +781,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             _gate.Release();
         }
-        foreach ((string? text, SyncLogLevel level) in logs)
+        foreach ((string text, SyncLogLevel level) in logs)
             Log(text, level);
         foreach (string n in w.Notes)
             Log(n, SyncLogLevel.Bad);
@@ -776,7 +790,7 @@ public sealed class SyncAgent : IAsyncDisposable
         StatusChanged?.Invoke();
     }
 
-    // ---------- snapshot (6.3, 10.3) ----------
+    // Snapshot (6.3, 10.3).
 
     private async Task SnapshotFlowAsync(Sync.SyncClient client, SnapshotRequired sr, CancellationToken ct)
     {
@@ -831,7 +845,7 @@ public sealed class SyncAgent : IAsyncDisposable
         await _gate.WaitAsync(ct);
         try
         {
-            (string? inst, int carried, List<string>? notes) = ReplicaWriter.InstallSnapshot(_store, Address, path);
+            (string inst, int carried, List<string> notes) = ReplicaWriter.InstallSnapshot(_store, Address, path);
             _instance = inst;
             lock (_cursors)
                 _cursors = _store.LoadCursors(_conn, inst);
@@ -904,7 +918,7 @@ public sealed class SyncAgent : IAsyncDisposable
         return _download.Path;
     }
 
-    // ---------- bulk actions (8.6) and archive (11) ----------
+    // Bulk actions (8.6) and archive (11).
 
     /// <summary>
     /// Deletes the rows matching <paramref name="predicate"/> locally and queues one predicate action with the version V the
@@ -951,7 +965,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 List<string> own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
                 foreach (string id in ids)
                     c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
-                foreach (string? id in own)
+                foreach (string id in own)
                     ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
                 ClientStore.Insert(c, tx, _instance, table, null, OutboxKind.PredicateDelete, OutboxClass.Bulk, predicate: predicate.Serialize(), expectedVersion: k.Cursor);
                 Log($"масове видалення {count} записів: у черзі одна дія {predicate} і SyncVersion ≤ {k.Cursor}{(own.Count > 0 ? $", ключами ще {own.Count} (мають свої дії в черзі)" : "")}");
@@ -1003,7 +1017,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     return;
                 set.Add((table, pk));
                 // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3)
-                foreach ((SyncTable? child, SyncForeignKey? fk) in _store.Model.ChildrenOf(table))
+                foreach ((SyncTable child, SyncForeignKey fk) in _store.Model.ChildrenOf(table))
                 {
                     var ids = new List<string>();
                     using (SqliteCommand cmd = _conn.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", _instance)))
@@ -1017,13 +1031,13 @@ public sealed class SyncAgent : IAsyncDisposable
                         Add(child.Name, id);
                 }
             }
-            foreach ((string? table, string? pk) in rows)
+            foreach ((string table, string pk) in rows)
                 Add(table, pk);
             if (set.Count == 0)
                 return "нічого переносити";
             string archive = SyncColumns.ArchiveOf(_instance);
             List<string> labels = set.Select(x => ClientStore.Label(_conn, tx, _store.Model[x.Table], x.Pk)).ToList();
-            foreach ((string? table, string? pk) in set)
+            foreach ((string table, string pk) in set)
                 _conn.Exec($"UPDATE {Q(table)} SET InstanceId = @a WHERE Id = @id AND InstanceId = @i", tx, ("@a", archive), ("@id", pk), ("@i", _instance));
             long v;
             lock (_cursors)
@@ -1032,7 +1046,7 @@ public sealed class SyncAgent : IAsyncDisposable
             tx.Commit();
             text = $"{(tries > 0 ? "повторне перенесення" : "перенесення в архів")}: {string.Join(", ", labels)} отримали InstanceId = {archive} в одній транзакції; у черзі одна дія: Id ∈ набір і SyncVersion ≤ {v}";
             _archiveRetry.RemoveAll(x => set.Contains((x.Table, x.Pk)));
-            foreach ((string _, string? pk) in set)
+            foreach ((string _, string pk) in set)
                 _archiveTries[pk] = tries;
         }
         finally
@@ -1055,9 +1069,9 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         string archive = SyncColumns.ArchiveOf(_instance!);
         var names = new List<string>();
-        foreach ((string? why, Google.Protobuf.Collections.RepeatedField<RowRef>? list) in new[] { ("changed", r.Changed), ("children", r.Children) })
+        foreach ((string why, Google.Protobuf.Collections.RepeatedField<RowRef> list) in new[] { ("changed", r.Changed), ("children", r.Children) })
         {
-            foreach (RowRef? x in list)
+            foreach (RowRef x in list)
             {
                 string pk = PkText(x.Pk);
                 long v = _conn.Scalar<long>($"SELECT SyncVersion FROM {Q(x.Tbl)} WHERE Id = @id", tx, ("@id", pk));
@@ -1078,9 +1092,9 @@ public sealed class SyncAgent : IAsyncDisposable
         if (_archiveRetry.Count == 0)
             return;
         List<ArchiveRetry> ready = [];
-        foreach (string? pass in new[] { "changed", "children" })
+        foreach (string pass in new[] { "changed", "children" })
         {
-            foreach (ArchiveRetry? rt in _archiveRetry.Where(x => x.Why == pass).ToList())
+            foreach (ArchiveRetry rt in _archiveRetry.Where(x => x.Why == pass).ToList())
             {
                 long? v;
                 using (SqliteConnection c = _store.Open())

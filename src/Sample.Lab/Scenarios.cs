@@ -32,7 +32,7 @@ public static class Scenarios
     private static void Gone(Lab l, string name)
     {
         Check(!Inspect.OwnerHas(l.Owner, name), $"«{name}» лишився на власнику");
-        foreach (ClientNode? c in l.Clients.Where(c => c.Link))
+        foreach (ClientNode c in l.Clients.Where(c => c.Link))
             Check(!Inspect.ClientHas(c, name), $"«{name}» лишився в репліці {c.Label}");
     }
 
@@ -330,7 +330,7 @@ public static class Scenarios
             ],
             l =>
             {
-                foreach (string? n in new[] { "Старий принтер", "Факс", "Каталог 2019" })
+                foreach (string n in new[] { "Старий принтер", "Факс", "Каталог 2019" })
                 {
                     Gone(l, n);
                     Check(Inspect.ClientHas(l.C1, n, archive: true), $"«{n}» нема в архіві Клієнта 1");
@@ -419,7 +419,7 @@ public static class Scenarios
             ],
             l =>
             {
-                foreach (string? n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" }) Gone(l, n);
+                foreach (string n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" }) Gone(l, n);
                 Check(HasNote(l.C2, "втрачено"), "Клієнт 2 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask; }),
 
@@ -488,7 +488,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
             }
         }
 
-        foreach (ClientNode? c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
+        foreach (ClientNode c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
             problems.AddRange(Inspect.Diff(Lab.Owner, c).Select(d => $"{c.Label}: {d}"));
         Lab.Say(problems.Count == 0 ? "перевірка: репліки дорівнюють власнику, очікуваний результат є" : "перевірка: " + string.Join("; ", problems),
             problems.Count == 0 ? SyncLogLevel.Ok : SyncLogLevel.Bad);

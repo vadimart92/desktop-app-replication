@@ -47,9 +47,11 @@ public static class Inspect
         List<OutboxEntry> entries = ClientStore.Entries(c, null, inst);
         return [.. rows.Select(r =>
         {
-            if (r.InstanceId != inst) return r with { Mark = "архів" };
+            if (r.InstanceId != inst)
+                return r with { Mark = "архів" };
             OutboxEntry? e = entries.FirstOrDefault(x => x.Table == table && x.Pk == r.Id);
-            return e is null ? r : r with { Mark = e.Sent == 1 ? $"в дорозі ({e.Kind})" : $"черга ({e.Kind})" }; })];
+            return e is null ? r : r with { Mark = e.Sent == 1 ? $"в дорозі ({e.Kind})" : $"черга ({e.Kind})" };
+        })];
     }
 
     private static List<RowView> ReadRows(SqliteConnection c, SyncTable t, string where, int limit, bool owner)
@@ -85,7 +87,7 @@ public static class Inspect
         using SqliteDataReader r = cmd.ExecuteReader();
         var list = new List<TombstoneView>();
         while (r.Read())
-            list.Add(new(r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetInt64(3), r.IsDBNull(4) ? null : r.GetString(4)));
+            list.Add(new TombstoneView(r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetInt64(3), r.IsDBNull(4) ? null : r.GetString(4)));
         return list;
     }
 
@@ -101,7 +103,7 @@ public static class Inspect
         using SqliteDataReader r = cmd.ExecuteReader();
         var list = new List<ClientView>();
         while (r.Read())
-            list.Add(new(r.GetString(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3), r.IsDBNull(4) ? "" : r.GetString(4)));
+            list.Add(new ClientView(r.GetString(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3), r.IsDBNull(4) ? "" : r.GetString(4)));
         return list;
     }
 
@@ -148,7 +150,7 @@ public static class Inspect
             }
             Dictionary<string, string> a = Read(oc, "1");
             Dictionary<string, string> b = Read(cc, "InstanceId = @i");
-            foreach ((string? id, string? v) in a)
+            foreach ((string id, string v) in a)
             {
                 if (!b.TryGetValue(id, out string? w))
                     diffs.Add($"{t.Name} {Wire.Short(id)}: нема в репліці");
@@ -156,7 +158,7 @@ public static class Inspect
                     diffs.Add($"{t.Name} {Wire.Short(id)}: власник [{v}], репліка [{w}]");
             }
 
-            foreach (string? id in b.Keys.Where(k => !a.ContainsKey(k)))
+            foreach (string id in b.Keys.Where(k => !a.ContainsKey(k)))
                 diffs.Add($"{t.Name} {Wire.Short(id)}: зайвий у репліці");
         }
         return diffs;

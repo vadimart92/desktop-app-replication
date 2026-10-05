@@ -20,13 +20,15 @@ public sealed class WireMeter
     public long BytesDown => Interlocked.Read(ref _down);
 
     internal void AddUp(int n) => Interlocked.Add(ref _up, n);
+
     internal void AddDown(int n) => Interlocked.Add(ref _down, n);
 
     /// <summary>Uncompressed protobuf size of a message, by direction and type (for example "↓ Batch").</summary>
     public void CountMessage(string key, int bytes) =>
         _messages.AddOrUpdate(key, (1, bytes), (_, v) => (v.Count + 1, v.Bytes + bytes));
 
-    public IReadOnlyList<KeyValuePair<string, (long Count, long Bytes)>> Messages => _messages.ToArray(); // ToArray is atomic on ConcurrentDictionary
+    // ToArray is atomic on ConcurrentDictionary.
+    public IReadOnlyList<KeyValuePair<string, (long Count, long Bytes)>> Messages => _messages.ToArray();
 
     /// <summary>Bytes per second over the last sampling period (call about once a second).</summary>
     public (double Up, double Down) SampleRate()

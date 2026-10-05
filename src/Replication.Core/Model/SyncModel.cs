@@ -21,7 +21,7 @@ public static class SyncColumns
     public static bool IsRemote(string? instanceId) =>
         !string.IsNullOrEmpty(instanceId) && instanceId != LocalInstance && !instanceId.EndsWith(":archive", StringComparison.Ordinal);
 
-    internal static readonly HashSet<string> All = [Version, Base, Mask, Origin, InstanceId];
+    internal static readonly HashSet<string> s_all = [Version, Base, Mask, Origin, InstanceId];
 }
 
 public sealed record SyncForeignKey(string Column, string ParentTable, bool Cascade);
@@ -104,7 +104,10 @@ public sealed class SyncModel
 
     /// <summary>Tables with an FK to <paramref name="parent"/>, with that FK.</summary>
     public IEnumerable<(SyncTable Child, SyncForeignKey Fk)> ChildrenOf(string parent) =>
-        from t in Tables from fk in t.ForeignKeys where fk.ParentTable == parent select (t, fk);
+        from t in Tables
+        from fk in t.ForeignKeys
+        where fk.ParentTable == parent
+        select (t, fk);
 
     public static SyncModel From(DbContext context) => From(context.Model);
 
@@ -124,7 +127,7 @@ public sealed class SyncModel
             List<string> columns = et.GetProperties()
                 .Where(p => !p.IsPrimaryKey())
                 .Select(p => p.GetColumnName(store)!)
-                .Where(c => !SyncColumns.All.Contains(c))
+                .Where(c => !SyncColumns.s_all.Contains(c))
                 .ToList();
 
             List<SyncForeignKey> fks = et.GetForeignKeys()
@@ -138,7 +141,7 @@ public sealed class SyncModel
             tables.Add(new SyncTable(tableName, et.ClrType, columns, fks));
         }
 
-        // parents first, so FK-ordered work (snapshot copy, archive) has a stable order
+        // Parents first, so FK-ordered work (snapshot copy, archive) has a stable order.
         var ordered = new List<SyncTable>();
         var visiting = new HashSet<string>();
         Dictionary<string, SyncTable> byName = tables.ToDictionary(t => t.Name);
@@ -154,7 +157,7 @@ public sealed class SyncModel
 
             ordered.Add(t);
         }
-        foreach (SyncTable? t in tables.OrderBy(t => t.Name, StringComparer.Ordinal))
+        foreach (SyncTable t in tables.OrderBy(t => t.Name, StringComparer.Ordinal))
             Visit(t);
         return new SyncModel(ordered);
     }

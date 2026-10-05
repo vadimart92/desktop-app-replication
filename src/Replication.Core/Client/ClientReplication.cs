@@ -28,7 +28,7 @@ public sealed class ClientReplication : IAsyncDisposable
         Router = new WriteRouter(model);
         Router.OutboxChanged += instance =>
         {
-            foreach (SyncAgent? a in Agents.Where(a => a.InstanceId == instance))
+            foreach (SyncAgent a in Agents.Where(a => a.InstanceId == instance))
                 a.NotifyOutbox();
         };
         Router.Routed += (instance, text) =>

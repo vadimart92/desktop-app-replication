@@ -43,7 +43,8 @@ public sealed class OwnerHost : IAsyncDisposable
             k.Limits.Http2.InitialConnectionWindowSize = store.Options.Http2ConnectionWindowBytes;
             k.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(20);
             k.Limits.Http2.KeepAlivePingTimeout = TimeSpan.FromSeconds(20);
-            void Listen(ListenOptions o) => o.Protocols = HttpProtocols.Http2; // h2c: plain HTTP/2, no TLS in v1 (2)
+            // Plain HTTP/2 (h2c), no TLS in v1 (2).
+            void Listen(ListenOptions o) => o.Protocols = HttpProtocols.Http2;
             if (listenAnywhere)
                 k.ListenAnyIP(port, Listen);
             else
@@ -53,7 +54,8 @@ public sealed class OwnerHost : IAsyncDisposable
         builder.Services.AddSingleton<SnapshotStore>();
         builder.Services.AddGrpc(o =>
         {
-            o.ResponseCompressionAlgorithm = "gzip"; // 3-5x on table data (6.1)
+            // Gzip: 3-5x on table data (6.1).
+            o.ResponseCompressionAlgorithm = "gzip";
             o.ResponseCompressionLevel = CompressionLevel.Optimal;
             o.MaxReceiveMessageSize = 32 * 1024 * 1024;
             o.MaxSendMessageSize = 32 * 1024 * 1024;
@@ -80,7 +82,8 @@ public sealed class OwnerHost : IAsyncDisposable
                 Store.WriteVersionFile();
                 if (DateTimeOffset.UtcNow - lastFloor > TimeSpan.FromMinutes(1))
                 {
-                    Store.RecomputeFloor(); // a client that left the activity window stops holding the base back
+                    // A client that left the activity window stops holding the base back.
+                    Store.RecomputeFloor();
                     lastFloor = DateTimeOffset.UtcNow;
                 }
                 if (DateTimeOffset.UtcNow - lastPurge > Store.Options.PurgeInterval)

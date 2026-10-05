@@ -14,7 +14,7 @@ internal static class ArchiveGuard
     public static bool HasArchiveBelow(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk)
     {
         string archive = SyncColumns.ArchiveOf(instance);
-        foreach ((SyncTable? child, SyncForeignKey? fk) in model.ChildrenOf(t.Name))
+        foreach ((SyncTable child, SyncForeignKey fk) in model.ChildrenOf(t.Name))
         {
             if (c.Scalar<long>($"SELECT EXISTS(SELECT 1 FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @a)", tx, ("@p", pk), ("@a", archive)) != 0)
                 return true;
@@ -39,7 +39,7 @@ internal static class ArchiveGuard
             c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", pk), ("@i", instance));
             return false;
         }
-        foreach ((SyncTable? child, SyncForeignKey? fk) in model.ChildrenOf(t.Name))
+        foreach ((SyncTable child, SyncForeignKey fk) in model.ChildrenOf(t.Name))
         {
             foreach (string id in LiveChildren(c, tx, instance, child, fk, pk))
                 DeleteOrArchive(c, tx, model, instance, child, id);

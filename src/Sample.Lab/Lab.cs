@@ -42,7 +42,7 @@ public sealed class Lab : IAsyncDisposable
             o.OnlineInterval = TimeSpan.FromMilliseconds(300);
             configureOwner?.Invoke(o);
         });
-        AgentOptions Opt() => new() { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
+        AgentOptions Opt() => new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
         ClientNode c1 = ClientNode.Create("c1", "Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
         ClientNode c2 = ClientNode.Create("c2", "Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
         return new Lab(dir, log, owner, c1, c2);

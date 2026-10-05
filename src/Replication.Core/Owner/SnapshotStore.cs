@@ -10,10 +10,10 @@ namespace Replication.Owner;
 /// </summary>
 internal sealed class SnapshotStore(OwnerStore store)
 {
-    internal sealed record Snap(string Id, string Path, long Version, string InstanceId, long Size, byte[] Sha256, DateTimeOffset Created);
-
     private readonly ConcurrentDictionary<string, Snap> _snaps = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    internal sealed record Snap(string Id, string Path, long Version, string InstanceId, long Size, byte[] Sha256, DateTimeOffset Created);
 
     private string Dir
     {
@@ -74,7 +74,7 @@ internal sealed class SnapshotStore(OwnerStore store)
 
     private void Cleanup()
     {
-        foreach (Snap? s in _snaps.Values.Where(s => DateTimeOffset.UtcNow - s.Created > store.Options.SnapshotKeep).ToList())
+        foreach (Snap s in _snaps.Values.Where(s => DateTimeOffset.UtcNow - s.Created > store.Options.SnapshotKeep).ToList())
         {
             _snaps.TryRemove(s.Id, out _);
             try

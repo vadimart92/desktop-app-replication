@@ -27,7 +27,7 @@ public class SampleDbContext(DbContextOptions<SampleDbContext> options) : DbCont
         });
         b.Entity<LogEntry>(e => e.ToTable("Log"));
 
-        // the only line the replication needs in the model: every BaseEntity is replicated
+        // The only line the replication needs in the model: every BaseEntity is replicated.
         b.UseReplication(t => typeof(BaseEntity).IsAssignableFrom(t));
     }
 

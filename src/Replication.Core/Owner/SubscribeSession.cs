@@ -27,6 +27,7 @@ internal sealed class SubscribeSession
     private string _who = "";
     private bool _online;
     private long _sentUpTo;
+    private long _catchupHead;
 
     public SubscribeSession(OwnerStore store, IAsyncStreamReader<SubscribeMessage> input, IServerStreamWriter<ChangeMessage> output, CancellationToken ct)
     {
@@ -38,6 +39,7 @@ internal sealed class SubscribeSession
 
     private OwnerOptions Opt => _store.Options;
     private SyncModel Model => _store.Model;
+
     private void Log(string text, SyncLogLevel level = SyncLogLevel.Info) => Opt.Log.Write("owner", $"[{_who}] {text}", level);
 
     public async Task RunAsync()
@@ -69,11 +71,14 @@ internal sealed class SubscribeSession
             {
                 await reader;
             }
-            catch { /* stream closed */ }
+            catch
+            {
+                // Stream closed.
+            }
         }
     }
 
-    // ---------- handshake (6.2) ----------
+    // Handshake (6.2).
 
     private async Task<bool> HandshakeAsync(SqliteConnection conn, Start start)
     {
@@ -88,8 +93,8 @@ internal sealed class SubscribeSession
         long purged = _store.Purged(conn);
         Dictionary<string, CursorState> cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
         long minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out CursorState? c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
-        // a table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
-        // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2)
+        // A table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
+        // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2).
         (string Name, CursorState K) behind = Model.Tables
             .Select(t => (t.Name, K: cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0)))
             .FirstOrDefault(x => !(x.K.Cursor == 0 && x.K.Ranges.Count == 0) && x.K.Cursor < purged);
@@ -125,7 +130,7 @@ internal sealed class SubscribeSession
         return true;
     }
 
-    // ---------- client messages ----------
+    // Client messages.
 
     private async Task ReadLoopAsync()
     {
@@ -147,7 +152,7 @@ internal sealed class SubscribeSession
                         _store.SaveCursors(c, tx, _clientId, m.Ack.Cursors.ToDictionary(x => x.Tbl, x => x.Cursor));
                         tx.Commit();
                     }
-                    foreach (RowRef? r in m.Ack.NeedFull)
+                    foreach (RowRef r in m.Ack.NeedFull)
                         _needFull.Enqueue(r);
                     if (m.Ack.NeedFull.Count > 0)
                         _wake.Set();
@@ -156,7 +161,7 @@ internal sealed class SubscribeSession
         }
     }
 
-    // ---------- main loop ----------
+    // Main loop.
 
     private async Task MainLoopAsync(SqliteConnection conn)
     {
@@ -180,7 +185,7 @@ internal sealed class SubscribeSession
                 continue;
             }
 
-            // online: poll PRAGMA data_version (triggers cannot notify the process), or wake on our own commits
+            // Online: poll PRAGMA data_version (triggers cannot notify the process), or wake on our own commits.
             bool woke = await _wake.WaitAsync(Opt.PollInterval, _ct);
             long dv = conn.Scalar<long>("PRAGMA data_version");
             if (!woke && dv == dataVersion)
@@ -194,14 +199,12 @@ internal sealed class SubscribeSession
         }
     }
 
-    private long _catchupHead;
-
     private IEnumerable<SyncTable> PriorityTables()
     {
         string[] open;
         lock (_lock)
             open = _open;
-        // open tables first, together with the tables they reference by FK (6.4)
+        // Open tables first, together with the tables they reference by FK (6.4).
         bool First(SyncTable t) => open.Contains(t.Name) || open.Any(o => Model.TryGet(o, out SyncTable? ot) && ot.ForeignKeys.Any(f => f.ParentTable == t.Name));
         return Model.Tables.OrderBy(t => First(t) ? 0 : 1);
     }
@@ -230,7 +233,7 @@ internal sealed class SubscribeSession
                         log = $"TableSynced {t.Name}, курсор = {head}";
                         break;
                     }
-                    // the table is synced, the head moved because of other tables: close empty ranges on the way
+                    // The table is synced, the head moved because of other tables: close empty ranges on the way.
                     foreach ((long Lo, long Hi) g in gaps)
                     {
                         _extra.Add(new RangeExtra { Tbl = t.Name, Lo = g.Lo, Hi = g.Hi });
@@ -240,7 +243,7 @@ internal sealed class SubscribeSession
                 }
                 _synced.Remove(t.Name);
 
-                // the highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message
+                // The highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message.
                 int n = Opt.CatchupBatchRows;
                 (long Lo, long Hi) main = nonEmpty[0];
                 (long Lo, long Hi)? tail = null;
@@ -254,7 +257,8 @@ internal sealed class SubscribeSession
                 long lo = all.Count > n ? items[^1].Version - 1 : main.Lo;
                 List<OwnerItem> tailItems = tail is { } tl ? OwnerReader.Range(conn, tx, t, tl.Lo, tl.Hi, n, newestFirst: true) : [];
 
-                long cur0 = k.Cursor; // the client is complete up to cur0: this decides whether a partial row is enough
+                // The client is complete up to cur0: this decides whether a partial row is enough.
+                long cur0 = k.Cursor;
                 var covers = new List<(long Lo, long Hi)> { (lo, main.Hi) };
                 covers.AddRange(gaps.Where(g => g.Hi > main.Hi));
                 foreach ((long a, long b) in covers)
@@ -265,13 +269,15 @@ internal sealed class SubscribeSession
                 foreach ((long a, long b) in covers)
                     batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = a, Hi = b });
                 var own = new List<long>();
-                foreach (OwnerItem? it in tailItems.Concat(items))
+                foreach (OwnerItem it in tailItems.Concat(items))
                 {
                     if (it.Origin == _clientId)
                     {
+                        // Its own change: not sent, the range still closes.
                         own.Add(it.Version);
                         continue;
-                    } // its own change: not sent, the range still closes
+                    }
+
                     if (it.IsTombstone)
                         batch.Tombstones.Add(new Protocol.Tombstone { Pk = PkBytes(it.Pk), Version = it.Version });
                     else
@@ -333,7 +339,7 @@ internal sealed class SubscribeSession
                 var batch = new Batch { Tbl = t.Name, Online = true };
                 batch.Columns.AddRange(t.Columns);
                 batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = _sentUpTo, Hi = upTo });
-                foreach ((SyncTable _, OwnerItem? it) in g)
+                foreach ((SyncTable _, OwnerItem it) in g)
                 {
                     if (it.IsTombstone)
                         batch.Tombstones.Add(new Protocol.Tombstone { Pk = PkBytes(it.Pk), Version = it.Version });
@@ -376,7 +382,7 @@ internal sealed class SubscribeSession
                 continue;
             var batch = new Batch { Tbl = t.Name, Online = _online };
             batch.Columns.AddRange(t.Columns);
-            foreach (RowRef? r in g)
+            foreach (RowRef r in g)
             {
                 string pk = PkText(r.Pk);
                 OwnerItem? row = OwnerReader.Row(conn, null, t, pk);

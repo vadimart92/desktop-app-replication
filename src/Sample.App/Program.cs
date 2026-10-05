@@ -48,7 +48,12 @@ public static class Program
     }
 }
 
-public enum AppMode { Lab, Owner, Client }
+public enum AppMode
+{
+    Lab,
+    Owner,
+    Client
+}
 
 public sealed class StartOptions
 {
@@ -68,14 +73,30 @@ public sealed class StartOptions
             string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]}: потрібне значення");
             switch (args[i])
             {
-                case "--owner": o.Mode = AppMode.Owner; break;
-                case "--client": o.Mode = AppMode.Client; break;
-                case "--headless": o.Headless = true; break;
-                case "--any": o.ListenAnywhere = true; break;
-                case "--port": o.Port = int.Parse(Next()); break;
-                case "--db": o.Db = Next(); break;
-                case "--connect": o.Connect = Next(); break;
-                case "--name": o.Name = Next(); break;
+                case "--owner":
+                    o.Mode = AppMode.Owner;
+                    break;
+                case "--client":
+                    o.Mode = AppMode.Client;
+                    break;
+                case "--headless":
+                    o.Headless = true;
+                    break;
+                case "--any":
+                    o.ListenAnywhere = true;
+                    break;
+                case "--port":
+                    o.Port = int.Parse(Next());
+                    break;
+                case "--db":
+                    o.Db = Next();
+                    break;
+                case "--connect":
+                    o.Connect = Next();
+                    break;
+                case "--name":
+                    o.Name = Next();
+                    break;
             }
         }
         if (o.Mode == AppMode.Client && o.Connect is null)

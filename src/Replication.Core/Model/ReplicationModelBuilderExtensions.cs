@@ -20,7 +20,7 @@ public static class ReplicationModelBuilderExtensions
     /// </remarks>
     public static ModelBuilder UseReplication(this ModelBuilder modelBuilder, Func<Type, bool>? include = null)
     {
-        foreach (IMutableEntityType? et in modelBuilder.Model.GetEntityTypes().ToList())
+        foreach (IMutableEntityType et in modelBuilder.Model.GetEntityTypes().ToList())
         {
             if (et.IsOwned() || et.ClrType == typeof(Dictionary<string, object>))
                 continue;

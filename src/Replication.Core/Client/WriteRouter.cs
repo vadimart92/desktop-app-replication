@@ -16,6 +16,9 @@ namespace Replication.Client;
 /// </summary>
 public sealed class WriteRouter : SaveChangesInterceptor
 {
+    private readonly SyncModel _model;
+    private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
+
     private sealed record Change(SyncTable Table, string Instance, string Pk, OutboxKind Kind, List<string> Columns);
 
     private sealed class Pending
@@ -25,9 +28,6 @@ public sealed class WriteRouter : SaveChangesInterceptor
         public List<(SyncTable Table, string Instance, string Pk)> ArchiveMoves { get; } = [];
         public bool OpenedConnection { get; set; }
     }
-
-    private readonly SyncModel _model;
-    private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
 
     public WriteRouter(SyncModel model) => _model = model;
 
@@ -93,7 +93,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
         var changes = new List<Change>();
         var moves = new List<(SyncTable, string, string)>();
         bool opened = false;
-        foreach (EntityEntry? e in entries)
+        foreach (EntityEntry e in entries)
         {
             if (_model.ForType(e.Metadata.ClrType) is not { } t)
                 continue;
@@ -113,11 +113,11 @@ public sealed class WriteRouter : SaveChangesInterceptor
                         changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
                     break;
                 case EntityState.Deleted:
-                    // only the parent goes to the outbox; the owner cascades by its own schema (8.7)
+                    // Only the parent goes to the outbox; the owner cascades by its own schema (8.7).
                     bool cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
                                                           && deleted.Contains((fk.ParentTable, PkText(pid))));
                     changes.Add(new Change(t, instance!, pk, cascaded ? (OutboxKind)0 : OutboxKind.Delete, []));
-                    // archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6)
+                    // Archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6).
                     if (_model.ChildrenOf(t.Name).Any())
                     {
                         if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
@@ -157,20 +157,20 @@ public sealed class WriteRouter : SaveChangesInterceptor
         var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
         try
         {
-            foreach ((SyncTable? t, string? inst, string? pk) in p.ArchiveMoves)
+            foreach ((SyncTable t, string inst, string pk) in p.ArchiveMoves)
             {
                 if (ArchiveGuard.DeleteOrArchive(conn, tx, _model, inst, t, pk))
                     Routed?.Invoke(inst, $"{t.Name} {Short(pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
             }
 
-            foreach (Change? ch in p.Changes.Where(x => x.Kind != 0))
+            foreach (Change ch in p.Changes.Where(x => x.Kind != 0))
             {
                 string what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, ch.Kind, ch.Columns, OutboxClass.Interactive);
                 Routed?.Invoke(ch.Instance, $"черга: {ch.Table.Name} {Short(ch.Pk)} → {what}");
             }
             if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or 0))
             {
-                foreach (string? inst in p.Changes.Select(x => x.Instance).Distinct())
+                foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
                     DropOrphanEntries(conn, tx, _model, inst);
             }
 
@@ -187,7 +187,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
             if (p.OpenedConnection)
                 ctx.Database.CloseConnection();
         }
-        foreach (string? inst in p.Changes.Select(x => x.Instance).Distinct())
+        foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
             OutboxChanged?.Invoke(inst);
     }
 

@@ -51,7 +51,8 @@ public class EmptyReplicaTests
         await using Lab lab = await Sample.Lab.Lab.StartAsync(configureOwner: o => o.CatchupBatchRows = 4);
         await lab.Owner.DeleteItemAsync("Скотч");
         await lab.Owner.DeleteItemAsync("Маркери");
-        OwnerStore.PurgeResult purged = await lab.Owner.PurgeAsync(); // no clients yet: every tombstone goes, purged_version > 0
+        // No clients yet: every tombstone goes, purged_version > 0.
+        OwnerStore.PurgeResult purged = await lab.Owner.PurgeAsync();
         Assert.True(purged.PurgedVersion > 0);
 
         lab.C2.Agent.Options.SnapshotMode = Replication.Client.SnapshotMode.EmptyReplica;
@@ -79,7 +80,8 @@ public class ArchiveParentTests
     {
         Assert.True(Sample.Lab.Inspect.ClientHas(lab.C1, "Каталог 2019", archive: true));
         Assert.Contains(Sample.Lab.Inspect.ClientRows(lab.C1, "Category"), r => r.Label == "Офіс" && r.Mark == "архів");
-        Assert.False(Sample.Lab.Inspect.OwnerHas(lab.Owner, "Степлер")); // the owner cascaded the live children
+        // The owner cascaded the live children.
+        Assert.False(Sample.Lab.Inspect.OwnerHas(lab.Owner, "Степлер"));
         foreach (ClientNode c in lab.Clients)
             Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, c));
     }

@@ -14,7 +14,7 @@ public static class Wire
 
     public static ByteString PkBytes(string text) => PkBytes(Guid.Parse(text));
 
-    public static Guid PkGuid(ByteString b) => new(b.Span);
+    public static Guid PkGuid(ByteString b) => new Guid(b.Span);
 
     public static string PkText(ByteString b) => PkText(PkGuid(b));
 
@@ -46,7 +46,7 @@ public static class Wire
 
     public static string Q(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";
 
-    public static RowRef Ref(string tbl, string pk) => new() { Tbl = tbl, Pk = PkBytes(pk) };
+    public static RowRef Ref(string tbl, string pk) => new RowRef { Tbl = tbl, Pk = PkBytes(pk) };
 }
 
 internal static class SqliteExtensions
@@ -56,7 +56,7 @@ internal static class SqliteExtensions
         SqliteCommand cmd = c.CreateCommand();
         cmd.CommandText = sql;
         cmd.Transaction = tx;
-        foreach ((string? n, object? v) in args)
+        foreach ((string n, object? v) in args)
             cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
         return cmd;
     }

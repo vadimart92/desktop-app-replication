@@ -20,6 +20,38 @@ public sealed partial class LabViewModel : ObservableObject
     private Sample.Lab.Lab? _lab;
     private ScenarioRunner? _runner;
 
+    [ObservableProperty]
+    private Scenario _selectedScenario;
+
+    [ObservableProperty]
+    private OwnerPanelViewModel? _owner;
+
+    [ObservableProperty]
+    private ClientPanelViewModel? _client1;
+
+    [ObservableProperty]
+    private ClientPanelViewModel? _client2;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextStepCommand), nameof(RestartCommand), nameof(VerifyCommand))]
+    private bool _busy;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(NextStepCommand))]
+    private bool _done;
+
+    [ObservableProperty]
+    private string _nextTitle = "";
+
+    [ObservableProperty]
+    private string _verdict = "";
+
+    [ObservableProperty]
+    private string _state = "";
+
+    [ObservableProperty]
+    private string _labDir = "";
+
     public LabViewModel()
     {
         _selectedScenario = Scenarios.All[0];
@@ -31,17 +63,6 @@ public sealed partial class LabViewModel : ObservableObject
     public IReadOnlyList<Scenario> ScenarioList => Scenarios.All;
     public LogFeed Feed { get; } = new();
     public ObservableCollection<StepView> Steps { get; } = [];
-
-    [ObservableProperty] private Scenario _selectedScenario;
-    [ObservableProperty] private OwnerPanelViewModel? _owner;
-    [ObservableProperty] private ClientPanelViewModel? _client1;
-    [ObservableProperty] private ClientPanelViewModel? _client2;
-    [ObservableProperty][NotifyCanExecuteChangedFor(nameof(NextStepCommand), nameof(RestartCommand), nameof(VerifyCommand))] private bool _busy;
-    [ObservableProperty][NotifyCanExecuteChangedFor(nameof(NextStepCommand))] private bool _done;
-    [ObservableProperty] private string _nextTitle = "";
-    [ObservableProperty] private string _verdict = "";
-    [ObservableProperty] private string _state = "";
-    [ObservableProperty] private string _labDir = "";
 
     partial void OnSelectedScenarioChanged(Scenario value) => _ = StartScenarioAsync(value);
 
@@ -83,7 +104,7 @@ public sealed partial class LabViewModel : ObservableObject
             Busy = false;
             UpdateSteps();
         }
-        // the scenario was switched while the previous one was starting
+        // The scenario was switched while the previous one was starting.
         if (_runner?.Scenario != SelectedScenario)
             await StartScenarioAsync(SelectedScenario);
     }
@@ -161,6 +182,12 @@ public sealed partial class LabViewModel : ObservableObject
 /// <summary>A standalone owner window (--owner).</summary>
 public sealed partial class OwnerWindowViewModel : ObservableObject
 {
+    [ObservableProperty]
+    private OwnerPanelViewModel? _owner;
+
+    [ObservableProperty]
+    private string _state = "запускаю власника…";
+
     public OwnerWindowViewModel(StartOptions o)
     {
         var log = new SyncLog();
@@ -169,9 +196,6 @@ public sealed partial class OwnerWindowViewModel : ObservableObject
     }
 
     public LogFeed Feed { get; } = new();
-
-    [ObservableProperty] private OwnerPanelViewModel? _owner;
-    [ObservableProperty] private string _state = "запускаю власника…";
 
     private async Task StartAsync(StartOptions o, SyncLog log)
     {
@@ -193,6 +217,12 @@ public sealed partial class OwnerWindowViewModel : ObservableObject
 /// <summary>A standalone client window (--client --connect http://host:port).</summary>
 public sealed partial class ClientWindowViewModel : ObservableObject
 {
+    [ObservableProperty]
+    private ClientPanelViewModel? _client;
+
+    [ObservableProperty]
+    private string _state = "";
+
     public ClientWindowViewModel(StartOptions o)
     {
         var log = new SyncLog();
@@ -213,7 +243,4 @@ public sealed partial class ClientWindowViewModel : ObservableObject
     }
 
     public LogFeed Feed { get; } = new();
-
-    [ObservableProperty] private ClientPanelViewModel? _client;
-    [ObservableProperty] private string _state = "";
 }

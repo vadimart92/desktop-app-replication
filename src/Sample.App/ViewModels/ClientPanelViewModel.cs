@@ -18,6 +18,54 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 {
     public static readonly string[] Statuses = ["новий", "активний", "архів"];
 
+    [ObservableProperty]
+    private string _statusText = "";
+
+    [ObservableProperty]
+    private IBrush _statusBrush = Brushes.Gray;
+
+    [ObservableProperty]
+    private string _pendingText = "";
+
+    [ObservableProperty]
+    private string _bytesUp = "0 Б";
+
+    [ObservableProperty]
+    private string _bytesDown = "0 Б";
+
+    [ObservableProperty]
+    private string _rateUp = "";
+
+    [ObservableProperty]
+    private string _rateDown = "";
+
+    [ObservableProperty]
+    private NetworkChoice _selectedNetwork;
+
+    [ObservableProperty]
+    private bool _newSchema;
+
+    [ObservableProperty]
+    private int _selectedTab;
+
+    [ObservableProperty]
+    private RowView? _selectedItem;
+
+    [ObservableProperty]
+    private RowView? _selectedCategory;
+
+    [ObservableProperty]
+    private string _editName = "";
+
+    [ObservableProperty]
+    private string _editPrice = "";
+
+    [ObservableProperty]
+    private string _editStatus = "новий";
+
+    [ObservableProperty]
+    private string? _error;
+
     public ClientPanelViewModel(ClientNode node)
     {
         Node = node;
@@ -29,10 +77,10 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     public IReadOnlyList<NetworkChoice> Networks { get; } =
     [
-        new("Локально, без обмежень", NetworkProfile.Local()),
-        new("Цільова: 1,5 с в кожен бік, ↑ 70 кбіт/с, ↓ 2 Мбіт/с", NetworkProfile.Target()),
-        new("Затримка 0,7 с в кожен бік", new NetworkProfile { Latency = TimeSpan.FromMilliseconds(700) }),
-        new("Повільна: ↑ 20 кбіт/с, ↓ 100 кбіт/с", new NetworkProfile { UpBitsPerSecond = 20_000, DownBitsPerSecond = 100_000 }),
+        new NetworkChoice("Локально, без обмежень", NetworkProfile.Local()),
+        new NetworkChoice("Цільова: 1,5 с в кожен бік, ↑ 70 кбіт/с, ↓ 2 Мбіт/с", NetworkProfile.Target()),
+        new NetworkChoice("Затримка 0,7 с в кожен бік", new NetworkProfile { Latency = TimeSpan.FromMilliseconds(700) }),
+        new NetworkChoice("Повільна: ↑ 20 кбіт/с, ↓ 100 кбіт/с", new NetworkProfile { UpBitsPerSecond = 20_000, DownBitsPerSecond = 100_000 }),
     ];
 
     public IReadOnlyList<string> StatusOptions => Statuses;
@@ -44,23 +92,6 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     public ObservableCollection<string> Cursors { get; } = [];
     public ObservableCollection<string> Notes { get; } = [];
     public ObservableCollection<string> MessageStats { get; } = [];
-
-    [ObservableProperty] private string _statusText = "";
-    [ObservableProperty] private IBrush _statusBrush = Brushes.Gray;
-    [ObservableProperty] private string _pendingText = "";
-    [ObservableProperty] private string _bytesUp = "0 Б";
-    [ObservableProperty] private string _bytesDown = "0 Б";
-    [ObservableProperty] private string _rateUp = "";
-    [ObservableProperty] private string _rateDown = "";
-    [ObservableProperty] private NetworkChoice _selectedNetwork;
-    [ObservableProperty] private bool _newSchema;
-    [ObservableProperty] private int _selectedTab;
-    [ObservableProperty] private RowView? _selectedItem;
-    [ObservableProperty] private RowView? _selectedCategory;
-    [ObservableProperty] private string _editName = "";
-    [ObservableProperty] private string _editPrice = "";
-    [ObservableProperty] private string _editStatus = "новий";
-    [ObservableProperty] private string? _error;
 
     public bool Link
     {
@@ -178,12 +209,27 @@ public sealed partial class ClientPanelViewModel : ObservableObject
         ? Node.UpdateItemAsync(Guid.Parse(r.Id), EditName, p, EditStatus)
         : Task.CompletedTask);
 
-    [RelayCommand] private Task Delete() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.DeleteAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task Archive() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task AddItem() => Run(Node.AddItemAsync);
-    [RelayCommand] private Task AddCategory() => Run(() => Node.CreateCategoryAsync($"Категорія {Categories.Count + 1}"));
-    [RelayCommand] private Task DeleteCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.DeleteAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task ArchiveCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task DeleteArchived() => Run(() => Node.DeleteWhereStatusAsync("архів"));
-    [RelayCommand] private void ResetBytes() => Node.Agent.Meter.Reset();
+    [RelayCommand]
+    private Task Delete() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.DeleteAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task Archive() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task AddItem() => Run(Node.AddItemAsync);
+
+    [RelayCommand]
+    private Task AddCategory() => Run(() => Node.CreateCategoryAsync($"Категорія {Categories.Count + 1}"));
+
+    [RelayCommand]
+    private Task DeleteCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.DeleteAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task ArchiveCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task DeleteArchived() => Run(() => Node.DeleteWhereStatusAsync("архів"));
+
+    [RelayCommand]
+    private void ResetBytes() => Node.Agent.Meter.Reset();
 }

@@ -4,9 +4,20 @@ using static Replication.Model.Wire;
 
 namespace Replication.Client;
 
-public enum OutboxKind { Create = 1, Patch = 2, Delete = 3, Archive = 4, PredicateDelete = 5 }
+public enum OutboxKind
+{
+    Create = 1,
+    Patch = 2,
+    Delete = 3,
+    Archive = 4,
+    PredicateDelete = 5
+}
 
-public enum OutboxClass { Interactive = 1, Bulk = 2 }
+public enum OutboxClass
+{
+    Interactive = 1,
+    Bulk = 2
+}
 
 /// <summary>A row of <c>_sync_outbox</c>: what was done and with which columns, never the values (5.4).</summary>
 public sealed record OutboxEntry(
@@ -25,6 +36,11 @@ public sealed record ClientNote(long Id, string Instance, DateTimeOffset At, str
 /// </summary>
 public sealed class ClientStore
 {
+    private const string EntryColumns = "id, instance, seq, tbl, pk, kind, cls, columns, predicate, expected_version, sent";
+
+    /// <summary>Columns that identify a row for a person reading a note.</summary>
+    public static readonly string[] LabelColumns = ["Name", "Title", "Text"];
+
     public ClientStore(string dbPath, SyncModel model)
     {
         DbPath = Path.GetFullPath(dbPath);
@@ -106,7 +122,7 @@ public sealed class ClientStore
         tx.Commit();
     }
 
-    // ---------- instances ----------
+    // Instances.
 
     public void EnsureInstance(string address, string name)
     {
@@ -117,7 +133,7 @@ public sealed class ClientStore
     public string? InstanceOf(SqliteConnection c, string address, SqliteTransaction? tx = null) =>
         c.Scalar<string>("SELECT instance FROM _sync_instances WHERE address = @a", tx, ("@a", address));
 
-    // ---------- cursors ----------
+    // Cursors.
 
     public Dictionary<string, CursorState> LoadCursors(SqliteConnection c, string instance, SqliteTransaction? tx = null)
     {
@@ -154,15 +170,13 @@ public sealed class ClientStore
             c.Exec("INSERT INTO _sync_ranges(instance, tbl, lo, hi) VALUES (@i, @t, @l, @h)", tx, ("@i", instance), ("@t", table), ("@l", lo), ("@h", hi));
     }
 
-    // ---------- outbox ----------
+    // Outbox.
 
-    private static OutboxEntry ReadEntry(SqliteDataReader r) => new(
+    private static OutboxEntry ReadEntry(SqliteDataReader r) => new OutboxEntry(
         r.GetInt64(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetInt64(2), r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4),
         (OutboxKind)r.GetInt64(5), (OutboxClass)r.GetInt64(6),
         r.IsDBNull(7) || r.GetString(7).Length == 0 ? [] : r.GetString(7).Split(','),
         r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetInt64(9), (int)r.GetInt64(10));
-
-    private const string EntryColumns = "id, instance, seq, tbl, pk, kind, cls, columns, predicate, expected_version, sent";
 
     public static OutboxEntry? FindEntry(SqliteConnection c, SqliteTransaction? tx, string instance, string table, string pk)
     {
@@ -215,7 +229,11 @@ public sealed class ClientStore
             return $"{kind}";
         }
         if (e.Sent == 2 || e.Kind is OutboxKind.Delete)
-            return "вже видалено"; // the row is gone locally
+        {
+            // The row is gone locally.
+            return "вже видалено";
+        }
+
         var newCls = (OutboxClass)Math.Min((int)e.Class, (int)cls);
         OutboxKind nk;
         List<string> nc = [];
@@ -253,7 +271,7 @@ public sealed class ClientStore
         return $"{nk}{(nc.Count > 0 ? " " + string.Join(", ", nc) : "")}";
     }
 
-    // ---------- notes ----------
+    // Notes.
 
     public static void Note(SqliteConnection c, SqliteTransaction? tx, string instance, string text, bool info = false) =>
         c.Exec("INSERT INTO _sync_notes(instance, at, text, info) VALUES (@i, @a, @t, @f)", tx,
@@ -270,10 +288,7 @@ public sealed class ClientStore
         return list;
     }
 
-    // ---------- rows ----------
-
-    /// <summary>Columns that identify a row for a person reading a note.</summary>
-    public static readonly string[] LabelColumns = ["Name", "Title", "Text"];
+    // Rows.
 
     public static string Label(SqliteConnection c, SqliteTransaction? tx, SyncTable t, string pk)
     {
