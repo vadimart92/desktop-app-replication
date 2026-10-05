@@ -1,0 +1,371 @@
+using System.Collections.Concurrent;
+using Grpc.Core;
+using Microsoft.Data.Sqlite;
+using Replication.Model;
+using Replication.Protocol;
+using static Replication.Model.Wire;
+
+namespace Replication.Owner;
+
+/// <summary>
+/// One Subscribe stream: handshake on the first message, catch-up newest first, then online (6.2, 6.4).
+/// </summary>
+internal sealed class SubscribeSession
+{
+    private readonly OwnerStore _store;
+    private readonly IAsyncStreamReader<SubscribeMessage> _in;
+    private readonly IServerStreamWriter<ChangeMessage> _out;
+    private readonly CancellationToken _ct;
+    private readonly AsyncSignal _wake = new();
+    private readonly ConcurrentQueue<RowRef> _needFull = new();
+    private readonly Dictionary<string, CursorState> _mirror = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _synced = new(StringComparer.Ordinal);
+    private readonly List<RangeExtra> _extra = [];
+    private readonly object _lock = new();
+    private string[] _open = [];
+    private string _clientId = "";
+    private string _who = "";
+    private bool _online;
+    private long _sentUpTo;
+
+    public SubscribeSession(OwnerStore store, IAsyncStreamReader<SubscribeMessage> input, IServerStreamWriter<ChangeMessage> output, CancellationToken ct)
+    {
+        _store = store;
+        _in = input;
+        _out = output;
+        _ct = ct;
+    }
+
+    private OwnerOptions Opt => _store.Options;
+    private SyncModel Model => _store.Model;
+    private void Log(string text, SyncLogLevel level = SyncLogLevel.Info) => Opt.Log.Write("owner", $"[{_who}] {text}", level);
+
+    public async Task RunAsync()
+    {
+        if (!await _in.MoveNext(_ct)) return;
+        if (_in.Current.BodyCase != SubscribeMessage.BodyOneofCase.Start)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "the first Subscribe message must be Start"));
+        var start = _in.Current.Start;
+        _clientId = start.ClientId;
+        _who = start.ClientId.Length > 8 ? start.ClientId[..8] : start.ClientId;
+
+        using var conn = _store.Open();
+        if (!await HandshakeAsync(conn, start)) return;
+
+        _store.MarkSubscribed(_clientId, true);
+        _store.Committed += _wake.Set;
+        var reader = Task.Run(ReadLoopAsync);
+        try
+        {
+            await MainLoopAsync(conn);
+        }
+        finally
+        {
+            _store.Committed -= _wake.Set;
+            _store.MarkSubscribed(_clientId, false);
+            try { await reader; } catch { /* stream closed */ }
+        }
+    }
+
+    // ---------- handshake (6.2) ----------
+
+    private async Task<bool> HandshakeAsync(SqliteConnection conn, Start start)
+    {
+        if (start.SchemaVersion != Opt.SchemaVersion)
+        {
+            Log($"Start: схема клієнта {start.SchemaVersion}, власника {Opt.SchemaVersion} → SchemaMismatch, потік закрито", SyncLogLevel.Warn);
+            await SendAsync(new ChangeMessage { SchemaMismatch = new SchemaMismatch { OwnerSchemaVersion = Opt.SchemaVersion } });
+            return false;
+        }
+
+        var head = _store.Head(conn);
+        var purged = _store.Purged(conn);
+        var cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
+        var minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out var c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
+        // an empty replica (6.3, "file or empty replica") starts with every cursor at 0: it has no rows whose deletion it
+        // could miss, so forgotten tombstones do not matter for it
+        var emptyReplica = cursors.Count > 0 && cursors.Values.All(c => c.Cursor == 0 && c.Ranges.Count == 0);
+        string? reason = null;
+        if (string.IsNullOrEmpty(start.InstanceId)) reason = "репліки нема";
+        else if (start.InstanceId != _store.InstanceId) reason = "інший instance_id";
+        else if (minC < purged && !emptyReplica) reason = $"курсор {minC} < purged_version {purged}";
+        else if (minC > head) reason = $"курсор {minC} > version {head}";
+        if (reason is not null)
+        {
+            var size = _store.FileSizeBytes(conn);
+            Log($"Start: {reason} → SnapshotRequired, знімок ~{size / 1024} КБ, потік закрито", SyncLogLevel.Warn);
+            await SendAsync(new ChangeMessage
+            {
+                SnapshotRequired = new SnapshotRequired { Reason = reason, SizeBytes = size, InstanceId = _store.InstanceId },
+            });
+            return false;
+        }
+
+        foreach (var t in Model.Tables) _mirror[t.Name] = cursors.TryGetValue(t.Name, out var c) ? c : new CursorState(0);
+        _open = [.. start.OpenTables];
+        using (var tx = conn.BeginTransaction())
+        {
+            _store.SaveCursors(conn, tx, _clientId, _mirror.ToDictionary(x => x.Key, x => x.Value.Cursor));
+            tx.Commit();
+        }
+        Log($"Start прийнято, голова {head}; курсори {string.Join(", ", _mirror.Select(x => $"{x.Key}={x.Value}"))}", SyncLogLevel.Ok);
+        return true;
+    }
+
+    // ---------- client messages ----------
+
+    private async Task ReadLoopAsync()
+    {
+        while (await _in.MoveNext(_ct))
+        {
+            var m = _in.Current;
+            switch (m.BodyCase)
+            {
+                case SubscribeMessage.BodyOneofCase.OpenTables:
+                    lock (_lock) _open = [.. m.OpenTables.Tables];
+                    Log($"OpenTables: {string.Join(", ", m.OpenTables.Tables)}");
+                    _wake.Set();
+                    break;
+                case SubscribeMessage.BodyOneofCase.Ack:
+                    using (var c = _store.Open())
+                    using (var tx = c.BeginTransaction())
+                    {
+                        _store.SaveCursors(c, tx, _clientId, m.Ack.Cursors.ToDictionary(x => x.Tbl, x => x.Cursor));
+                        tx.Commit();
+                    }
+                    foreach (var r in m.Ack.NeedFull) _needFull.Enqueue(r);
+                    if (m.Ack.NeedFull.Count > 0) _wake.Set();
+                    break;
+            }
+        }
+    }
+
+    // ---------- main loop ----------
+
+    private async Task MainLoopAsync(SqliteConnection conn)
+    {
+        var dataVersion = conn.Scalar<long>("PRAGMA data_version");
+        var lastOnline = DateTimeOffset.MinValue;
+        while (!_ct.IsCancellationRequested)
+        {
+            if (!_needFull.IsEmpty)
+            {
+                await SendNeedFullAsync(conn);
+                continue;
+            }
+            if (!_online)
+            {
+                if (await CatchupStepAsync(conn)) continue;
+                _online = true;
+                _sentUpTo = _catchupHead;
+                await SendAsync(new ChangeMessage { Progress = new Progress { Done = true, OwnerTimeUnix = _store.Now(conn) } });
+                Log($"досинхронізацію завершено, онлайн від v{_sentUpTo}", SyncLogLevel.Ok);
+                continue;
+            }
+
+            // online: poll PRAGMA data_version (triggers cannot notify the process), or wake on our own commits
+            var woke = await _wake.WaitAsync(Opt.PollInterval, _ct);
+            var dv = conn.Scalar<long>("PRAGMA data_version");
+            if (!woke && dv == dataVersion) continue;
+            dataVersion = dv;
+            var wait = lastOnline + Opt.OnlineInterval - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero) await Task.Delay(wait, _ct);
+            if (await OnlineStepAsync(conn)) lastOnline = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private long _catchupHead;
+
+    private IEnumerable<SyncTable> PriorityTables()
+    {
+        string[] open;
+        lock (_lock) open = _open;
+        // open tables first, together with the tables they reference by FK (6.4)
+        bool First(SyncTable t) => open.Contains(t.Name) || open.Any(o => Model.TryGet(o, out var ot) && ot.ForeignKeys.Any(f => f.ParentTable == t.Name));
+        return Model.Tables.OrderBy(t => First(t) ? 0 : 1);
+    }
+
+    /// <summary>One step of catch-up: one Batch or TableSynced. Returns false when nothing is left.</summary>
+    private async Task<bool> CatchupStepAsync(SqliteConnection conn)
+    {
+        ChangeMessage? msg = null;
+        string? log = null;
+        using (var tx = conn.BeginTransaction(deferred: true))
+        {
+            var head = _store.Head(conn, tx);
+            _catchupHead = head;
+            foreach (var t in PriorityTables())
+            {
+                var k = _mirror[t.Name];
+                var gaps = k.Gaps(head);
+                var nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
+                if (nonEmpty.Count == 0)
+                {
+                    if (!_synced.Contains(t.Name))
+                    {
+                        k.Reset(head);
+                        _synced.Add(t.Name);
+                        msg = new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } };
+                        log = $"TableSynced {t.Name}, курсор = {head}";
+                        break;
+                    }
+                    // the table is synced, the head moved because of other tables: close empty ranges on the way
+                    foreach (var g in gaps)
+                    {
+                        _extra.Add(new RangeExtra { Tbl = t.Name, Lo = g.Lo, Hi = g.Hi });
+                        k.AddRange(g.Lo, g.Hi);
+                    }
+                    continue;
+                }
+                _synced.Remove(t.Name);
+
+                // the highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message
+                var n = Opt.CatchupBatchRows;
+                var main = nonEmpty[0];
+                (long Lo, long Hi)? tail = null;
+                if (nonEmpty.Count > 1 && nonEmpty[0].Hi == head && OwnerReader.Count(conn, tx, t, nonEmpty[0].Lo, nonEmpty[0].Hi) < n)
+                {
+                    tail = nonEmpty[0];
+                    main = nonEmpty[1];
+                }
+                var all = OwnerReader.Range(conn, tx, t, main.Lo, main.Hi, n + 1, newestFirst: true);
+                var items = all.Count > n ? all.GetRange(0, n) : all;
+                var lo = all.Count > n ? items[^1].Version - 1 : main.Lo;
+                var tailItems = tail is { } tl ? OwnerReader.Range(conn, tx, t, tl.Lo, tl.Hi, n, newestFirst: true) : [];
+
+                var cur0 = k.Cursor; // the client is complete up to cur0: this decides whether a partial row is enough
+                var covers = new List<(long Lo, long Hi)> { (lo, main.Hi) };
+                covers.AddRange(gaps.Where(g => g.Hi > main.Hi));
+                foreach (var (a, b) in covers) k.AddRange(a, b);
+
+                var batch = new Batch { Tbl = t.Name };
+                batch.Columns.AddRange(t.Columns);
+                foreach (var (a, b) in covers) batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = a, Hi = b });
+                var own = new List<long>();
+                foreach (var it in tailItems.Concat(items))
+                {
+                    if (it.Origin == _clientId) { own.Add(it.Version); continue; } // its own change: not sent, the range still closes
+                    if (it.IsTombstone) batch.Tombstones.Add(new Protocol.Tombstone { Pk = PkBytes(it.Pk), Version = it.Version });
+                    else batch.Rows.Add(OwnerReader.ToWire(t, it, cur0));
+                }
+                batch.Remaining = Remaining(conn, tx, head);
+                msg = new ChangeMessage { Batch = batch };
+                log = $"Batch {t.Name}: {Describe(batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
+                    + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
+                    + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {batch.Remaining}";
+                break;
+            }
+            tx.Commit();
+        }
+        if (msg is null) return false;
+        Log(log!);
+        await SendAsync(msg);
+        return true;
+    }
+
+    private long Remaining(SqliteConnection conn, SqliteTransaction tx, long head)
+    {
+        long n = 0;
+        foreach (var t in Model.Tables)
+            foreach (var g in _mirror[t.Name].Gaps(head))
+                n += OwnerReader.Count(conn, tx, t, g.Lo, g.Hi);
+        return n;
+    }
+
+    /// <summary>Online: everything after the last sent version, oldest first, then Head(V) (6.4).</summary>
+    private async Task<bool> OnlineStepAsync(SqliteConnection conn)
+    {
+        var messages = new List<ChangeMessage>();
+        var logs = new List<string>();
+        long upTo;
+        using (var tx = conn.BeginTransaction(deferred: true))
+        {
+            var head = _store.Head(conn, tx);
+            if (head <= _sentUpTo) { tx.Commit(); return false; }
+            var n = Opt.OnlineBatchRows;
+            var all = Model.Tables
+                .SelectMany(t => OwnerReader.Range(conn, tx, t, _sentUpTo, head, n + 1, newestFirst: false).Select(it => (Table: t, Item: it)))
+                .OrderBy(x => x.Item.Version)
+                .ToList();
+            upTo = all.Count > n ? all[n - 1].Item.Version : head;
+            var taken = all.Where(x => x.Item.Version <= upTo).ToList();
+            var own = taken.Where(x => x.Item.Origin == _clientId).ToList();
+            foreach (var g in taken.Where(x => x.Item.Origin != _clientId).GroupBy(x => x.Table))
+            {
+                var t = g.Key;
+                var batch = new Batch { Tbl = t.Name, Online = true };
+                batch.Columns.AddRange(t.Columns);
+                batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = _sentUpTo, Hi = upTo });
+                foreach (var (_, it) in g)
+                {
+                    if (it.IsTombstone) batch.Tombstones.Add(new Protocol.Tombstone { Pk = PkBytes(it.Pk), Version = it.Version });
+                    else batch.Rows.Add(OwnerReader.ToWire(t, it, _mirror[t.Name].Cursor));
+                }
+                messages.Add(new ChangeMessage { Batch = batch });
+                logs.Add($"{t.Name} {Describe(batch)}");
+            }
+            if (own.Count > 0) logs.Add($"пропущено як власні зміни: {string.Join(", ", own.Select(x => $"{x.Table.Name} v{x.Item.Version}"))}");
+            tx.Commit();
+        }
+        messages.Add(new ChangeMessage { Head = new Head { Version = upTo } });
+        Log($"онлайн: {(logs.Count > 0 ? string.Join("; ", logs) : "нових рядків нема")}; Head({upTo})");
+        foreach (var m in messages) await SendAsync(m);
+        foreach (var k in _mirror.Values) { k.AddRange(_sentUpTo, upTo); k.LiftTo(upTo); }
+        _sentUpTo = upTo;
+        return true;
+    }
+
+    /// <summary>
+    /// NeedFull from Ack: the full row; if the row is gone, its tombstone even when the tombstone is this client's own;
+    /// if neither exists, nothing (9.1).
+    /// </summary>
+    private async Task SendNeedFullAsync(SqliteConnection conn)
+    {
+        var refs = new List<RowRef>();
+        while (_needFull.TryDequeue(out var r)) refs.Add(r);
+        var messages = new List<ChangeMessage>();
+        foreach (var g in refs.GroupBy(r => r.Tbl))
+        {
+            if (!Model.TryGet(g.Key, out var t)) continue;
+            var batch = new Batch { Tbl = t.Name, Online = _online };
+            batch.Columns.AddRange(t.Columns);
+            foreach (var r in g)
+            {
+                var pk = PkText(r.Pk);
+                var row = OwnerReader.Row(conn, null, t, pk);
+                if (row is not null) batch.Rows.Add(OwnerReader.ToWire(t, row, 0, forceFull: true));
+                else if (OwnerReader.Tombstone(conn, null, t, pk) is { } tomb)
+                    batch.Tombstones.Add(new Protocol.Tombstone { Pk = r.Pk, Version = tomb.Version });
+            }
+            if (batch.Rows.Count + batch.Tombstones.Count > 0)
+            {
+                messages.Add(new ChangeMessage { Batch = batch });
+                Log($"NeedFull {t.Name}: повних рядків {batch.Rows.Count}, tombstones {batch.Tombstones.Count}");
+            }
+        }
+        foreach (var m in messages) await SendAsync(m);
+    }
+
+    private async Task SendAsync(ChangeMessage m)
+    {
+        if (_extra.Count > 0 && m.BodyCase is not (ChangeMessage.BodyOneofCase.SnapshotRequired or ChangeMessage.BodyOneofCase.SchemaMismatch))
+        {
+            m.Extra.AddRange(_extra);
+            _extra.Clear();
+        }
+        var delay = Opt.Faults.StreamDelay(_clientId);
+        if (delay > TimeSpan.Zero) await Task.Delay(delay, _ct);
+        await _out.WriteAsync(m, _ct);
+    }
+
+    private static string Describe(Batch b)
+    {
+        var parts = b.Rows.Select(r => r.Full ? $"v{r.Version} повний" : $"v{r.Version} [{Mask(b, r.Mask)}]")
+            .Concat(b.Tombstones.Select(t => $"v{t.Version} ✕"));
+        var s = string.Join(", ", parts);
+        return s.Length == 0 ? "рядків нема" : s;
+    }
+
+    private static string Mask(Batch b, long mask) =>
+        string.Join(", ", b.Columns.Where((_, i) => (mask & (1L << i)) != 0));
+}

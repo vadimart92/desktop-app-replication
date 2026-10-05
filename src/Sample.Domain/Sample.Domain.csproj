@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Sample entities and DbContext. Stands in for the application's own model: entities derive from BaseEntity and know nothing about sync.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Replication.Core\Replication.Core.csproj" />
+  </ItemGroup>
+</Project>
