@@ -22,7 +22,7 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--f-body)}
-.wrap{max-width:1560px;margin:0 auto;padding-inline:16px;padding-block:18px 40px;display:flex;flex-direction:column;gap:14px}
+.wrap{max-width:1920px;margin:0 auto;padding-inline:16px;padding-block:18px 40px;display:flex;flex-direction:column;gap:14px}
 h1{font:600 20px/1.2 var(--f-display);margin:0;letter-spacing:-.01em;text-wrap:balance}
 h2{font:600 15px/1.3 var(--f-body);margin:0}
 h3{font:600 11px/1.3 var(--f-body);margin:0;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
@@ -82,8 +82,8 @@ select{border:1px solid var(--line);background:var(--surface);border-radius:7px;
 .steps .x{margin:3px 0 0;max-width:95ch}
 .steps .go{margin-top:6px}
 
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
-@media (max-width:1180px){.grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.grid .owner{grid-column:1/-1}}
+.grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:1699px){.grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.grid .owner{grid-column:1/-1}}
 @media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;display:flex;flex-direction:column}
 .panel>.hd{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;border-top:4px solid var(--who);border-radius:10px 10px 0 0}
@@ -932,7 +932,13 @@ function renderLog(){
   if(S.log.length===lastLogLen&&S.log[S.log.length-1]?.t===lastLogT)return;lastLogLen=S.log.length;lastLogT=S.log[S.log.length-1]?.t;
   $('#log').innerHTML=S.log.slice(-200).reverse().map(l=>`<div class="ln ${l.who} ${l.cls}"><span class="t">${fmt(l.t)}</span><span class="w">${WHO[l.who]}</span><span class="m">${esc(l.text)}</span></div>`).join('');
 }
-function render(){
+// панелі перемальовуються щотакту, тому прокрутку таблиць запам'ятовуємо і повертаємо
+function keepScroll(fn){const saved={};
+  for(const pid of ['p-owner','p-c1','p-c2']){const el=document.getElementById(pid);if(el)el.querySelectorAll('.tw').forEach((t,i)=>saved[pid+i]=[t.scrollLeft,t.scrollTop])}
+  fn();
+  for(const pid of ['p-owner','p-c1','p-c2']){const el=document.getElementById(pid);if(el)el.querySelectorAll('.tw').forEach((t,i)=>{const v=saved[pid+i];if(v){t.scrollLeft=v[0];t.scrollTop=v[1]}})}}
+function render(){keepScroll(render0)}
+function render0(){
   $('#clock').textContent=fmt(S.T)+(S.single?` · дія ${S.acts}`:` · такт ${S.T}`);$('#single').checked=S.single;$('#backbtn').disabled=!OPS.length;
   renderStory();renderOwner();renderClient(S.clients.c1);renderClient(S.clients.c2);lastLogLen=-1;renderLog();
 }

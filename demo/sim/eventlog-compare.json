@@ -1,0 +1,207 @@
+{
+ "params": {
+  "downMbit": 2,
+  "rttSec": 2.5,
+  "onlineRoundSec": 0.5,
+  "cols": 10,
+  "update": "Status|Qty|Description + UpdatedAt"
+ },
+ "online": [
+  {
+   "name": "Онлайн, легко: 10 вставок/с, 50 оновлень/с по 1000 гарячих рядків",
+   "state": {
+    "KBps": 2.5,
+    "linkPct": 1
+   },
+   "log": {
+    "KBps": 2.5,
+    "linkPct": 1
+   },
+   "ratio": 1
+  },
+  {
+   "name": "Онлайн, важко: 300 вставок/с, 3000 оновлень/с по 10 000 гарячих",
+   "state": {
+    "KBps": 78.5,
+    "linkPct": 31
+   },
+   "log": {
+    "KBps": 83.3,
+    "linkPct": 33
+   },
+   "ratio": 1.06
+  },
+  {
+   "name": "Онлайн, оновлення розкидані: 100 вставок/с, 1000 оновлень/с по 1 млн рядків",
+   "state": {
+    "KBps": 30.7,
+    "linkPct": 12
+   },
+   "log": {
+    "KBps": 31.5,
+    "linkPct": 13
+   },
+   "ratio": 1.02
+  },
+  {
+   "name": "Онлайн, майже лише вставки: 1500 вставок/с, 20 оновлень/с",
+   "state": {
+    "KBps": 75,
+    "linkPct": 30
+   },
+   "log": {
+    "KBps": 76.5,
+    "linkPct": 31
+   },
+   "ratio": 1.02
+  }
+ ],
+ "offline": [
+  {
+   "name": "Офлайн 1 год: 100 вставок/с, 500 оновлень/с по 10 000 гарячих",
+   "events": 2160000,
+   "inserts": 360000,
+   "updates": 1800000,
+   "distinctUpdated": 10000,
+   "state": {
+    "MB": 18.1,
+    "catchupSec": 83,
+    "freshVisibleSec": 2.8
+   },
+   "log": {
+    "MB": 58.8,
+    "catchupSec": 254,
+    "freshVisibleSec": 254
+   },
+   "ratio": 3.24
+  },
+  {
+   "name": "Офлайн 8 год: 100 вставок/с, 500 оновлень/с по 10 000 гарячих",
+   "events": 17280000,
+   "inserts": 2880000,
+   "updates": 14400000,
+   "distinctUpdated": 10000,
+   "state": {
+    "MB": 142.3,
+    "catchupSec": 635,
+    "freshVisibleSec": 2.8
+   },
+   "log": {
+    "MB": 470.8,
+    "catchupSec": 2017,
+    "freshVisibleSec": 2017
+   },
+   "ratio": 3.31
+  },
+  {
+   "name": "Офлайн 8 год: 100 вставок/с, 500 оновлень/с розкидано по 1 млн",
+   "events": 17280000,
+   "inserts": 2880000,
+   "updates": 14400000,
+   "distinctUpdated": 1000000,
+   "state": {
+    "MB": 180.6,
+    "catchupSec": 803,
+    "freshVisibleSec": 2.8
+   },
+   "log": {
+    "MB": 506.9,
+    "catchupSec": 2184,
+    "freshVisibleSec": 2184
+   },
+   "ratio": 2.81
+  },
+  {
+   "name": "Офлайн 1 год: 1000 вставок/с, 10 оновлень/с",
+   "events": 3636000,
+   "inserts": 3600000,
+   "updates": 36000,
+   "distinctUpdated": 9731,
+   "state": {
+    "MB": 177.7,
+    "catchupSec": 889,
+    "freshVisibleSec": 2.8
+   },
+   "log": {
+    "MB": 181.8,
+    "catchupSec": 914,
+    "freshVisibleSec": 914
+   },
+   "ratio": 1.02
+  },
+  {
+   "name": "Офлайн 15 хв: 300 вставок/с, 3000 оновлень/с по 10 000 гарячих",
+   "events": 2970000,
+   "inserts": 270000,
+   "updates": 2700000,
+   "distinctUpdated": 10000,
+   "state": {
+    "MB": 13.7,
+    "catchupSec": 122,
+    "freshVisibleSec": 2.8
+   },
+   "log": {
+    "MB": 74.8,
+    "catchupSec": 451,
+    "freshVisibleSec": 451
+   },
+   "ratio": 5.45
+  }
+ ],
+ "storage": [
+  {
+   "name": "Онлайн, легко: 10 вставок/с, 50 оновлень/с по 1000 гарячих рядків",
+   "logGBperDay": 0.48,
+   "logInsertsPerSec": 60,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Онлайн, важко: 300 вставок/с, 3000 оновлень/с по 10 000 гарячих",
+   "logGBperDay": 21.51,
+   "logInsertsPerSec": 3300,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Онлайн, оновлення розкидані: 100 вставок/с, 1000 оновлень/с по 1 млн рядків",
+   "logGBperDay": 7.17,
+   "logInsertsPerSec": 1100,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Онлайн, майже лише вставки: 1500 вставок/с, 20 оновлень/с",
+   "logGBperDay": 35.09,
+   "logInsertsPerSec": 1520,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Офлайн 1 год: 100 вставок/с, 500 оновлень/с по 10 000 гарячих",
+   "logGBperDay": 4.75,
+   "logInsertsPerSec": 600,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Офлайн 8 год: 100 вставок/с, 500 оновлень/с по 10 000 гарячих",
+   "logGBperDay": 4.75,
+   "logInsertsPerSec": 600,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Офлайн 8 год: 100 вставок/с, 500 оновлень/с розкидано по 1 млн",
+   "logGBperDay": 4.75,
+   "logInsertsPerSec": 600,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Офлайн 1 год: 1000 вставок/с, 10 оновлень/с",
+   "logGBperDay": 23.38,
+   "logInsertsPerSec": 1010,
+   "stateExtraBytesPerRow": 10
+  },
+  {
+   "name": "Офлайн 15 хв: 300 вставок/с, 3000 оновлень/с по 10 000 гарячих",
+   "logGBperDay": 21.51,
+   "logInsertsPerSec": 3300,
+   "stateExtraBytesPerRow": 10
+  }
+ ]
+}
