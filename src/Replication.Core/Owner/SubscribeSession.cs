@@ -82,13 +82,15 @@ internal sealed class SubscribeSession
         var purged = _store.Purged(conn);
         var cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
         var minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out var c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
-        // an empty replica (6.3, "file or empty replica") starts with every cursor at 0: it has no rows whose deletion it
-        // could miss, so forgotten tombstones do not matter for it
-        var emptyReplica = cursors.Count > 0 && cursors.Values.All(c => c.Cursor == 0 && c.Ranges.Count == 0);
+        // a table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
+        // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2)
+        var behind = Model.Tables
+            .Select(t => (t.Name, K: cursors.TryGetValue(t.Name, out var c) ? c : new CursorState(0)))
+            .FirstOrDefault(x => !(x.K.Cursor == 0 && x.K.Ranges.Count == 0) && x.K.Cursor < purged);
         string? reason = null;
         if (string.IsNullOrEmpty(start.InstanceId)) reason = "репліки нема";
         else if (start.InstanceId != _store.InstanceId) reason = "інший instance_id";
-        else if (minC < purged && !emptyReplica) reason = $"курсор {minC} < purged_version {purged}";
+        else if (behind.Name is not null) reason = $"курсор {behind.Name} {behind.K.Cursor} < purged_version {purged}";
         else if (minC > head) reason = $"курсор {minC} > version {head}";
         if (reason is not null)
         {

@@ -39,6 +39,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         if (e is { Kind: OutboxKind.Create or OutboxKind.Delete }) return 0;
         var protectedCols = e is { Kind: OutboxKind.Patch } ? e.Columns.ToHashSet() : [];
 
+        if (r.Full && ParentDeleted(c, tx, t, columns, r)) return 0;
         var cols = new List<(string Name, object Value)>();
         if (r.Full)
         {
@@ -89,7 +90,14 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
     {
         var e = ClientStore.FindEntry(c, tx, Instance, t.Name, pk);
         var label = ClientStore.Label(c, tx, t, pk);
-        var n = c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @inst AND SyncVersion < @v", tx, ("@id", pk), ("@inst", Instance), ("@v", version));
+        var n = 0;
+        if (c.Scalar<long>($"SELECT COUNT(*) FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @inst AND SyncVersion < @v", tx, ("@id", pk), ("@inst", Instance), ("@v", version)) > 0)
+        {
+            // a parent that archived rows point to goes to the archive instead (11.6)
+            if (ArchiveGuard.DeleteOrArchive(c, tx, model, Instance, t, pk))
+                Note(c, tx, $"{label} видалено на інстансі; на нього посилаються архівні записи, тому він перенесений в архів", info: true);
+            n = 1;
+        }
         if (e is { Kind: OutboxKind.Patch or OutboxKind.Create })
         {
             ClientStore.Remove(c, tx, e.Id);
@@ -98,6 +106,21 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             Note(c, tx, $"правку запису {label} втрачено: його видалено на інстансі{(gone.Count > 0 ? $"; не збережено залежні: {string.Join(", ", gone)}" : "")}");
         }
         return n;
+    }
+
+    /// <summary>
+    /// A child row whose parent has a delete in the outbox is not inserted: a late batch would otherwise bring back
+    /// an orphan before the cascaded tombstone arrives (7).
+    /// </summary>
+    private bool ParentDeleted(SqliteConnection c, SqliteTransaction tx, SyncTable t, IList<string> columns, Row r)
+    {
+        foreach (var fk in t.ForeignKeys)
+        {
+            var i = columns.IndexOf(fk.Column);
+            if (i < 0 || i >= r.Values.Count || FromValue(r.Values[i]) is not string pid) continue;
+            if (ClientStore.FindEntry(c, tx, Instance, fk.ParentTable, pid) is { Kind: OutboxKind.Delete }) return true;
+        }
+        return false;
     }
 
     /// <summary>Deletes a row of this instance with its children and their outbox entries; returns their labels.</summary>

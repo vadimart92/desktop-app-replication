@@ -21,6 +21,8 @@ public sealed class WriteRouter : SaveChangesInterceptor
     {
         public List<Change> Changes { get; } = [];
         public IDbContextTransaction? OwnTransaction { get; set; }
+        public List<(SyncTable Table, string Instance, string Pk)> ArchiveMoves { get; } = [];
+        public bool OpenedConnection { get; set; }
     }
 
     private readonly SyncModel _model;
@@ -66,6 +68,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
         {
             p.OwnTransaction?.Rollback();
             p.OwnTransaction?.Dispose();
+            if (p.OpenedConnection) ctx.Database.CloseConnection();
             _pending.Remove(ctx);
         }
     }
@@ -84,6 +87,8 @@ public sealed class WriteRouter : SaveChangesInterceptor
             .Select(e => (_model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
             .ToHashSet();
         var changes = new List<Change>();
+        var moves = new List<(SyncTable, string, string)>();
+        var opened = false;
         foreach (var e in entries)
         {
             if (_model.ForType(e.Metadata.ClrType) is not { } t) continue;
@@ -105,6 +110,16 @@ public sealed class WriteRouter : SaveChangesInterceptor
                     var cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
                                                           && deleted.Contains((fk.ParentTable, PkText(pid))));
                     changes.Add(new Change(t, instance!, pk, cascaded ? (OutboxKind)0 : OutboxKind.Delete, []));
+                    // archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6)
+                    if (_model.ChildrenOf(t.Name).Any())
+                    {
+                        if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open) { ctx.Database.OpenConnection(); opened = true; }
+                        if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), null, _model, instance!, t, pk))
+                        {
+                            moves.Add((t, instance!, pk));
+                            e.State = EntityState.Unchanged;
+                        }
+                    }
                     break;
             }
         }
@@ -112,6 +127,9 @@ public sealed class WriteRouter : SaveChangesInterceptor
         var p = _pending.GetOrCreateValue(ctx);
         p.Changes.Clear();
         p.Changes.AddRange(changes);
+        p.ArchiveMoves.Clear();
+        p.ArchiveMoves.AddRange(moves);
+        p.OpenedConnection = opened;
         return p;
     }
 
@@ -126,6 +144,9 @@ public sealed class WriteRouter : SaveChangesInterceptor
         var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
         try
         {
+            foreach (var (t, inst, pk) in p.ArchiveMoves)
+                if (ArchiveGuard.DeleteOrArchive(conn, tx, _model, inst, t, pk))
+                    Routed?.Invoke(inst, $"{t.Name} {Short(pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
             foreach (var ch in p.Changes.Where(x => x.Kind != 0))
             {
                 var what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, ch.Kind, ch.Columns, OutboxClass.Interactive);
@@ -144,6 +165,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
         finally
         {
             p.OwnTransaction?.Dispose();
+            if (p.OpenedConnection) ctx.Database.CloseConnection();
         }
         foreach (var inst in p.Changes.Select(x => x.Instance).Distinct()) OutboxChanged?.Invoke(inst);
     }

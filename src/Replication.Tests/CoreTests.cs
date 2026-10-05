@@ -58,3 +58,44 @@ public class EmptyReplicaTests
         Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, lab.C2));
     }
 }
+
+/// <summary>Design 11.6: a parent that archived rows point to is moved to the archive instead of deleted.</summary>
+public class ArchiveParentTests
+{
+    private static async Task<Sample.Lab.Lab> ArchivedCatalogAsync()
+    {
+        var lab = await Sample.Lab.Lab.StartAsync();
+        await lab.SyncNowAsync(lab.C1);
+        await lab.SyncNowAsync(lab.C2);
+        await lab.C1.ArchiveAsync(("Item", "Каталог 2019"));
+        await lab.SettleAsync();
+        Assert.True(Sample.Lab.Inspect.ClientHas(lab.C1, "Каталог 2019", archive: true));
+        return lab;
+    }
+
+    private static void AssertArchiveIntact(Sample.Lab.Lab lab)
+    {
+        Assert.True(Sample.Lab.Inspect.ClientHas(lab.C1, "Каталог 2019", archive: true));
+        Assert.Contains(Sample.Lab.Inspect.ClientRows(lab.C1, "Category"), r => r.Label == "Офіс" && r.Mark == "архів");
+        Assert.False(Sample.Lab.Inspect.OwnerHas(lab.Owner, "Степлер")); // the owner cascaded the live children
+        foreach (var c in lab.Clients) Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, c));
+    }
+
+    [Fact]
+    public async Task Local_delete_moves_the_parent_to_the_archive()
+    {
+        await using var lab = await ArchivedCatalogAsync();
+        await lab.C1.DeleteCategoryAsync("Офіс");
+        await lab.SettleAsync();
+        AssertArchiveIntact(lab);
+    }
+
+    [Fact]
+    public async Task Tombstone_from_another_client_moves_the_parent_to_the_archive()
+    {
+        await using var lab = await ArchivedCatalogAsync();
+        await lab.C2.DeleteCategoryAsync("Офіс");
+        await lab.SettleAsync();
+        AssertArchiveIntact(lab);
+    }
+}
