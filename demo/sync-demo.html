@@ -611,8 +611,12 @@ function clientRecv(m){
   else if(m.type==='ApplyReply'){
     for(const r of p.results){
       if(r.kind==='archive'&&(r.changed?.length||r.children?.length)){const e=c.outbox.find(x=>x.seq===r.seq);
-        for(const [w,l] of [['changed',r.changed],['children',r.children]])for(const [t,k] of l||[])c.archRetry.push({tbl:t,pk:k,why:w,tries:(e?.tries||0)+1});
-        log(c.id,`лишились на власнику: ${[...(r.changed||[]),...(r.children||[])].map(([t,k])=>rowLabel(c,t,k)).join(', ')} (${r.reason}), перекопіюю і повторю`,'warn')}
+        // рядки, які лишились на власнику, повертаються з архіву в репліку (InstanceId = X); змінені ще й у NeedFull, бо їх оновлення пройшли повз
+        for(const [w,l] of [['changed',r.changed],['children',r.children]])for(const [t,k] of l||[]){const a=c.archive[t][k];const v=a?.SyncVersion??0;
+          if(a&&!a._ref){if(!c.replica.rows[t][k]){const x=clone(a);delete x._ref;c.replica.rows[t][k]=x}delete c.archive[t][k]}
+          if(w==='changed'){c.needFull=c.needFull||[];if(!c.needFull.some(x=>x[1]===k))c.needFull.push([t,k]);c.ackDirty=true}
+          c.archRetry.push({tbl:t,pk:k,why:w,v,tries:(e?.tries||0)+1})}
+        log(c.id,`лишились на власнику: ${[...(r.changed||[]),...(r.children||[])].map(([t,k])=>rowLabel(c,t,k)).join(', ')} (${r.reason}); повернуто з архіву в репліку${r.changed?.length?`, змінені в NeedFull`:''}, повторю перенесення`,'warn')}
       else if(r.kind==='pdelete'&&r.changed?.length)note(c,`не видалено ${r.changed.length}: ${r.changedNames.map(n=>'«'+n+'»').join(', ')} змінено або створено на інстансі після того, як ви бачили дані; вони лишаються і приїдуть потоком`)
       else if(r.status==='Rejected'){const e=c.outbox.find(x=>x.seq===r.seq);const gone=removeLocal(c,r.tbl,r.pk);if(e)obRemove(c,e);
         note(c,`не збережено: ${gone.join(', ')} (${r.reason})`)}
@@ -637,6 +641,7 @@ function removeLocal(c,tbl,pk){
 function applyRow(c,tbl,r){
   const rows=c.replica.rows[tbl],e=obFind(c,tbl,r.Id),loc=rows[r.Id];
   if(e&&(e.kind==='delete'||e.kind==='create'))return 0;
+  if(!loc&&c.archive[tbl][r.Id]&&!c.archive[tbl][r.Id]._ref)return 0; // рядок в архіві: оновлення з потоку проходить повз
   if(r._mask){ // частковий рядок: UPDATE колонок з маски WHERE Id = ? AND SyncVersion < ?
     if(!loc){c.needFull=c.needFull||[];if(!c.needFull.some(x=>x[1]===r.Id))c.needFull.push([tbl,r.Id]);c.ackDirty=true;
       log(c.id,`частковий рядок ${r.Id}, а в репліці його нема: прошу повний через NeedFull`,'warn');return 0}
@@ -666,7 +671,7 @@ function installSnapshot(c,p){
     else if(e.kind==='pdelete'){for(const r of Object.values(rows[e.tbl]))if(condMatch(e.cond,r)&&r.SyncVersion<=e.V)delete rows[e.tbl][r.Id];moved++}}
   c.replica={instanceId:p.instanceId,rows,cursors:Object.fromEntries(TABLES.map(t=>[t,{cursor:p.V,ranges:[]}]))};
   c.dl=null;c.flash={};
-  log(c.id,`знімок перевірено і підмінено атомарно: курсори = ${p.V}${c.outbox.length?`, у нову репліку перенесено ${moved} дій зі значеннями`:''}`,'ok');
+  log(c.id,`знімок перевірено і влито в ту саму БД однією транзакцією (рядки InstanceId = ${p.instanceId} замінено): курсори = ${p.V}${c.outbox.length?`, у нову репліку перенесено ${moved} дій зі значеннями`:''}`,'ok');
   sendStart(c);
 }
 
@@ -717,7 +722,7 @@ function setOpen(c,t){c.openTable=t;if(c.link&&c.state==='catchup')send(c.id,'up
 
 // ---------- сценарії ----------
 const C=id=>S.clients[id];
-// ---------- перенесення в архів (X.archive.db клієнта) ----------
+// ---------- перенесення в архів: ті самі рядки БД клієнта, InstanceId = X:archive ----------
 function childrenOf(rows,tbl,id){const out=[];for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===tbl)
   for(const ch of Object.values(rows[ct]))if(ch[col]===id)out.push([ct,ch.Id]);return out}
 function archiveRows(c,items,tries=0){
@@ -725,20 +730,20 @@ function archiveRows(c,items,tries=0){
   const set=[];const add=(t,id)=>{if(set.some(x=>x[0]===t&&x[1]===id)||!c.replica.rows[t][id])return;set.push([t,id]);childrenOf(c.replica.rows,t,id).forEach(([ct,cid])=>add(ct,cid))};
   items.forEach(([t,id])=>add(t,id));if(!set.length)return;
   let refs=0;
-  for(const [t,id] of set){const r=c.replica.rows[t][id];c.archive[t][id]={...clone(r),_ref:false};
+  for(const [t,id] of set){const r=c.replica.rows[t][id];c.archive[t][id]={...clone(r),_ref:false};delete c.replica.rows[t][id]; // UPDATE InstanceId = X:archive
     for(const [col,pt] of Object.entries(FKS[t]||{})){const pid=r[col];if(set.some(x=>x[0]===pt&&x[1]===pid))continue;const pr=c.replica.rows[pt][pid];
       if(pr&&(!c.archive[pt][pid]||c.archive[pt][pid]._ref)){c.archive[pt][pid]={...clone(pr),_ref:true};refs++}}}
   const todo=set.filter(([t,id])=>!obFind(c,t,id));const V=minCursor(c);
   if(todo.length)c.outbox.push({lid:c.nextLid++,seq:null,cls:2,tbl:todo[0][0],pk:null,kind:'archive',items:todo,V,columns:[],sent:0,tries});
   c.sel=c.sel.filter(x=>!set.some(y=>y[1]===x));
-  log(c.id,`${tries?'перекопіювання':'перенесення в архів'}: ${set.map(([t,id])=>rowLabel(c,t,id)+' v'+c.replica.rows[t][id].SyncVersion).join(', ')} скопійовано в ${c.id}.archive.db${refs?`, довідкових: ${refs}`:''}; у черзі одна дія kind 4: Id ∈ набір і SyncVersion ≤ ${minCursor(c)}`);
+  log(c.id,`${tries?'повторне перенесення':'перенесення в архів'}: ${set.map(([t,id])=>rowLabel(c,t,id)+' v'+c.archive[t][id].SyncVersion).join(', ')} отримали InstanceId = ${c.replica.instanceId}:archive в одній транзакції${refs?`, довідкових скопійовано: ${refs}`:''}; у черзі одна дія kind 4: Id ∈ набір і SyncVersion ≤ ${minCursor(c)}`);
 }
 function archRetryStep(c){
   const drop=[];
   for(const pass of ['changed','children'])for(const rt of c.archRetry){if(rt.why!==pass||drop.includes(rt))continue;
     const row=c.replica.rows[rt.tbl][rt.pk],copy=c.archive[rt.tbl][rt.pk];
     if(!row){drop.push(rt);continue}
-    const ready=pass==='changed'?(!copy||row.SyncVersion>copy.SyncVersion)
+    const ready=pass==='changed'?row.SyncVersion>rt.v
       :!c.archRetry.some(x=>x!==rt&&!drop.includes(x)&&childrenOf(c.replica.rows,rt.tbl,rt.pk).some(([t,id])=>t===x.tbl&&id===x.pk));
     if(!ready)continue;drop.push(rt);
     if(rt.tries>=3){note(c,`${rowLabel(c,rt.tbl,rt.pk)} лишився на власнику: автоматика постійно його змінює`);continue}
@@ -820,12 +825,12 @@ const SCEN=[
     when(()=>c.dl&&c.dl.offset>=2,()=>autoPrice(oItem('Степлер').Id,175));
     when(()=>c.dl&&c.dl.offset>=3,()=>{setLink('c2',false);later(4,()=>setLink('c2',true))})},
    x:'Репліки нема, тому на Start власник відповідає SnapshotRequired з розміром знімка. Файл малий: за виміряною швидкістю менше 5 хв, тому клієнт бере файл, а не порожню репліку. Власник робить VACUUM INTO, реєструє клієнта з acked_version = V і віддає файл по шматку. Поки файл їде, автоматика змінює «Степлер». На третьому шматку зв\'язок рветься, а після відновлення завантаження продовжується з четвертого за snapshot_id. Після підміни файлу Subscribe довозить зміну «Степлера», яка новіша за V.'}]},
- {id:'archive',title:'Перенесення в архів',intro:'Користувач забирає частину даних собі й звільняє місце на власнику. Записи спершу копіюються в архів клієнта (X.archive.db), який синк не чіпає, і тільки потім власнику йде умовне видалення.',
+ {id:'archive',title:'Перенесення в архів',intro:'Користувач забирає частину даних собі й звільняє місце на власнику. Рядки в БД клієнта спершу отримують InstanceId = X:archive, синк їх більше не чіпає, і тільки потім власнику йде умовне видалення.',
   setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
   {t:'Клієнт 1 переносить в архів категорію «Архів» і товар «Каталог 2019»',do(){const c=C('c1');archiveRows(c,[['Category',byName(c.replica.rows.Category,'Архів').Id],['Item',cItem(c,'Каталог 2019').Id]]);
     when(()=>c.outbox.some(e=>e.kind==='archive'&&e.sent),()=>autoPrice(oItem('Факс').Id,320))},
-   x:'Замикання по FK додає дочірні «Старий принтер» і «Факс». «Офіс», на який посилається «Каталог 2019», копіюється як довідковий і на власнику не видаляється. У чергу йде одна дія: Id ∈ набір і SyncVersion ≤ V. Поки Apply летить, автоматика змінює ціну «Факсу». Власник видаляє рядки набору з SyncVersion ≤ V: «Факс» новіший і повертається як Rejected: changed, тому лишається і його батько «Архів» (has children), решта видаляється. Свіжа версія «Факсу» приїжджає потоком, клієнт перекопіює її і повторює дію разом з «Архівом».'},
-  {t:'Подивитись на результат',do(){},x:'Tombstones прибрали записи з обох реплік. У Клієнта 1 вони лишились в архіві, і шар злиття показує їх у таблицях з позначкою «архів»: це тепер єдина копія. На власнику видалення звільнили сторінки, а фонова задача PRAGMA incremental_vacuum повертає їх порціями, і файл зменшується без блокування автоматики.'}]},
+   x:'Замикання по FK додає дочірні «Старий принтер» і «Факс». Набір отримує InstanceId = X:archive (X це instance_id власника) однією транзакцією, а «Офіс», на який посилається «Каталог 2019», копіюється в архів як довідковий і з репліки не зникає. У чергу йде одна дія: Id ∈ набір і SyncVersion ≤ V. Поки Apply летить, автоматика змінює ціну «Факсу»; рядок в архіві, тому ця зміна проходить повз. Власник видаляє рядки набору з SyncVersion ≤ V: «Факс» новіший і повертається як Rejected: changed, тому лишається і його батько «Архів» (has children). Клієнт повертає обидва з архіву в репліку, «Факс» іде в NeedFull, власник шле його повний рядок, і клієнт повторює перенесення.'},
+  {t:'Подивитись на результат',do(){},x:'Tombstones прибрали записи з репліки Клієнта 2, а в Клієнта 1 їх у репліці вже нема. У Клієнта 1 вони лишились рядками з InstanceId = X:archive, і шар злиття показує їх у таблицях з позначкою «архів»: це тепер єдина копія. На власнику видалення звільнили сторінки, а фонова задача PRAGMA incremental_vacuum повертає їх порціями, і файл зменшується без блокування автоматики.'}]},
  {id:'columns',title:'Оновлення по колонках',intro:'Власник шле не весь рядок, а тільки колонки, змінені після версії, яку вже мають усі активні клієнти (SyncBase і маска SyncMask). Хто довго був поза зв\'язком, отримує рядок цілком.',
   setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
   {t:'Автоматика змінює ціну «Степлера»',do(){autoPrice(oItem('Степлер').Id,130)},x:'Попередню версію рядка мають обидва клієнти (floor ≥ стара SyncVersion), тому тригер ставить SyncBase = стара версія, маска = price. Онлайн-пачка везе обом тільки Id, версію і price.'},
@@ -919,8 +924,8 @@ function renderClient(c){
     <details data-k="outbox-${c.id}" ${op(`outbox-${c.id}`)}><summary>_sync_outbox (${pend})</summary>
       <div class="tw short">${pend?`<table><tr><th>seq</th><th>cls</th><th>tbl</th><th>запис</th><th>kind</th><th>columns</th><th>sent</th></tr>${c.outbox.slice().sort((a,b)=>(a.seq??1e9)-(b.seq??1e9)||(a.cls||1)-(b.cls||1)||a.lid-b.lid).map(e=>`<tr><td class="sv">${e.seq??'—'}</td><td>${e.cls===2?'масова':'інтерактивна'}</td><td>${e.tbl}</td><td>${esc(obLabel(c,e))}${e.V!=null?` <span class="mono">SV ≤ ${e.V}</span>`:''}</td><td>${KIND[e.kind]}</td><td class="mono">${e.columns.join(', ')||'—'}</td><td class="sv">${e.sent}</td></tr>`).join('')}</table>`:'<div class="empty">Черга порожня</div>'}</div></details>
     ${(()=>{const n=TABLES.reduce((k,x)=>k+Object.keys(c.archive[x]).length,0);if(!n)return '';const ar=TABLES.flatMap(x=>Object.values(c.archive[x]).map(r=>[x,r]));
-      return `<details data-k="arch-${c.id}" ${op(`arch-${c.id}`)}><summary>${c.id}.archive.db (${n})</summary><div class="small muted">Файл клієнта, власник про нього не знає. Синк його не чіпає, tombstones не видаляють звідси записи.</div>
-      <div class="tw short"><table><tr><th>tbl</th><th>запис</th><th>скопійована SV</th><th></th></tr>${ar.map(([x,r])=>`<tr><td>${x}</td><td>${esc(r.name||r.text)}</td><td class="sv">${r.SyncVersion}</td><td>${r._ref?'<span class="tag arch">довідковий</span>':rp.rows[x][r.Id]?'<span class="tag">ще на власнику</span>':''}</td></tr>`).join('')}</table></div></details>`})()}
+      return `<details data-k="arch-${c.id}" ${op(`arch-${c.id}`)}><summary>архів: InstanceId = ${c.replica?.instanceId||'X'}:archive (${n})</summary><div class="small muted">Ті самі рядки БД клієнта з іншим InstanceId. Власник про них не знає, синк їх не чіпає, tombstones стосуються тільки рядків з InstanceId = ${c.replica?.instanceId||'X'}.</div>
+      <div class="tw short"><table><tr><th>tbl</th><th>запис</th><th>SV</th><th></th></tr>${ar.map(([x,r])=>`<tr><td>${x}</td><td>${esc(r.name||r.text)}</td><td class="sv">${r.SyncVersion}</td><td>${r._ref?'<span class="tag arch">довідковий</span>':obFind(c,x,r.Id)?'<span class="tag">чекає видалення на власнику</span>':''}</td></tr>`).join('')}</table></div></details>`})()}
     <details data-k="cursors-${c.id}" ${op(`cursors-${c.id}`)}><summary>_sync_cursors</summary>
       <div class="tw short"><table><tr><th>tbl</th><th>cursor</th><th>_sync_ranges (lo, hi]</th></tr>${TABLES.map(x=>{const k=rp.cursors[x];return `<tr><td>${x}</td><td class="sv">${k.cursor}</td><td class="mono">${k.ranges.length?k.ranges.map(([a,b])=>`(${a}, ${b}]`).join(' '):'—'}</td></tr>`}).join('')}</table></div></details>`}
   el.innerHTML=`<div class="hd"><span class="who">${WHO[c.id]}</span>${statusPill(c)}
