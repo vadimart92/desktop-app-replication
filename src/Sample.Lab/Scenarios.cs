@@ -30,9 +30,9 @@ public static class Scenarios
 
     private static void Gone(Lab l, string name)
     {
-        Check(!Views.OwnerHas(l.Owner, name), $"«{name}» лишився на власнику");
+        Check(!Inspect.OwnerHas(l.Owner, name), $"«{name}» лишився на власнику");
         foreach (var c in l.Clients.Where(c => c.Link))
-            Check(!Views.ClientHas(c, name), $"«{name}» лишився в репліці {c.Label}");
+            Check(!Inspect.ClientHas(c, name), $"«{name}» лишився в репліці {c.Label}");
     }
 
     private static bool HasNote(ClientNode c, string fragment) =>
@@ -61,7 +61,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerItem(l.Owner, "Степлер №10") is { Price: 150 }, "на власнику нема «Степлер №10» з ціною 150");
+                Check(Inspect.OwnerItem(l.Owner, "Степлер №10") is { Price: 150 }, "на власнику нема «Степлер №10» з ціною 150");
                 return Task.CompletedTask;
             }),
 
@@ -80,7 +80,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerItem(l.Owner, "Папір A4") is { Price: 205, Status: "архів" }, "папір: очікував ціну 205 і статус «архів»");
+                Check(Inspect.OwnerItem(l.Owner, "Папір A4") is { Price: 205, Status: "архів" }, "папір: очікував ціну 205 і статус «архів»");
                 return Task.CompletedTask;
             }),
 
@@ -123,7 +123,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerHas(l.Owner, "Дрон"), "«Дрон» не доїхав до власника");
+                Check(Inspect.OwnerHas(l.Owner, "Дрон"), "«Дрон» не доїхав до власника");
                 Gone(l, "Сканер");
                 Gone(l, "Факс");
                 Check(HasNote(l.C1, "не збережено"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
@@ -139,7 +139,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerItem(l.Owner, "Палета") is { Price: 470 }, "на власнику ціна «Палети» не 470");
+                Check(Inspect.OwnerItem(l.Owner, "Палета") is { Price: 470 }, "на власнику ціна «Палети» не 470");
                 return Task.CompletedTask;
             }),
 
@@ -161,7 +161,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerItem(l.Owner, "Стрейч-плівка 500 мм") is { Price: 333 }, "на власнику нема «Стрейч-плівка 500 мм» з ціною 333");
+                Check(Inspect.OwnerItem(l.Owner, "Стрейч-плівка 500 мм") is { Price: 333 }, "на власнику нема «Стрейч-плівка 500 мм» з ціною 333");
                 return Task.CompletedTask;
             }),
 
@@ -180,7 +180,7 @@ public static class Scenarios
                     {
                         l.Owner.Store.Options.Faults.DelayStream(l.C2.Replication.ClientId, TimeSpan.FromMilliseconds(400), TimeSpan.FromSeconds(30));
                         l.C2.Link = true;
-                        l.When(() => l.C2.Agent.CursorOf("Item") is { Ranges.Count: > 0 } k && k.Ranges[0].Lo - k.Cursor > 3,
+                        l.When(() => l.C2.Agent.CursorOf("Item").Ranges.Count > 0,
                             () => { l.C2.Link = false; return Task.CompletedTask; });
                         return Task.CompletedTask;
                     }),
@@ -250,8 +250,8 @@ public static class Scenarios
             {
                 Gone(l, "Скотч");
                 Gone(l, "Маркери");
-                Check(Views.OwnerItem(l.Owner, "Палета") is { Price: 999 }, "ціна «Палети» з черги Клієнта 2 не доїхала");
-                Check(Views.OwnerHas(l.Owner, "Папір A4 (500 арк.)"), "перейменування з часу завантаження знімка загубилось");
+                Check(Inspect.OwnerItem(l.Owner, "Палета") is { Price: 999 }, "ціна «Палети» з черги Клієнта 2 не доїхала");
+                Check(Inspect.OwnerHas(l.Owner, "Папір A4 (500 арк.)"), "перейменування з часу завантаження знімка загубилось");
                 return Task.CompletedTask;
             }),
 
@@ -272,8 +272,8 @@ public static class Scenarios
             {
                 Gone(l, "Старий принтер");
                 Gone(l, "Каталог 2019");
-                Check(Views.OwnerHas(l.Owner, "Архівна шафа") && Views.ClientHas(l.C1, "Архівна шафа"), "«Архівна шафа» мала лишитись і приїхати до Клієнта 1");
-                Check(Views.OwnerItem(l.Owner, "Степлер") is { Price: 135 }, "правка ціни «Степлера» не доїхала");
+                Check(Inspect.OwnerHas(l.Owner, "Архівна шафа") && Inspect.ClientHas(l.C1, "Архівна шафа"), "«Архівна шафа» мала лишитись і приїхати до Клієнта 1");
+                Check(Inspect.OwnerItem(l.Owner, "Степлер") is { Price: 135 }, "правка ціни «Степлера» не доїхала");
                 Check(HasNote(l.C1, "не видалено"), "Клієнт 1 не отримав повідомлення про невидалений запис");
                 return Task.CompletedTask;
             }),
@@ -308,7 +308,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.ClientHas(l.C2, "Степлер"), "у Клієнта 2 нема «Степлера»");
+                Check(Inspect.ClientHas(l.C2, "Степлер"), "у Клієнта 2 нема «Степлера»");
                 return Task.CompletedTask;
             }),
 
@@ -335,7 +335,7 @@ public static class Scenarios
                 foreach (var n in new[] { "Старий принтер", "Факс", "Каталог 2019" })
                 {
                     Gone(l, n);
-                    Check(Views.ClientHas(l.C1, n, archive: true), $"«{n}» нема в архіві Клієнта 1");
+                    Check(Inspect.ClientHas(l.C1, n, archive: true), $"«{n}» нема в архіві Клієнта 1");
                 }
                 return Task.CompletedTask;
             }),
@@ -381,7 +381,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerItem(l.Owner, "Степлер Max") is { Status: "архів" }, "на власнику мав бути «Степлер Max» зі статусом «архів»");
+                Check(Inspect.OwnerItem(l.Owner, "Степлер Max") is { Status: "архів" }, "на власнику мав бути «Степлер Max» зі статусом «архів»");
                 Gone(l, "Скотч");
                 return Task.CompletedTask;
             }),
@@ -446,7 +446,7 @@ public static class Scenarios
             ],
             l =>
             {
-                Check(Views.OwnerItem(l.Owner, "Скотч") is { Price: 55 }, "ціна «Скотчу» з черги не доїхала після повернення схеми");
+                Check(Inspect.OwnerItem(l.Owner, "Скотч") is { Price: 55 }, "ціна «Скотчу» з черги не доїхала після повернення схеми");
                 return Task.CompletedTask;
             }),
     ];
@@ -485,7 +485,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
             try { await v(Lab); }
             catch (ScenarioCheckException e) { problems.Add(e.Message); }
         foreach (var c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
-            problems.AddRange(Views.Diff(Lab.Owner, c).Select(d => $"{c.Label}: {d}"));
+            problems.AddRange(Inspect.Diff(Lab.Owner, c).Select(d => $"{c.Label}: {d}"));
         Lab.Say(problems.Count == 0 ? "перевірка: репліки дорівнюють власнику, очікуваний результат є" : "перевірка: " + string.Join("; ", problems),
             problems.Count == 0 ? SyncLogLevel.Ok : SyncLogLevel.Bad);
         return problems;

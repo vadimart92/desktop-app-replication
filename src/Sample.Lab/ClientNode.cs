@@ -112,6 +112,58 @@ public sealed class ClientNode : IAsyncDisposable
         Say($"видалив категорію «{name}» (локальний каскад прибрав товари, у чергу йде тільки категорія)");
     }
 
+    // ---------- by id, for the UI ----------
+
+    public async Task UpdateItemAsync(Guid id, string name, long price, string status)
+    {
+        await using var db = Db();
+        var it = await Mine<Item>(db).FirstAsync(x => x.Id == id);
+        (it.Name, it.Price, it.Status) = (name, price, status);
+        await db.SaveChangesAsync();
+        Say($"«{name}»: Price = {price}, Status = {status}");
+    }
+
+    public async Task RenameCategoryAsync(Guid id, string name)
+    {
+        await using var db = Db();
+        var c = await Mine<Category>(db).FirstAsync(x => x.Id == id);
+        c.Name = name;
+        await db.SaveChangesAsync();
+        Say($"категорія «{name}»");
+    }
+
+    public async Task DeleteAsync(string table, Guid id)
+    {
+        await using var db = Db();
+        BaseEntity e = table switch
+        {
+            "Category" => await Mine<Category>(db).FirstAsync(x => x.Id == id),
+            "Log" => await Mine<LogEntry>(db).FirstAsync(x => x.Id == id),
+            _ => await Mine<Item>(db).FirstAsync(x => x.Id == id),
+        };
+        db.Remove(e);
+        await db.SaveChangesAsync();
+        Say($"видалив запис {table} {Wire.Short(Wire.PkText(id))}");
+    }
+
+    public async Task<Guid> AddItemAsync()
+    {
+        await using var db = Db();
+        var cat = await Mine<Category>(db).OrderBy(x => x.Name).FirstAsync();
+        var n = await Mine<Item>(db).CountAsync() + 1;
+        var it = new Item { Name = $"Товар {n}", Price = 100, Status = "новий", CategoryId = cat.Id };
+        db.Items.Add(it).SetInstance(Instance);
+        await db.SaveChangesAsync();
+        Say($"створив «{it.Name}» у «{cat.Name}»");
+        return it.Id;
+    }
+
+    public Task<string> ArchiveByIdAsync(string table, Guid id)
+    {
+        Say("переносить запис в архів");
+        return Agent.ArchiveAsync([(table, id)]);
+    }
+
     public async Task<int> DeleteWhereStatusAsync(string status)
     {
         Say($"видаляє всі товари зі статусом «{status}»");

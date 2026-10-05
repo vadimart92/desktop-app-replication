@@ -16,7 +16,7 @@ public sealed record ClientView(string ClientId, long Acked, long AppliedSeq, lo
 public sealed record OwnerMeta(string InstanceId, long Version, long Purged, long ClockOffset, string Floor, long Pages, long FreePages);
 
 /// <summary>Raw SQL reads for the panels and for checks; they never go through the sync code.</summary>
-public static class Views
+public static class Inspect
 {
     private static SqliteConnection Open(string path)
     {

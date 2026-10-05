@@ -1,0 +1,150 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sample.App.ViewModels"
+             xmlns:lab="using:Sample.Lab"
+             x:Class="Sample.App.Views.ClientPanel"
+             x:DataType="vm:ClientPanelViewModel">
+  <Border Classes="panel">
+    <DockPanel>
+      <!-- header: name, status, link -->
+      <StackPanel DockPanel.Dock="Top" Spacing="6">
+        <DockPanel>
+          <ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding Link}" OnContent="зв'язок" OffContent="зв'язок" />
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <TextBlock Classes="h" Text="{Binding Title}" VerticalAlignment="Center" />
+            <Border Classes="pill" Background="{Binding StatusBrush}">
+              <TextBlock Text="{Binding StatusText}" Foreground="White" FontSize="12" TextWrapping="Wrap" MaxWidth="320" />
+            </Border>
+          </StackPanel>
+        </DockPanel>
+
+        <!-- byte counters on the wire, per direction -->
+        <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}" CornerRadius="6" Padding="8,6">
+          <Grid ColumnDefinitions="*,*,Auto" RowDefinitions="Auto,Auto">
+            <StackPanel Grid.Column="0">
+              <TextBlock Classes="muted" Text="↑ клієнт → власник" />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding BytesUp}" />
+                <TextBlock Classes="muted" VerticalAlignment="Bottom" Text="{Binding RateUp}" />
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+              <TextBlock Classes="muted" Text="↓ власник → клієнт" />
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding BytesDown}" />
+                <TextBlock Classes="muted" VerticalAlignment="Bottom" Text="{Binding RateDown}" />
+              </StackPanel>
+            </StackPanel>
+            <Button Grid.Column="2" Content="скинути" Command="{Binding ResetBytesCommand}" VerticalAlignment="Center" />
+            <Expander Grid.Row="1" Grid.ColumnSpan="3" Header="повідомлення gRPC за типами" Margin="0,4,0,0">
+              <ItemsControl ItemsSource="{Binding MessageStats}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <TextBlock Classes="mono" Text="{Binding}" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </Expander>
+          </Grid>
+        </Border>
+        <TextBlock Classes="muted" TextWrapping="Wrap"
+                   Text="Байти на дроті: HTTP/2-кадри з gzip-стисненими повідомленнями gRPC, заголовками і пінгами, як їх бачить TCP-з'єднання клієнта." />
+
+        <WrapPanel>
+          <ComboBox ItemsSource="{Binding Networks}" SelectedItem="{Binding SelectedNetwork}" MinWidth="260" Margin="0,0,8,4" />
+          <CheckBox IsChecked="{Binding LoseNextReply}" Content="загубити наступну відповідь Apply" Margin="0,0,8,4" />
+          <CheckBox IsChecked="{Binding NewSchema}" Content="нова схема" Margin="0,0,8,4" />
+        </WrapPanel>
+        <TextBlock Text="{Binding PendingText}" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding Error}" Foreground="IndianRed" TextWrapping="Wrap" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+      </StackPanel>
+
+      <!-- service tables -->
+      <StackPanel DockPanel.Dock="Bottom" Spacing="2" Margin="0,6,0,0">
+        <Expander Header="_sync_outbox (черга)" IsExpanded="True">
+          <ItemsControl ItemsSource="{Binding Outbox}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Classes="mono" Text="{Binding}" TextWrapping="Wrap" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </Expander>
+        <Expander Header="_sync_cursors і _sync_ranges">
+          <ItemsControl ItemsSource="{Binding Cursors}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Classes="mono" Text="{Binding}" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </Expander>
+        <Expander Header="Відкинуті дії і повідомлення">
+          <ItemsControl ItemsSource="{Binding Notes}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="x:String">
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="IndianRed" FontSize="12" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </Expander>
+      </StackPanel>
+
+      <TabControl SelectedIndex="{Binding SelectedTab}">
+        <TabItem Header="Товари">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,4,0,0">
+              <WrapPanel>
+                <TextBox Text="{Binding EditName}" Width="150" Margin="0,0,4,4" Watermark="назва" />
+                <TextBox Text="{Binding EditPrice}" Width="70" Margin="0,0,4,4" Watermark="ціна" />
+                <ComboBox ItemsSource="{Binding StatusOptions}" SelectedItem="{Binding EditStatus}" Width="110" Margin="0,0,4,4" />
+                <Button Content="Зберегти" Command="{Binding SaveCommand}" Margin="0,0,4,4" />
+                <Button Content="Видалити" Command="{Binding DeleteCommand}" Margin="0,0,4,4" />
+                <Button Content="В архів" Command="{Binding ArchiveCommand}" Margin="0,0,4,4" />
+              </WrapPanel>
+              <WrapPanel>
+                <Button Content="+ товар" Command="{Binding AddItemCommand}" Margin="0,0,4,0" />
+                <Button Content="видалити всі «архів» (одна дія за умовою)" Command="{Binding DeleteArchivedCommand}" />
+              </WrapPanel>
+            </StackPanel>
+            <DataGrid ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}" IsReadOnly="True" AutoGenerateColumns="False"
+                      GridLinesVisibility="Horizontal" CanUserSortColumns="True" MinHeight="160">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Назва" Binding="{Binding Label}" Width="*" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="Ціна" Binding="{Binding Price}" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="Статус" Binding="{Binding Status}" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="Категорія" Binding="{Binding Category}" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="SV" Binding="{Binding Version}" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="черга" Binding="{Binding Mark}" x:DataType="lab:RowView" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+        <TabItem Header="Категорії">
+          <DockPanel>
+            <WrapPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
+              <Button Content="+ категорія" Command="{Binding AddCategoryCommand}" Margin="0,0,4,0" />
+              <Button Content="Видалити" Command="{Binding DeleteCategoryCommand}" Margin="0,0,4,0" />
+              <Button Content="В архів з дочірніми" Command="{Binding ArchiveCategoryCommand}" />
+            </WrapPanel>
+            <DataGrid ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" IsReadOnly="True" AutoGenerateColumns="False" MinHeight="160">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Назва" Binding="{Binding Label}" Width="*" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="SV" Binding="{Binding Version}" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="черга" Binding="{Binding Mark}" x:DataType="lab:RowView" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+        <TabItem Header="Журнал">
+          <DataGrid ItemsSource="{Binding Log}" IsReadOnly="True" AutoGenerateColumns="False" MinHeight="160">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Запис" Binding="{Binding Label}" Width="*" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="SV" Binding="{Binding Version}" x:DataType="lab:RowView" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </TabItem>
+      </TabControl>
+    </DockPanel>
+  </Border>
+</UserControl>

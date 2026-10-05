@@ -26,7 +26,7 @@ public sealed class WireMeter
     public void CountMessage(string key, int bytes) =>
         _messages.AddOrUpdate(key, (1, bytes), (_, v) => (v.Count + 1, v.Bytes + bytes));
 
-    public IReadOnlyDictionary<string, (long Count, long Bytes)> Messages => _messages;
+    public IReadOnlyList<KeyValuePair<string, (long Count, long Bytes)>> Messages => _messages.ToArray(); // ToArray is atomic on ConcurrentDictionary
 
     /// <summary>Bytes per second over the last sampling period (call about once a second).</summary>
     public (double Up, double Down) SampleRate()

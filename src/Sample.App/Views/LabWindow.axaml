@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Sample.App.ViewModels"
+        xmlns:v="using:Sample.App.Views"
+        xmlns:lab="using:Sample.Lab"
+        x:Class="Sample.App.Views.LabWindow"
+        x:DataType="vm:LabViewModel"
+        Title="Реплікація: лабораторія (власник і два клієнти)"
+        Width="1680" Height="1000" WindowState="Maximized">
+  <Grid RowDefinitions="Auto,*,5,220">
+    <!-- scenario bar -->
+    <Border Grid.Row="0" Classes="panel">
+      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto">
+        <StackPanel Grid.Column="0" Spacing="6" Width="380" Margin="0,0,12,0">
+          <ComboBox ItemsSource="{Binding ScenarioList}" SelectedItem="{Binding SelectedScenario}" HorizontalAlignment="Stretch">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="lab:Scenario">
+                <TextBlock Text="{Binding Title}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <WrapPanel>
+            <Button Classes="accent" Content="{Binding NextTitle}" Command="{Binding NextStepCommand}" Margin="0,0,6,4" />
+            <Button Content="перевірити" Command="{Binding VerifyCommand}" Margin="0,0,6,4"
+                    ToolTip.Tip="Дочекатися, поки все доїде, і порівняти кожну репліку з власником" />
+            <Button Content="заново" Command="{Binding RestartCommand}" Margin="0,0,6,4" />
+          </WrapPanel>
+          <TextBlock Text="{Binding State}" Classes="muted" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding Verdict}" TextWrapping="Wrap" FontWeight="SemiBold" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Spacing="4">
+          <TextBlock Text="{Binding SelectedScenario.Intro}" TextWrapping="Wrap" FontSize="13" />
+          <ItemsControl ItemsSource="{Binding Steps}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:StepView">
+                <StackPanel Opacity="{Binding Opacity}" Margin="0,2">
+                  <TextBlock Text="{Binding Header}" FontWeight="SemiBold" FontSize="12" />
+                  <TextBlock Text="{Binding Explain}" TextWrapping="Wrap" FontSize="12" />
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock Classes="muted" Text="{Binding LabDir, StringFormat='Файли БД: {0}'}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- owner and two clients -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,*,*">
+      <ScrollViewer Grid.Column="0"><v:OwnerPanel DataContext="{Binding Owner}" /></ScrollViewer>
+      <ScrollViewer Grid.Column="1"><v:ClientPanel DataContext="{Binding Client1}" /></ScrollViewer>
+      <ScrollViewer Grid.Column="2"><v:ClientPanel DataContext="{Binding Client2}" /></ScrollViewer>
+    </Grid>
+
+    <GridSplitter Grid.Row="2" ResizeDirection="Rows" />
+    <Border Grid.Row="3" Classes="panel">
+      <v:LogView DataContext="{Binding Feed}" />
+    </Border>
+  </Grid>
+</Window>

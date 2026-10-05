@@ -55,6 +55,6 @@ public class EmptyReplicaTests
         lab.C2.Agent.Options.SnapshotMode = Replication.Client.SnapshotMode.EmptyReplica;
         await lab.SyncNowAsync(lab.C2);
         await lab.SettleAsync();
-        Assert.Empty(Sample.Lab.Views.Diff(lab.Owner, lab.C2));
+        Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, lab.C2));
     }
 }
