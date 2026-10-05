@@ -1,0 +1,97 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sample.App.ViewModels"
+             xmlns:lab="using:Sample.Lab"
+             x:Class="Sample.App.Views.OwnerPanel"
+             x:DataType="vm:OwnerPanelViewModel">
+  <Border Classes="panel">
+    <DockPanel>
+      <StackPanel DockPanel.Dock="Top" Spacing="6">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Classes="h" Text="{Binding Title}" />
+          <TextBlock Classes="muted" Text="headless-автоматика, gRPC-сервер" VerticalAlignment="Center" />
+        </StackPanel>
+        <TextBlock Classes="mono" Text="{Binding Meta}" TextWrapping="Wrap" />
+        <TextBlock Classes="muted" Text="{Binding Traffic}" />
+        <WrapPanel>
+          <TextBlock Classes="muted" Text="Автоматика:" VerticalAlignment="Center" Margin="0,0,6,4" />
+          <Button Content="новий товар" Command="{Binding NewItemCommand}" Margin="0,0,4,4" />
+          <Button Content="+5 у журнал" Command="{Binding AddLogCommand}" Margin="0,0,4,4" />
+          <Button Content="пакет із 17 змін" Command="{Binding BurstCommand}" Margin="0,0,4,4" />
+          <Button Content="ціна ↻" Command="{Binding PriceCommand}" Margin="0,0,4,4" ToolTip.Tip="SaveChanges для вибраного товару" />
+          <Button Content="статус ↻" Command="{Binding StatusCommand}" Margin="0,0,4,4" ToolTip.Tip="ExecuteUpdate для вибраного товару" />
+          <Button Content="✕ товар" Command="{Binding DeleteItemCommand}" Margin="0,0,4,4" ToolTip.Tip="ExecuteDelete для вибраного товару" />
+        </WrapPanel>
+        <WrapPanel>
+          <TextBlock Classes="muted" Text="Служба:" VerticalAlignment="Center" Margin="0,0,6,4" />
+          <Button Content="очищення tombstones" Command="{Binding PurgeCommand}" Margin="0,0,4,4" />
+          <Button Content="+1 день" Command="{Binding PlusDayCommand}" Margin="0,0,4,4" />
+          <Button Content="+31 день" Command="{Binding Plus31DaysCommand}" Margin="0,0,4,4" />
+          <Button Content="incremental_vacuum" Command="{Binding VacuumCommand}" Margin="0,0,4,4" />
+        </WrapPanel>
+        <TextBlock Classes="muted" TextWrapping="Wrap" Text="Ручного редагування на власнику нема, тут пише тільки автоматика. Кожен запис проходить через тригер, який дає рядку нову SyncVersion." />
+        <TextBlock Text="{Binding Error}" Foreground="IndianRed" TextWrapping="Wrap" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+      </StackPanel>
+
+      <StackPanel DockPanel.Dock="Bottom" Spacing="2" Margin="0,6,0,0">
+        <Expander Header="_sync_tombstones">
+          <DataGrid ItemsSource="{Binding Tombstones}" IsReadOnly="True" AutoGenerateColumns="False" MaxHeight="180">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="tbl" Binding="{Binding Table}" x:DataType="lab:TombstoneView" />
+              <DataGridTextColumn Header="pk" Binding="{Binding Pk}" Width="*" x:DataType="lab:TombstoneView" />
+              <DataGridTextColumn Header="version" Binding="{Binding Version}" x:DataType="lab:TombstoneView" />
+              <DataGridTextColumn Header="origin" Binding="{Binding Origin}" x:DataType="lab:TombstoneView" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </Expander>
+        <Expander Header="_sync_clients і _sync_client_cursors">
+          <DataGrid ItemsSource="{Binding Clients}" IsReadOnly="True" AutoGenerateColumns="False" MaxHeight="150">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="client_id" Binding="{Binding ClientId}" x:DataType="lab:ClientView" />
+              <DataGridTextColumn Header="acked_version" Binding="{Binding Acked}" x:DataType="lab:ClientView" />
+              <DataGridTextColumn Header="applied_seq" Binding="{Binding AppliedSeq}" x:DataType="lab:ClientView" />
+              <DataGridTextColumn Header="курсори" Binding="{Binding Cursors}" Width="*" x:DataType="lab:ClientView" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </Expander>
+      </StackPanel>
+
+      <TabControl>
+        <TabItem Header="Товари">
+          <DataGrid ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}" IsReadOnly="True" AutoGenerateColumns="False" MinHeight="160">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Назва" Binding="{Binding Label}" MinWidth="130" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="Ціна" Binding="{Binding Price}" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="Статус" Binding="{Binding Status}" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="Категорія" Binding="{Binding Category}" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="SyncVersion" Binding="{Binding Version}" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="SyncBase" Binding="{Binding Base}" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="SyncMask" Binding="{Binding Mask}" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="SyncOrigin" Binding="{Binding Origin}" x:DataType="lab:RowView" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </TabItem>
+        <TabItem Header="Категорії">
+          <DockPanel>
+            <Button DockPanel.Dock="Bottom" Content="видалити з каскадом" Command="{Binding DeleteCategoryCommand}" Margin="0,4,0,0" />
+            <DataGrid ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" IsReadOnly="True" AutoGenerateColumns="False" MinHeight="160">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="Назва" Binding="{Binding Label}" Width="*" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="SyncVersion" Binding="{Binding Version}" x:DataType="lab:RowView" />
+                <DataGridTextColumn Header="SyncMask" Binding="{Binding Mask}" x:DataType="lab:RowView" />
+              </DataGrid.Columns>
+            </DataGrid>
+          </DockPanel>
+        </TabItem>
+        <TabItem Header="Журнал">
+          <DataGrid ItemsSource="{Binding Log}" IsReadOnly="True" AutoGenerateColumns="False" MinHeight="160">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Запис" Binding="{Binding Label}" Width="*" x:DataType="lab:RowView" />
+              <DataGridTextColumn Header="SyncVersion" Binding="{Binding Version}" x:DataType="lab:RowView" />
+            </DataGrid.Columns>
+          </DataGrid>
+        </TabItem>
+      </TabControl>
+    </DockPanel>
+  </Border>
+</UserControl>

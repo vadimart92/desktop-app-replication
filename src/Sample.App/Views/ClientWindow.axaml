@@ -1,0 +1,14 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Sample.App.ViewModels"
+        xmlns:v="using:Sample.App.Views"
+        x:Class="Sample.App.Views.ClientWindow"
+        x:DataType="vm:ClientWindowViewModel"
+        Title="Реплікація: клієнт" Width="800" Height="950">
+  <Grid RowDefinitions="Auto,*,5,200">
+    <TextBlock Grid.Row="0" Margin="8" Text="{Binding State}" Classes="muted" />
+    <ScrollViewer Grid.Row="1"><v:ClientPanel DataContext="{Binding Client}" /></ScrollViewer>
+    <GridSplitter Grid.Row="2" ResizeDirection="Rows" />
+    <v:LogView Grid.Row="3" DataContext="{Binding Feed}" />
+  </Grid>
+</Window>

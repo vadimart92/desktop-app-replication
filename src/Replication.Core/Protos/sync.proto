@@ -1,0 +1,208 @@
+// gRPC contract between a client and an owner (design/sync-design.md, section 6).
+// The client always opens every call; the owner never connects to a client.
+// All versions, cursors and seq numbers are int64 (section 5.3, "32-bit number on the way").
+syntax = "proto3";
+
+package replication;
+
+option csharp_namespace = "Replication.Protocol";
+
+service Sync {
+  rpc Snapshot (SnapshotRequest) returns (stream SnapshotChunk);
+  rpc Subscribe (stream SubscribeMessage) returns (stream ChangeMessage);
+  rpc Apply (ApplyRequest) returns (ApplyReply);
+}
+
+// A column value with the SQLite storage class kept as is. An unset oneof is NULL.
+message Value {
+  oneof v {
+    int64 i = 1;
+    double d = 2;
+    string s = 3;
+    bytes b = 4;
+  }
+}
+
+// ---------- Subscribe: client -> owner ----------
+
+message SubscribeMessage {
+  oneof body {
+    Start start = 1;
+    OpenTables open_tables = 2;
+    Ack ack = 3;
+  }
+}
+
+// Handshake is the first message of the stream (6.2).
+message Start {
+  string client_id = 1;
+  int32 schema_version = 2;
+  string instance_id = 3;           // empty when the client has no replica yet
+  repeated TableCursor cursors = 4;
+  repeated string open_tables = 5;
+}
+
+// Cursor C plus received ranges (lo, hi] above C. Ranges are delta-encoded:
+// lo1 - C, hi1 - lo1, lo2 - hi1, hi2 - lo2, ... in ascending order (6.4).
+message TableCursor {
+  string tbl = 1;
+  int64 cursor = 2;
+  repeated sint64 range_deltas = 3;
+}
+
+message OpenTables {
+  repeated string tables = 1;
+}
+
+message Ack {
+  repeated TableCursor cursors = 1;  // ranges are not sent in Ack
+  repeated RowRef need_full = 2;
+}
+
+message RowRef {
+  string tbl = 1;
+  bytes pk = 2;                      // 16-byte GUID
+}
+
+// ---------- Subscribe: owner -> client ----------
+
+message ChangeMessage {
+  repeated RangeExtra extra = 1;     // empty ranges closed on the owner side (6.4, "empty ranges")
+  oneof body {
+    Batch batch = 2;
+    TableSynced table_synced = 3;
+    Head head = 4;
+    Progress progress = 5;
+    SnapshotRequired snapshot_required = 6;
+    SchemaMismatch schema_mismatch = 7;
+  }
+}
+
+message RangeExtra {
+  string tbl = 1;
+  int64 lo = 2;
+  int64 hi = 3;
+}
+
+message Batch {
+  string tbl = 1;
+  repeated RangeExtra covers = 2;    // ranges this batch closes for the table
+  repeated string columns = 3;       // data columns of the table, once per batch
+  repeated Row rows = 4;
+  repeated Tombstone tombstones = 5;
+  bool online = 6;
+  int64 remaining = 7;               // estimated changes left in catch-up
+}
+
+message Row {
+  bytes pk = 1;
+  int64 version = 2;
+  bool full = 3;                     // full row: values of all `columns`
+  int64 mask = 4;                    // partial row: bits of `columns` that `values` carry, in column order
+  repeated Value values = 5;
+}
+
+message Tombstone {
+  bytes pk = 1;
+  int64 version = 2;
+}
+
+message TableSynced {
+  string tbl = 1;
+  int64 version = 2;
+}
+
+message Head {
+  int64 version = 1;
+}
+
+message Progress {
+  int64 remaining = 1;
+  bool done = 2;
+  int64 owner_time_unix = 3;
+}
+
+message SnapshotRequired {
+  string reason = 1;
+  int64 size_bytes = 2;
+  string instance_id = 3;
+}
+
+message SchemaMismatch {
+  int32 owner_schema_version = 1;
+}
+
+// ---------- Snapshot ----------
+
+message SnapshotRequest {
+  string client_id = 1;
+  string snapshot_id = 2;            // empty for a new snapshot
+  int64 offset = 3;
+}
+
+message SnapshotChunk {
+  string snapshot_id = 1;
+  int64 offset = 2;
+  int64 total_size = 3;
+  bytes data = 4;
+  int64 version = 5;
+  string instance_id = 6;
+  bytes sha256 = 7;                  // hash of the whole file, in every chunk
+}
+
+// ---------- Apply ----------
+
+message ApplyRequest {
+  string client_id = 1;
+  repeated Action actions = 2;
+}
+
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  CREATE = 1;
+  PATCH = 2;
+  DELETE = 3;
+  ARCHIVE = 4;
+  PREDICATE_DELETE = 5;
+}
+
+message Action {
+  int64 seq = 1;
+  string tbl = 2;
+  bytes pk = 3;
+  ActionKind kind = 4;
+  repeated string columns = 5;
+  repeated Value values = 6;
+  repeated Condition predicate = 7;  // PREDICATE_DELETE: column = value, ANDed
+  int64 expected_version = 8;        // ARCHIVE / PREDICATE_DELETE: V, the replica is complete up to V
+  repeated RowRef rows = 9;          // ARCHIVE: the set with its FK closure
+}
+
+message Condition {
+  string column = 1;
+  Value value = 2;
+}
+
+enum ResultStatus {
+  RESULT_STATUS_UNSPECIFIED = 0;
+  APPLIED = 1;
+  SKIPPED = 2;
+  REJECTED = 3;
+  IGNORED = 4;
+}
+
+message ActionResult {
+  int64 seq = 1;
+  ResultStatus status = 2;
+  string reason = 3;
+  bool has_version = 4;
+  int64 version = 5;
+  repeated RowRef changed = 6;       // not deleted: changed after V
+  repeated RowRef children = 7;      // not deleted: has children that stay on the owner
+  int32 deleted = 8;
+}
+
+message ApplyReply {
+  int64 applied_up_to_seq = 1;
+  repeated ActionResult results = 2;
+}
