@@ -32,7 +32,7 @@ public sealed class ClientNode : IAsyncDisposable
     public static ClientNode Create(string id, string label, string dbPath, string ownerAddress, SyncLog log, AgentOptions? options = null)
     {
         SyncModel model;
-        using (var db = SampleDbContext.Open(dbPath))
+        using (SampleDbContext db = SampleDbContext.Open(dbPath))
         {
             db.Database.EnsureCreated();
             model = SyncModel.From(db);

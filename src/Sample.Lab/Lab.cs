@@ -43,8 +43,8 @@ public sealed class Lab : IAsyncDisposable
             configureOwner?.Invoke(o);
         });
         AgentOptions Opt() => new() { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
-        var c1 = ClientNode.Create("c1", "Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
-        var c2 = ClientNode.Create("c2", "Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
+        ClientNode c1 = ClientNode.Create("c1", "Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
+        ClientNode c2 = ClientNode.Create("c2", "Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
         return new Lab(dir, log, owner, c1, c2);
     }
 

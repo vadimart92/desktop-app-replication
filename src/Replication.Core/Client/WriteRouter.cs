@@ -86,8 +86,8 @@ public sealed class WriteRouter : SaveChangesInterceptor
     private Pending? Collect(DbContext ctx)
     {
         ctx.ChangeTracker.DetectChanges();
-        var entries = ctx.ChangeTracker.Entries().ToList();
-        var deleted = entries.Where(e => e.State == EntityState.Deleted && _model.ForType(e.Metadata.ClrType) is not null)
+        List<EntityEntry> entries = ctx.ChangeTracker.Entries().ToList();
+        HashSet<(string Name, string)> deleted = entries.Where(e => e.State == EntityState.Deleted && _model.ForType(e.Metadata.ClrType) is not null)
             .Select(e => (_model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
             .ToHashSet();
         var changes = new List<Change>();
@@ -101,14 +101,14 @@ public sealed class WriteRouter : SaveChangesInterceptor
             if (!SyncColumns.IsRemote(instance))
                 continue;
             string pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
-            var store = StoreObjectIdentifier.Table(t.Name, null);
+            StoreObjectIdentifier store = StoreObjectIdentifier.Table(t.Name, null);
             switch (e.State)
             {
                 case EntityState.Added:
                     changes.Add(new Change(t, instance!, pk, OutboxKind.Create, [.. t.Columns]));
                     break;
                 case EntityState.Modified:
-                    var cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
+                    List<string> cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
                     if (cols.Count > 0)
                         changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
                     break;

@@ -56,7 +56,7 @@ internal sealed class SubscribeSession
 
         _store.MarkSubscribed(_clientId, true);
         _store.Committed += _wake.Set;
-        var reader = Task.Run(ReadLoopAsync);
+        Task reader = Task.Run(ReadLoopAsync);
         try
         {
             await MainLoopAsync(conn);
@@ -86,7 +86,7 @@ internal sealed class SubscribeSession
 
         long head = _store.Head(conn);
         long purged = _store.Purged(conn);
-        var cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
+        Dictionary<string, CursorState> cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
         long minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out CursorState? c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
         // a table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
         // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2)
@@ -219,7 +219,7 @@ internal sealed class SubscribeSession
             {
                 CursorState k = _mirror[t.Name];
                 List<(long Lo, long Hi)> gaps = k.Gaps(head);
-                var nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
+                List<(long Lo, long Hi)> nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
                 if (nonEmpty.Count == 0)
                 {
                     if (!_synced.Contains(t.Name))
@@ -320,13 +320,13 @@ internal sealed class SubscribeSession
                 return false;
             }
             int n = Opt.OnlineBatchRows;
-            var all = Model.Tables
+            List<(SyncTable Table, OwnerItem Item)> all = Model.Tables
                 .SelectMany(t => OwnerReader.Range(conn, tx, t, _sentUpTo, head, n + 1, newestFirst: false).Select(it => (Table: t, Item: it)))
                 .OrderBy(x => x.Item.Version)
                 .ToList();
             upTo = all.Count > n ? all[n - 1].Item.Version : head;
-            var taken = all.Where(x => x.Item.Version <= upTo).ToList();
-            var own = taken.Where(x => x.Item.Origin == _clientId).ToList();
+            List<(SyncTable Table, OwnerItem Item)> taken = all.Where(x => x.Item.Version <= upTo).ToList();
+            List<(SyncTable Table, OwnerItem Item)> own = taken.Where(x => x.Item.Origin == _clientId).ToList();
             foreach (IGrouping<SyncTable, (SyncTable Table, OwnerItem Item)> g in taken.Where(x => x.Item.Origin != _clientId).GroupBy(x => x.Table))
             {
                 SyncTable t = g.Key;

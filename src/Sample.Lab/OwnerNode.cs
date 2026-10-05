@@ -36,7 +36,7 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         SyncModel model;
         bool empty;
-        await using (var db = SampleDbContext.Open(dbPath))
+        await using (SampleDbContext db = SampleDbContext.Open(dbPath))
         {
             await db.Database.EnsureCreatedAsync();
             model = SyncModel.From(db);

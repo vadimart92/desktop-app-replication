@@ -121,7 +121,7 @@ public sealed class ClientStore
 
     public Dictionary<string, CursorState> LoadCursors(SqliteConnection c, string instance, SqliteTransaction? tx = null)
     {
-        var result = Model.Tables.ToDictionary(t => t.Name, _ => new CursorState(0), StringComparer.Ordinal);
+        Dictionary<string, CursorState> result = Model.Tables.ToDictionary(t => t.Name, _ => new CursorState(0), StringComparer.Ordinal);
         using (SqliteCommand cmd = c.Cmd("SELECT tbl, cursor FROM _sync_cursors WHERE instance = @i", tx, ("@i", instance)))
         using (SqliteDataReader r = cmd.ExecuteReader())
         {

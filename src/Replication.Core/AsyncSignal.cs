@@ -13,8 +13,8 @@ internal sealed class AsyncSignal
         TaskCompletionSource tcs = Volatile.Read(ref _tcs);
         if (!tcs.Task.IsCompleted)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var delay = Task.Delay(timeout, cts.Token);
+            using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task delay = Task.Delay(timeout, cts.Token);
             await Task.WhenAny(tcs.Task, delay).ConfigureAwait(false);
             cts.Cancel();
             ct.ThrowIfCancellationRequested();

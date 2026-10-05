@@ -30,7 +30,7 @@ public sealed class CursorState
     {
         if (hi <= lo || hi <= Cursor)
             return;
-        var all = Ranges.Append((Lo: Math.Max(lo, Cursor), Hi: hi)).OrderBy(r => r.Lo).ToList();
+        List<(long Lo, long Hi)> all = Ranges.Append((Lo: Math.Max(lo, Cursor), Hi: hi)).OrderBy(r => r.Lo).ToList();
         Ranges.Clear();
         foreach ((long Lo, long Hi) r in all)
         {

@@ -29,7 +29,7 @@ internal sealed class SyncGrpcService(OwnerStore store, SnapshotStore snapshots)
         byte[] buffer = new byte[store.Options.SnapshotChunkBytes];
         await using FileStream f = File.OpenRead(snap.Path);
         f.Position = offset;
-        var hash = ByteString.CopyFrom(snap.Sha256);
+        ByteString hash = ByteString.CopyFrom(snap.Sha256);
         while (true)
         {
             int n = await f.ReadAsync(buffer, context.CancellationToken);

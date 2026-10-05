@@ -26,7 +26,7 @@ public class CursorStateTests
     public void Wire_encoding_round_trips()
     {
         var k = new CursorState(1000, [(1500L, 1600L), (2000L, 2100L)]);
-        var back = CursorState.FromWire(k.ToWire("T"));
+        CursorState back = CursorState.FromWire(k.ToWire("T"));
         Assert.Equal(k.Cursor, back.Cursor);
         Assert.Equal(k.Ranges, back.Ranges);
     }

@@ -43,14 +43,14 @@ internal sealed class ApplyHandler(OwnerStore store)
 
         long CursorOf(string t) => cursors.TryGetValue(t, out long v) ? v : acked;
 
-        var actions = req.Actions.OrderBy(a => a.Seq).ToList();
+        List<Protocol.Action> actions = req.Actions.OrderBy(a => a.Seq).ToList();
         var results = new Dictionary<long, ActionResult>();
         ActionResult Res(Protocol.Action a, ResultStatus s, string reason = "") =>
             results[a.Seq] = new ActionResult { Seq = a.Seq, Status = s, Reason = reason };
 
-        var fresh = actions.Where(a => a.Seq > applied).ToList();
-        var creates = fresh.Where(a => a.Kind == ActionKind.Create).ToDictionary(a => (a.Tbl, PkText(a.Pk)));
-        var deletes = fresh.Where(a => a.Kind == ActionKind.Delete).Select(a => (a.Tbl, PkText(a.Pk))).ToHashSet();
+        List<Protocol.Action> fresh = actions.Where(a => a.Seq > applied).ToList();
+        Dictionary<(string Tbl, string), Protocol.Action> creates = fresh.Where(a => a.Kind == ActionKind.Create).ToDictionary(a => (a.Tbl, PkText(a.Pk)));
+        HashSet<(string Tbl, string)> deletes = fresh.Where(a => a.Kind == ActionKind.Delete).Select(a => (a.Tbl, PkText(a.Pk))).ToHashSet();
 
         foreach (Protocol.Action? a in actions)
         {
@@ -159,7 +159,7 @@ internal sealed class ApplyHandler(OwnerStore store)
 
     private static void Upsert(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, Protocol.Action a, string origin)
     {
-        var cols = a.Columns.Where(t.HasColumn).ToList();
+        List<string> cols = a.Columns.Where(t.HasColumn).ToList();
         string names = string.Concat(cols.Select(x => ", " + Q(x)));
         string pars = string.Concat(cols.Select((_, i) => $", @v{i}"));
         string set = string.Concat(cols.Select(x => $"{Q(x)} = excluded.{Q(x)}, "));
@@ -173,7 +173,7 @@ internal sealed class ApplyHandler(OwnerStore store)
 
     private static void Patch(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, Protocol.Action a, string? origin)
     {
-        var cols = a.Columns.Where(t.HasColumn).ToList();
+        List<string> cols = a.Columns.Where(t.HasColumn).ToList();
         string set = string.Concat(cols.Select((x, i) => $"{Q(x)} = @v{i}, "));
         using SqliteCommand cmd = c.Cmd($"UPDATE {Q(t.Name)} SET {set}SyncOrigin = @o WHERE Id = @id", tx, ("@id", pk), ("@o", origin));
         Bind(cmd, a, cols);
@@ -195,7 +195,7 @@ internal sealed class ApplyHandler(OwnerStore store)
     /// </summary>
     private ActionResult Archive(SqliteConnection c, SqliteTransaction tx, Protocol.Action a)
     {
-        var items = a.Rows.Select(r => (Tbl: r.Tbl, Pk: PkText(r.Pk))).ToList();
+        List<(string Tbl, string Pk)> items = a.Rows.Select(r => (Tbl: r.Tbl, Pk: PkText(r.Pk))).ToList();
         var why = new Dictionary<(string, string), string>();
         foreach ((string Tbl, string Pk) it in items)
         {
@@ -210,7 +210,7 @@ internal sealed class ApplyHandler(OwnerStore store)
             else if (row.Version > a.ExpectedVersion)
                 why[it] = "changed";
         }
-        var set = items.ToHashSet();
+        HashSet<(string Tbl, string Pk)> set = items.ToHashSet();
         for (bool changed = true; changed;)
         {
             changed = false;
@@ -235,7 +235,7 @@ internal sealed class ApplyHandler(OwnerStore store)
                 }
             }
         }
-        var toDelete = items.Where(x => !why.ContainsKey(x)).OrderBy(x => Model.Tables.ToList().FindIndex(t => t.Name == x.Tbl) * -1).ToList();
+        List<(string Tbl, string Pk)> toDelete = items.Where(x => !why.ContainsKey(x)).OrderBy(x => Model.Tables.ToList().FindIndex(t => t.Name == x.Tbl) * -1).ToList();
         int deleted = 0;
         foreach ((string? tbl, string? pk) in toDelete)
             deleted += c.Exec($"DELETE FROM {Q(tbl)} WHERE Id = @id AND SyncVersion <= @v", tx, ("@id", pk), ("@v", a.ExpectedVersion));

@@ -229,7 +229,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 await _linkSignal.WaitAsync(TimeSpan.FromSeconds(1), life);
                 continue;
             }
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(life);
+            using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(life);
             _sessionCts = cts;
             try
             {
@@ -350,7 +350,7 @@ public sealed class SyncAgent : IAsyncDisposable
             Log("Start прийнято: потік пішов, Apply паралельно", SyncLogLevel.Ok);
             _write = Write;
             await HandleAsync(first);
-            using var inner = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using CancellationTokenSource inner = CancellationTokenSource.CreateLinkedTokenSource(ct);
             Task[] tasks = new[]
             {
                 ReadLoopAsync(call, inner.Token),
@@ -551,7 +551,7 @@ public sealed class SyncAgent : IAsyncDisposable
         int size = req.CalculateSize();
         Meter.CountMessage("↑ Apply", size);
         Log($"→ Apply: {string.Join("; ", req.Actions.Select(a => Describe(a, entries)))}");
-        var sw = Stopwatch.StartNew();
+        Stopwatch sw = Stopwatch.StartNew();
         ApplyReply reply;
         try
         {
@@ -596,7 +596,7 @@ public sealed class SyncAgent : IAsyncDisposable
             if (_instance is null)
                 return (null, []);
             using SqliteTransaction tx = _conn.BeginTransaction();
-            var all = ClientStore.Entries(_conn, tx, _instance, "sent IN (0, 1)")
+            List<OutboxEntry> all = ClientStore.Entries(_conn, tx, _instance, "sent IN (0, 1)")
                 .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();
             if (all.Count == 0)
                 return (null, []);
@@ -703,7 +703,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             w = new ReplicaWriter(_store.Model, _instance!);
             using SqliteTransaction tx = _conn.BeginTransaction();
-            var bySeq = sent.ToDictionary(e => e.Seq!.Value);
+            Dictionary<long, OutboxEntry> bySeq = sent.ToDictionary(e => e.Seq!.Value);
             var versions = new List<string>();
             foreach (ActionResult? r in reply.Results)
             {
@@ -796,7 +796,7 @@ public sealed class SyncAgent : IAsyncDisposable
         if (mode == SnapshotMode.Auto)
         {
             double rate = Meter.SampleRate().Down is > 10_000 and var r ? r : Options.AssumedDownBytesPerSecond;
-            var eta = TimeSpan.FromSeconds(sr.SizeBytes / rate);
+            TimeSpan eta = TimeSpan.FromSeconds(sr.SizeBytes / rate);
             mode = eta > Options.SnapshotFileThreshold && _instance is null ? SnapshotMode.EmptyReplica : SnapshotMode.File;
             Log($"знімок ~{sr.SizeBytes / 1024} КБ, за швидкістю ≈ {eta.TotalSeconds:0} с: {(mode == SnapshotMode.File ? "беру файл" : "порожня репліка, дані прийдуть потоком від нових до старих")}");
         }
@@ -948,7 +948,7 @@ public sealed class SyncAgent : IAsyncDisposable
             else
             {
                 // rows with their own actions in the outbox go by key, the rest as one predicate
-                var own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
+                List<string> own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
                 foreach (string id in ids)
                     c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
                 foreach (string? id in own)
@@ -1022,7 +1022,7 @@ public sealed class SyncAgent : IAsyncDisposable
             if (set.Count == 0)
                 return "нічого переносити";
             string archive = SyncColumns.ArchiveOf(_instance);
-            var labels = set.Select(x => ClientStore.Label(_conn, tx, _store.Model[x.Table], x.Pk)).ToList();
+            List<string> labels = set.Select(x => ClientStore.Label(_conn, tx, _store.Model[x.Table], x.Pk)).ToList();
             foreach ((string? table, string? pk) in set)
                 _conn.Exec($"UPDATE {Q(table)} SET InstanceId = @a WHERE Id = @id AND InstanceId = @i", tx, ("@a", archive), ("@id", pk), ("@i", _instance));
             long v;

@@ -116,18 +116,18 @@ public sealed class SyncModel
             if (et.FindAnnotation(ReplicationModelBuilderExtensions.ReplicatedAnnotation)?.Value is not true)
                 continue;
             string tableName = et.GetTableName()!;
-            var store = StoreObjectIdentifier.Table(tableName, et.GetSchema());
+            StoreObjectIdentifier store = StoreObjectIdentifier.Table(tableName, et.GetSchema());
             IKey key = et.FindPrimaryKey() ?? throw new InvalidOperationException($"{tableName}: no primary key");
             if (key.Properties.Count != 1 || key.Properties[0].ClrType != typeof(Guid) || key.Properties[0].GetColumnName(store) != SyncColumns.Key)
                 throw new NotSupportedException($"{tableName}: a replicated table needs a single Guid key column named Id (design 5.1).");
 
-            var columns = et.GetProperties()
+            List<string> columns = et.GetProperties()
                 .Where(p => !p.IsPrimaryKey())
                 .Select(p => p.GetColumnName(store)!)
                 .Where(c => !SyncColumns.All.Contains(c))
                 .ToList();
 
-            var fks = et.GetForeignKeys()
+            List<SyncForeignKey> fks = et.GetForeignKeys()
                 .Where(fk => fk.Properties.Count == 1)
                 .Select(fk => new SyncForeignKey(
                     fk.Properties[0].GetColumnName(store)!,
@@ -141,7 +141,7 @@ public sealed class SyncModel
         // parents first, so FK-ordered work (snapshot copy, archive) has a stable order
         var ordered = new List<SyncTable>();
         var visiting = new HashSet<string>();
-        var byName = tables.ToDictionary(t => t.Name);
+        Dictionary<string, SyncTable> byName = tables.ToDictionary(t => t.Name);
         void Visit(SyncTable t)
         {
             if (ordered.Contains(t) || !visiting.Add(t.Name))
