@@ -83,7 +83,7 @@ select{border:1px solid var(--line);background:var(--surface);border-radius:7px;
 .steps .go{margin-top:6px}
 
 .grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
-@media (max-width:1699px){.grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.grid .owner{grid-column:1/-1}}
+@media (max-width:1899px){.grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.grid .owner{grid-column:1/-1}}
 @media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;min-width:0;display:flex;flex-direction:column}
 .panel>.hd{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;border-top:4px solid var(--who);border-radius:10px 10px 0 0}
@@ -279,25 +279,26 @@ const oCat=n=>byName(S.owner.rows.Category,n);
 const cItem=(c,n)=>byName(c.replica.rows.Item,n);
 
 // ---------- власник: запис через "тригери" ----------
-function oInsert(tbl,row){const o=S.owner;row={...row};row.SyncVersion=++o.version;row.SyncBase=0;row.SyncMask=[...COLS[tbl]];o.rows[tbl][row.Id]=row;delete o.tomb[tbl+'|'+row.Id];o.flash[tbl+'|'+row.Id]=S.T;if(o.pages!=null){if(o.free>0)o.free--;else o.pages++}}
+function oInsert(tbl,row,origin=null){const o=S.owner;row={...row};row.SyncVersion=++o.version;row.SyncBase=0;row.SyncMask=[...COLS[tbl]];row.SyncOrigin=origin;o.rows[tbl][row.Id]=row;delete o.tomb[tbl+'|'+row.Id];o.flash[tbl+'|'+row.Id]=S.T;if(o.pages!=null){if(o.free>0)o.free--;else o.pages++}}
 // floor таблиці: мінімальний курсор серед активних клієнтів (на зв'язку в межах вікна активності), без активних це голова
 const ACTIVE_DAYS=1; // у дизайні 24 год
 function isActive(v){return v.cur&&S.owner.day-v.last<ACTIVE_DAYS}
 function floorOf(tbl){const o=S.owner,a=Object.values(o.clients).filter(isActive);return a.length?Math.min(...a.map(v=>v.cur[tbl])):o.version}
 const isFull=(tbl,r)=>r.SyncMask.length>=COLS[tbl].length;
 const maskText=(tbl,r)=>isFull(tbl,r)?'усі':r.SyncMask.join(', ')||'—';
-function oUpdate(tbl,id,patch){const o=S.owner,r=o.rows[tbl][id];if(!r)return false;
+function oUpdate(tbl,id,patch,origin=null){const o=S.owner,r=o.rows[tbl][id];if(!r)return false;r.SyncOrigin=origin; // запис автоматики скидає origin у NULL
+ 
   const changed=COLS[tbl].filter(k=>k in patch&&patch[k]!==r[k]);const f=floorOf(tbl);
   if(f>=r.SyncVersion){r.SyncBase=r.SyncVersion;r.SyncMask=changed}else r.SyncMask=COLS[tbl].filter(k=>r.SyncMask.includes(k)||changed.includes(k));
   Object.assign(r,patch);r.SyncVersion=++o.version;o.flash[tbl+'|'+id]=S.T;return true}
-function oUpsert(tbl,row){if(S.owner.rows[tbl][row.Id]){const p={...row};delete p.Id;delete p.SyncVersion;oUpdate(tbl,row.Id,p)}else{const r={...row};delete r.SyncVersion;oInsert(tbl,r)}}
-function oDelete(tbl,id,depth=0){
+function oUpsert(tbl,row,origin=null){if(S.owner.rows[tbl][row.Id]){const p={...row};delete p.Id;delete p.SyncVersion;oUpdate(tbl,row.Id,p,origin)}else{const r={...row};delete r.SyncVersion;oInsert(tbl,r,origin)}}
+function oDelete(tbl,id,depth=0,origin=null){
   const o=S.owner,r=o.rows[tbl][id];if(!r)return [];
   const gone=[r.name||r.text||id];
   for(const [ct,fk] of Object.entries(FKS))for(const [col,pt] of Object.entries(fk))if(pt===tbl)
-    for(const ch of Object.values(o.rows[ct]))if(ch[col]===id)gone.push(...oDelete(ct,ch.Id,depth+1));
+    for(const ch of Object.values(o.rows[ct]))if(ch[col]===id)gone.push(...oDelete(ct,ch.Id,depth+1,origin));
   delete o.rows[tbl][id];if(o.pages!=null)o.free++;
-  const v=++o.version;o.tomb[tbl+'|'+id]={tbl,pk:id,version:v,deletedAt:o.day,label:r.name||r.text||''};
+  const v=++o.version;o.tomb[tbl+'|'+id]={tbl,pk:id,version:v,deletedAt:o.day,label:r.name||r.text||'',origin};
   return gone;
 }
 // автоматика
@@ -406,15 +407,15 @@ function addRange(k,lo,hi){if(hi<=lo)return;const r=[...k.ranges,[lo,hi]].sort((
 function gapsText(k,H){const g=gapsOf(k,H);return g.length?g.map(([a,b])=>`(${a},${b}]`).join(' '):'нема'}
 function takeExtra(sub){const x=sub.extra;sub.extra=[];return x}
 function applyExtra(c,p){for(const [t,a,b] of p.extra||[])addRange(c.replica.cursors[t],a,b)}
-function plainRow(r){const x=clone(r);delete x.SyncBase;delete x.SyncMask;return x}
+function plainRow(r){const x=clone(r);delete x.SyncBase;delete x.SyncMask;delete x.SyncOrigin;return x}
 // повна маска або курсор клієнта нижчий за SyncBase: повний рядок; інакше тільки колонки з маски
 function wireRow(tbl,r,cur){if(isFull(tbl,r)||cur<r.SyncBase)return plainRow(r);
   const x={Id:r.Id,SyncVersion:r.SyncVersion,_mask:[...r.SyncMask]};for(const k of r.SyncMask)x[k]=r[k];return x}
 const rowsText=rows=>rows.map(r=>r._mask?`v${r.SyncVersion} [${r._mask.join(', ')}]`:`v${r.SyncVersion} повний`).join(', ');
 function rangeItems(tbl,lo,hi){ // lo < v < hi
   const o=S.owner,out=[];
-  for(const r of Object.values(o.rows[tbl]))if(r.SyncVersion>lo&&r.SyncVersion<hi)out.push({v:r.SyncVersion,row:clone(r)});
-  for(const t of Object.values(o.tomb))if(t.tbl===tbl&&t.version>lo&&t.version<hi)out.push({v:t.version,tomb:{pk:t.pk,version:t.version}});
+  for(const r of Object.values(o.rows[tbl]))if(r.SyncVersion>lo&&r.SyncVersion<hi)out.push({v:r.SyncVersion,row:clone(r),origin:r.SyncOrigin});
+  for(const t of Object.values(o.tomb))if(t.tbl===tbl&&t.version>lo&&t.version<hi)out.push({v:t.version,tomb:{pk:t.pk,version:t.version},origin:t.origin});
   return out;
 }
 function remaining(sub){const H=S.owner.version;let n=0;for(const t of TABLES)for(const [a,b] of gapsOf(sub.mirror[t],H))n+=rangeItems(t,a,b+1).length;return n}
@@ -448,17 +449,20 @@ function subStep(cid){const sub=S.owner.subs[cid];if(!sub)return;
         const cur0=k.cursor; // повний до версії cur0, саме він вирішує, чи вистачить часткового рядка
         const covers=[[lo,gb]];for(const [a,b] of gs)if(b>gb)covers.push([a,b]); // вище за пачку: хвіст і порожні прогалини
         for(const [a,b] of covers)addRange(k,a,b);
-        const sent=[...tailItems,...items];
+        const all2=[...tailItems,...items];const own=all2.filter(x=>x.origin===cid);const sent=all2.filter(x=>x.origin!==cid); // власні зміни клієнта не шлються, межі проміжку ті самі
         const rows=sent.filter(x=>x.row).map(x=>wireRow(t,x.row,cur0)),tombs=sent.filter(x=>x.tomb).map(x=>x.tomb);
         send(sub.cid,'down','Batch',{phase:'catchup',tbl:t,covers,rows,tombs,remaining:remaining(sub),extra:takeExtra(sub)},
-          `${t}, ${rows.length?rowsText(rows):'версії '+items.map(x=>x.v).join(', ')}${tail?` + свіжий хвіст ${tailItems.map(x=>x.v).join(', ')} у тому ж повідомленні`:''}${tombs.length?` (tombstones: ${tombs.length})`:''}, закриває ${covers.map(([a,b])=>`(${a},${b}]`).join(' ')}`);
+          `${t}, ${rows.length?rowsText(rows):'версії '+items.map(x=>x.v).join(', ')}${tail?` + свіжий хвіст ${tailItems.map(x=>x.v).join(', ')} у тому ж повідомленні`:''}${tombs.length?` (tombstones: ${tombs.length})`:''}${own.length?`; пропущено як власні зміни ${WHO[cid]}: ${own.map(x=>'v'+x.v).join(', ')}`:''}, закриває ${covers.map(([a,b])=>`(${a},${b}]`).join(' ')}`);
         return}
       sub.phase='online';sub.sentUpTo=H;send(sub.cid,'down','Progress',{remaining:0,done:true,extra:takeExtra(sub)},'досинхронізацію завершено');return
     }else{
       let all=[];for(const t of TABLES)for(const x of rangeItems(t,sub.sentUpTo,Infinity))all.push({...x,tbl:t});
       if(!all.length)return;
-      const cur0=sub.sentUpTo;all=all.sort((a,b)=>a.v-b.v).slice(0,NB).map(x=>x.row?{...x,row:wireRow(x.tbl,x.row,cur0)}:x);sub.sentUpTo=all[all.length-1].v;
-      send(sub.cid,'down','Batch',{phase:'online',upTo:sub.sentUpTo,entries:all},`онлайн, ${all.map(x=>x.tbl+' v'+x.v+(x.tomb?' ✕':x.row._mask?' ['+x.row._mask.join(', ')+']':' повний')).join(', ')}; Head(${sub.sentUpTo}): курсори таблиць без відрізків піднімаються до ${sub.sentUpTo}`);
+      const cur0=sub.sentUpTo;all=all.sort((a,b)=>a.v-b.v).slice(0,NB);sub.sentUpTo=all[all.length-1].v;
+      const own=all.filter(x=>x.origin===cid);all=all.filter(x=>x.origin!==cid).map(x=>x.row?{...x,row:wireRow(x.tbl,x.row,cur0)}:x);
+      const ownTxt=own.length?`пропущено як власні зміни ${WHO[cid]}: ${own.map(x=>x.tbl+' v'+x.v+(x.row?' «'+(x.row.name||x.row.text)+'»':' ✕')).join(', ')}`:'';
+      send(sub.cid,'down','Batch',{phase:'online',upTo:sub.sentUpTo,entries:all},all.length?`онлайн, ${all.map(x=>x.tbl+' v'+x.v+(x.tomb?' ✕':x.row._mask?' ['+x.row._mask.join(', ')+']':' повний')).join(', ')}${ownTxt?'; '+ownTxt:''}; Head(${sub.sentUpTo}): курсори таблиць без відрізків піднімаються до ${sub.sentUpTo}`
+        :`Head(${sub.sentUpTo}), рядків нема: ${ownTxt}; курсор проходить через ці версії`);
     }
 }
 function ownerApply(cid,actions){
@@ -466,7 +470,9 @@ function ownerApply(cid,actions){
   const acts=actions.slice().sort((a,b)=>a.seq-b.seq);const st={};const from=cl.applied;
   const creates={};for(const a of acts)if(a.kind==='create'&&a.seq>cl.applied)creates[a.tbl+'|'+a.pk]=a;
   for(const a of acts){
-    if(a.seq<=cl.applied){st[a.seq]={status:'Skipped',reason:'вже застосовано (seq ≤ applied_seq)'};continue}
+    if(a.seq<=cl.applied){const r=a.pk&&o.rows[a.tbl]?.[a.pk],tb=a.pk&&o.tomb[a.tbl+'|'+a.pk];
+      const version=r&&r.SyncOrigin===cid?r.SyncVersion:(!r&&tb&&tb.origin===cid?tb.version:undefined); // поточна версія віддається, тільки якщо вона досі його
+      st[a.seq]={status:'Skipped',reason:'вже застосовано (seq ≤ applied_seq)'+(version==null&&a.pk?', version не повертаю: поточна версія не його':''),version};continue}
     if(a.kind==='create'&&o.tomb[a.tbl+'|'+a.pk])st[a.seq]={status:'Rejected',reason:'запис видалено'};
     if(a.kind==='patch'&&!o.rows[a.tbl][a.pk]&&!creates[a.tbl+'|'+a.pk])st[a.seq]={status:'Ignored',reason:'запис видалено'};
   }
@@ -485,7 +491,7 @@ function ownerApply(cid,actions){
   // масове видалення за умовою: DELETE ... WHERE SyncVersion <= V AND <умова>
   for(const a of acts.filter(a=>a.kind==='pdelete'&&!st[a.seq])){
     const m=Object.values(o.rows[a.tbl]).filter(r=>condMatch(a.cond,r));const del=m.filter(r=>r.SyncVersion<=a.V),kept=m.filter(r=>r.SyncVersion>a.V);
-    del.forEach(r=>{if(o.rows[a.tbl][r.Id])oDelete(a.tbl,r.Id)});
+    del.forEach(r=>{if(o.rows[a.tbl][r.Id])oDelete(a.tbl,r.Id,0,cid)}); // клієнт ці рядки вже прибрав сам
     st[a.seq]={status:'Applied',deleted:del.length,changed:kept.map(r=>[a.tbl,r.Id]),changedNames:kept.map(r=>r.name),
       reason:kept.length?`Rejected: changed ${kept.map(r=>'«'+r.name+'» v'+r.SyncVersion).join(', ')} (новіші за V ${a.V})`:''}}
   let ch=true; // явна перевірка FK з урахуванням створень у цій же пачці
@@ -493,13 +499,20 @@ function ownerApply(cid,actions){
     for(const [col,pt] of Object.entries(FKS[a.tbl]||{})){if(!(col in a.values))continue;const pid=a.values[col];
       const inBatch=creates[pt+'|'+pid];const ok=(o.rows[pt][pid]&&!acts.some(d=>d.kind==='delete'&&d.tbl===pt&&d.pk===pid&&!st[d.seq]))||(inBatch&&!st[inBatch.seq]);
       if(!ok){st[a.seq]={status:'Rejected',reason:'батьківський запис видалено'};ch=true}}}}
+  // SyncOrigin = клієнт, якщо в нього вже був попередній стан рядка (курсор ≥ попередньої версії), інакше NULL і він отримає рядок назад
+  const curOf=t=>cl.cur?.[t]??cl.acked;
   for(const a of acts){if(st[a.seq])continue;st[a.seq]={status:'Applied'};
-    if(a.kind==='create')oUpsert(a.tbl,{Id:a.pk,...a.values});
-    else if(a.kind==='patch'){if(o.rows[a.tbl][a.pk])oUpdate(a.tbl,a.pk,a.values)}
-    else oDelete(a.tbl,a.pk);}
+    const prev=o.rows[a.tbl]?.[a.pk];const prevV=prev?.SyncVersion;const org=!prev||prevV<=curOf(a.tbl)?cid:null;
+    if(a.kind==='create')oUpsert(a.tbl,{Id:a.pk,...a.values},org);
+    else if(a.kind==='patch'){if(prev)oUpdate(a.tbl,a.pk,a.values,org)}
+    else oDelete(a.tbl,a.pk,0,cid);
+    const r=o.rows[a.tbl][a.pk];
+    if(a.kind==='delete')st[a.seq].version=o.tomb[a.tbl+'|'+a.pk]?.version;
+    else if(r&&r.SyncOrigin===cid)st[a.seq].version=r.SyncVersion;
+    else if(r){st[a.seq].reason=`курсор ${curOf(a.tbl)} < попередньої версії v${prevV}: SyncOrigin = NULL, рядок повернеться потоком`}}
   cl.applied=Math.max(cl.applied,...acts.map(a=>a.seq));
   const results=acts.map(a=>({seq:a.seq,tbl:a.tbl,pk:a.pk,kind:a.kind,...st[a.seq]}));
-  log('owner',`Apply від ${WHO[cid]}: ${results.map(r=>`#${r.seq} ${KIND[r.kind]} ${r.status}${r.deleted!=null?`, видалено ${r.deleted}`:''}${r.reason?' ('+r.reason+')':''}`).join('; ')}. applied_seq ${from} → ${cl.applied}, version ${o.version}`,
+  log('owner',`Apply від ${WHO[cid]}: ${results.map(r=>`#${r.seq} ${KIND[r.kind]} ${r.status}${r.version!=null?` → v${r.version}, SyncOrigin = ${WHO[cid]}`:''}${r.deleted!=null?`, видалено ${r.deleted}`:''}${r.reason?' ('+r.reason+')':''}`).join('; ')}. applied_seq ${from} → ${cl.applied}, version ${o.version}`,
     results.some(r=>r.status==='Rejected'||r.status==='Ignored'||r.changed?.length||r.children?.length)?'warn':'');
   const c=S.clients[cid];
   if(c.loseNextReply){c.loseNextReply=false;log('owner','✕ відповідь ApplyReply загубилась у мережі','bad');return}
@@ -605,6 +618,9 @@ function clientRecv(m){
         note(c,`не збережено: ${gone.join(', ')} (${r.reason})`)}
       else if(r.status==='Ignored'){const e=c.outbox.find(x=>x.seq===r.seq);if(e)obRemove(c,e);note(c,`правку запису ${rowLabel(c,r.tbl,r.pk)} втрачено: його видалено на інстансі`)}
     }
+    // UPDATE T SET SyncVersion = version WHERE Id = ? AND SyncVersion < version, у тій же транзакції, що й видалення з черги
+    const vs=[];for(const r of p.results)if(r.version!=null&&(r.kind==='create'||r.kind==='patch')){const loc=c.replica.rows[r.tbl]?.[r.pk];if(loc&&loc.SyncVersion<r.version){loc.SyncVersion=r.version;vs.push(`${rowLabel(c,r.tbl,r.pk)} v${r.version}`)}}
+    if(vs.length)log(c.id,`версії з ApplyReply: ${vs.join(', ')}; відлуння цих змін не прийде`);
     const before=c.outbox.length;
     c.outbox=c.outbox.filter(e=>!(e.sent&&e.seq<=p.applied_up_to_seq));
     log(c.id,`ApplyReply: з черги прибрано ${before-c.outbox.length} рядк. (seq ≤ ${p.applied_up_to_seq}), лишилось ${c.outbox.length}`,'ok');
@@ -817,6 +833,12 @@ const SCEN=[
   {t:'Минає доба: Клієнт 2 випадає з вікна активності',do(){dayPass(1)},x:'Клієнт 2 не був на зв\'язку довше за вікно активності (у дизайні 24 год), тому floor рахується тільки за курсором Клієнта 1 і піднімається до нього.'},
   {t:'Автоматика перейменовує «Степлер»',do(){const r=oItem('Степлер');oUpdate('Item',r.Id,{name:'Степлер Pro'});log('owner',`автоматика: «Степлер».name = «Степлер Pro», SyncVersion ${r.SyncVersion}, SyncBase ${r.SyncBase}, маска ${maskText('Item',r)}`)},x:'Тепер floor дорівнює курсору Клієнта 1, тому база зсувається вище за курсор Клієнта 2, а маска = name. Клієнт 1 отримує тільки назву.'},
   {t:'Клієнт 2 повертається',do(){setLink('c2',true)},x:'Курсор Клієнта 2 нижчий за SyncBase «Степлера»: стану рядка на базу в нього нема, тому досинхронізація везе рядок цілком. Через Ack власник отримує його курсори, Клієнт 2 знову активний і стримує floor.'}]},
+ {id:'echo',title:'Без відлуння',intro:'Власник не повертає клієнту його власні зміни: рядок пам\'ятає SyncOrigin, а нову версію клієнт дізнається з ApplyReply. Виняток: правка поверх чужої зміни, якої клієнт ще не бачив.',
+  setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
+  {t:'Клієнт 1 змінює ціну «Степлера»',do(){const c=C('c1');cEdit(c,'Item',cItem(c,'Степлер').Id,'price',155)},x:'Попередню версію рядка Клієнт 1 бачив (його курсор ≥ версії), тому Apply ставить SyncOrigin = Клієнт 1. ApplyReply повертає нову версію, і клієнт записує її в репліку. Клієнт 2 отримує зміну, а для Клієнта 1 рядок пропущено: приходить тільки Head, і курсор проходить через цю версію.'},
+  {t:'Клієнт 1 без зв\'язку, Клієнт 2 міняє статус «Степлера»',do(){setLink('c1',false);const c=C('c2');cEdit(c,'Item',cItem(c,'Степлер').Id,'status','архів')},x:'Тепер SyncOrigin = Клієнт 2. Клієнт 1 цієї зміни не бачив.'},
+  {t:'Клієнт 1 офлайн перейменовує «Степлер» і повертається',do(){const c=C('c1');cEdit(c,'Item',cItem(c,'Степлер').Id,'name','Степлер Max');later(3,()=>setLink('c1',true))},x:'Курсор Клієнта 1 на власнику нижчий за версію зі зміною статусу, тому Apply лишає SyncOrigin = NULL і version не повертає. Нова версія містить статус від Клієнта 2, тож Клієнт 1 отримує рядок назад і бачить і свою назву, і чужий статус.'},
+  {t:'Клієнт 2 видаляє «Скотч»',do(){const c=C('c2');cDelete(c,'Item',cItem(c,'Скотч').Id)},x:'Tombstone має origin = Клієнт 2: Клієнт 1 отримує видалення, а Клієнту 2, який уже прибрав рядок сам, воно не повертається.'}]},
  {id:'schema',title:'Несумісна версія',intro:'Перше повідомлення Start несе версію схеми. При розбіжності власник відповідає SchemaMismatch і закриває потік, синк зупиняється, а черга зберігається.',
   setup(){syncNow(C('c1'));syncNow(C('c2'))},steps:[
   {t:'Клієнт 1 офлайн змінює ціну і оновлюється до нової схеми',do(){setLink('c1',false);const c=C('c1');cEdit(c,'Item',cItem(c,'Скотч').Id,'price',55);c.newSchema=true},x:'Дія в черзі.'},
@@ -843,8 +865,8 @@ function renderOwner(){
   const o=S.owner,t=o.tab;
   const rows=Object.values(o.rows[t]).sort((a,b)=>t==='Log'?b.SyncVersion-a.SyncVersion:a.Id<b.Id?-1:1).slice(0,t==='Log'?14:99);
   let tb;
-  if(t==='Item')tb=`<tr><th>Назва</th><th>Ціна</th><th>Статус</th><th>Категорія</th><th>SyncVersion</th><th>SyncBase</th><th>SyncMask</th><th>Автоматика</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Item|'+r.Id)?'fl':''}">
-    <td>${esc(r.name)}</td><td class="num">${r.price}</td><td>${r.status}</td><td>${catName(o.rows,r.categoryId)}</td><td class="sv">${r.SyncVersion}</td><td class="sv">${r.SyncBase}</td><td class="mono">${maskText('Item',r)}</td>
+  if(t==='Item')tb=`<tr><th>Назва</th><th>Ціна</th><th>Статус</th><th>Категорія</th><th>SyncVersion</th><th>SyncBase</th><th>SyncMask</th><th>SyncOrigin</th><th>Автоматика</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Item|'+r.Id)?'fl':''}">
+    <td>${esc(r.name)}</td><td class="num">${r.price}</td><td>${r.status}</td><td>${catName(o.rows,r.categoryId)}</td><td class="sv">${r.SyncVersion}</td><td class="sv">${r.SyncBase}</td><td class="mono">${maskText('Item',r)}</td><td class="small">${r.SyncOrigin?WHO[r.SyncOrigin]:'—'}</td>
     <td><div class="row" style="flex-wrap:nowrap"><button class="sm" data-act="oPrice" data-id="${r.Id}">ціна</button><button class="sm" data-act="oStatus" data-id="${r.Id}">статус</button><button class="sm" data-act="oDel" data-t="Item" data-id="${r.Id}" aria-label="Видалити">✕</button></div></td></tr>`).join('');
   else if(t==='Category')tb=`<tr><th>Назва</th><th>Id</th><th>SyncVersion</th><th>Автоматика</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Category|'+r.Id)?'fl':''}"><td>${esc(r.name)}</td><td class="id">${r.Id}</td><td class="sv">${r.SyncVersion}</td><td><button class="sm" data-act="oDel" data-t="Category" data-id="${r.Id}">видалити з каскадом</button></td></tr>`).join('');
   else tb=`<tr><th>Запис</th><th>SyncVersion</th></tr>`+rows.map(r=>`<tr class="${fl(o.flash,'Log|'+r.Id)?'fl':''}"><td>${esc(r.text)}</td><td class="sv">${r.SyncVersion}</td></tr>`).join('');
