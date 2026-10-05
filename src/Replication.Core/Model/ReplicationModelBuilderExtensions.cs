@@ -20,12 +20,14 @@ public static class ReplicationModelBuilderExtensions
     /// </remarks>
     public static ModelBuilder UseReplication(this ModelBuilder modelBuilder, Func<Type, bool>? include = null)
     {
-        foreach (var et in modelBuilder.Model.GetEntityTypes().ToList())
+        foreach (IMutableEntityType? et in modelBuilder.Model.GetEntityTypes().ToList())
         {
-            if (et.IsOwned() || et.ClrType == typeof(Dictionary<string, object>)) continue;
-            if (include is not null && !include(et.ClrType)) continue;
+            if (et.IsOwned() || et.ClrType == typeof(Dictionary<string, object>))
+                continue;
+            if (include is not null && !include(et.ClrType))
+                continue;
 
-            var b = modelBuilder.Entity(et.ClrType);
+            EntityTypeBuilder b = modelBuilder.Entity(et.ClrType);
             et.SetAnnotation(ReplicatedAnnotation, true);
 
             ServiceColumn(b.Property<long>(SyncColumns.Version).HasDefaultValue(0L));
@@ -37,7 +39,7 @@ public static class ReplicationModelBuilderExtensions
             b.HasIndex(SyncColumns.Version);
             b.HasIndex(SyncColumns.InstanceId);
 
-            var table = et.GetTableName()!;
+            string table = et.GetTableName()!;
             b.ToTable(table, t =>
             {
                 t.HasTrigger($"_sync_{table}_ins");

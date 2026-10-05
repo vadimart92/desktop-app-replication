@@ -90,7 +90,8 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     partial void OnSelectedItemChanged(RowView? value)
     {
-        if (value is null || value.Mark == "архів") return;
+        if (value is null || value.Mark == "архів")
+            return;
         EditName = value.Label;
         EditPrice = value.Price?.ToString() ?? "";
         EditStatus = value.Status ?? "новий";
@@ -100,11 +101,11 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     {
         try
         {
-            var s = Node.Agent.GetStatus();
+            AgentStatus s = Node.Agent.GetStatus();
             (StatusText, StatusBrush) = Describe(s);
             PendingText = s.Pending == 0 ? "усе відправлено" : $"{s.Pending} змін очікують відправки{(s.InFlight > 0 ? $", {s.InFlight} у дорозі" : "")}{(s.PendingDeletes > 0 ? $"; видалень: {s.PendingDeletes}" : "")}";
-            var m = Node.Agent.Meter;
-            var (up, down) = m.SampleRate();
+            WireMeter m = Node.Agent.Meter;
+            (double up, double down) = m.SampleRate();
             BytesUp = WireMeter.Format(m.BytesUp);
             BytesDown = WireMeter.Format(m.BytesDown);
             RateUp = up > 0 ? $"{WireMeter.Format(up)}/с" : "";
@@ -129,7 +130,8 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     private static (string, IBrush) Describe(AgentStatus s)
     {
-        if (!s.LinkEnabled) return (s.OfflineSince is { } t ? $"Нема зв'язку з {t:HH:mm:ss}" : "Нема зв'язку", Brushes.IndianRed);
+        if (!s.LinkEnabled)
+            return (s.OfflineSince is { } t ? $"Нема зв'язку з {t:HH:mm:ss}" : "Нема зв'язку", Brushes.IndianRed);
         return s.State switch
         {
             AgentState.SchemaMismatch => ("Оновіть додаток на інстансі або клієнті", Brushes.IndianRed),
@@ -145,8 +147,8 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     private static string Describe(OutboxEntry e)
     {
-        var state = e.Sent switch { 1 => "в дорозі", 2 => $"підтверджено, чекає курсор ≥ {e.ExpectedVersion}", _ => "чекає" };
-        var what = e.Kind switch
+        string state = e.Sent switch { 1 => "в дорозі", 2 => $"підтверджено, чекає курсор ≥ {e.ExpectedVersion}", _ => "чекає" };
+        string what = e.Kind switch
         {
             OutboxKind.Archive => $"архів {ArchiveCount(e)} записів, SyncVersion ≤ {e.ExpectedVersion}",
             OutboxKind.PredicateDelete => $"видалення де {Predicate.Parse(e.Predicate)}, SyncVersion ≤ {e.ExpectedVersion}",
@@ -172,7 +174,7 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private Task Save() => Run(() => SelectedItem is { Mark: not "архів" } r && long.TryParse(EditPrice, out var p)
+    private Task Save() => Run(() => SelectedItem is { Mark: not "архів" } r && long.TryParse(EditPrice, out long p)
         ? Node.UpdateItemAsync(Guid.Parse(r.Id), EditName, p, EditStatus)
         : Task.CompletedTask);
 

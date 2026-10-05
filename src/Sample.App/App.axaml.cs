@@ -14,7 +14,7 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var o = Program.Options;
+            StartOptions o = Program.Options;
             desktop.MainWindow = o.Mode switch
             {
                 AppMode.Owner => new OwnerWindow { DataContext = new OwnerWindowViewModel(o) },

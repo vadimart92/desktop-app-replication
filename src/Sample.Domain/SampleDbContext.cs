@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Replication.Model;
 
@@ -32,7 +33,7 @@ public class SampleDbContext(DbContextOptions<SampleDbContext> options) : DbCont
 
     public static SampleDbContext Open(string path, params IInterceptor[] interceptors)
     {
-        var options = new DbContextOptionsBuilder<SampleDbContext>()
+        DbContextOptions<SampleDbContext> options = new DbContextOptionsBuilder<SampleDbContext>()
             .UseSqlite($"Data Source={path};Pooling=True;Default Timeout=30")
             .AddInterceptors([new StampInterceptor(), .. interceptors])
             .Options;
@@ -57,12 +58,15 @@ public sealed class StampInterceptor : SaveChangesInterceptor
 
     private static void Stamp(DbContext? ctx)
     {
-        if (ctx is null) return;
-        var now = DateTime.UtcNow;
-        foreach (var e in ctx.ChangeTracker.Entries<BaseEntity>())
+        if (ctx is null)
+            return;
+        DateTime now = DateTime.UtcNow;
+        foreach (EntityEntry<BaseEntity> e in ctx.ChangeTracker.Entries<BaseEntity>())
         {
-            if (e.State == EntityState.Added) e.Entity.CreatedOn = e.Entity.ModifiedOn = now;
-            else if (e.State == EntityState.Modified) e.Entity.ModifiedOn = now;
+            if (e.State == EntityState.Added)
+                e.Entity.CreatedOn = e.Entity.ModifiedOn = now;
+            else if (e.State == EntityState.Modified)
+                e.Entity.ModifiedOn = now;
         }
     }
 }

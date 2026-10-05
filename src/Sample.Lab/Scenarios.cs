@@ -19,7 +19,8 @@ public static class Scenarios
 {
     private static void Check(bool ok, string what)
     {
-        if (!ok) throw new ScenarioCheckException(what);
+        if (!ok)
+            throw new ScenarioCheckException(what);
     }
 
     private static async Task BothSynced(Lab l)
@@ -31,7 +32,7 @@ public static class Scenarios
     private static void Gone(Lab l, string name)
     {
         Check(!Inspect.OwnerHas(l.Owner, name), $"«{name}» лишився на власнику");
-        foreach (var c in l.Clients.Where(c => c.Link))
+        foreach (ClientNode? c in l.Clients.Where(c => c.Link))
             Check(!Inspect.ClientHas(c, name), $"«{name}» лишився в репліці {c.Label}");
     }
 
@@ -53,9 +54,8 @@ public static class Scenarios
                 new("Чотири правки «Степлера»", "У _sync_outbox один рядок: патч з колонками Price, Name і ModifiedOn. Значень у черзі нема.",
                     async l =>
                     {
-                        foreach (var p in new long[] { 130, 140, 150 }) await l.C1.SetPriceAsync("Степлер", p);
-                        await l.C1.RenameAsync("Степлер", "Степлер №10");
-                    }),
+                        foreach (long p in new long[] { 130, 140, 150 }) await l.C1.SetPriceAsync("Степлер", p);
+                        await l.C1.RenameAsync("Степлер", "Степлер №10"); }),
                 new("Увімкнути зв'язок", "Перше повідомлення Start несе схему, instance_id і курсори, власник одразу відповідає першою пачкою, і клієнт паралельно починає Apply. Apply везе одну дію з останніми значеннями: 150 і «Степлер №10». Клієнт 2 отримує зміну потоком.",
                     l => { l.C1.Link = true; return Task.CompletedTask; }),
             ],
@@ -182,8 +182,7 @@ public static class Scenarios
                         l.C2.Link = true;
                         l.When(() => l.C2.Agent.CursorOf("Item").Ranges.Count > 0,
                             () => { l.C2.Link = false; return Task.CompletedTask; });
-                        return Task.CompletedTask;
-                    }),
+                        return Task.CompletedTask; }),
                 new("Автоматика змінює ще два товари", "Нові версії більші за голову, яку бачив власник.",
                     async l => { await l.Owner.SetPriceAsync("Степлер", 135); await l.Owner.SetStatusAsync("Палета", "архів"); }),
                 new("Увімкнути зв'язок знову", "Start передає курсор і відрізки. Власник спершу шле нові зміни з верхньої прогалини, потім продовжує ту саму прогалину під відрізком. Уже отримане повторно не їде.",
@@ -205,9 +204,8 @@ public static class Scenarios
                     {
                         l.Owner.Store.Options.Faults.DelayStream(l.C2.Replication.ClientId, TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(16));
                         l.C2.Link = true;
-                        for (var i = 1; i <= 25; i++) l.Later(TimeSpan.FromMilliseconds(400 * i), () => l.Owner.FlowRoundAsync(4));
-                        return Task.CompletedTask;
-                    }),
+                        for (int i = 1; i <= 25; i++) l.Later(TimeSpan.FromMilliseconds(400 * i), () => l.Owner.FlowRoundAsync(4));
+                        return Task.CompletedTask; }),
                 new("Обірвати зв'язок посеред досинхронізації", "Потік на власнику триває. Клієнт зберіг курсор і всі відрізки в тій самій транзакції, що й рядки.",
                     l => { l.C2.Link = false; return Task.CompletedTask; }),
                 new("Відновити зв'язок", "Start передає курсор і відрізки. Власник продовжує з верхньої прогалини, нічого з уже отриманого не їде вдруге. Коли потік зупиниться, пачки дотягнуть прогалини донизу, відрізки зіллються з курсором, і прийде TableSynced.",
@@ -332,7 +330,7 @@ public static class Scenarios
             ],
             l =>
             {
-                foreach (var n in new[] { "Старий принтер", "Факс", "Каталог 2019" })
+                foreach (string? n in new[] { "Старий принтер", "Факс", "Каталог 2019" })
                 {
                     Gone(l, n);
                     Check(Inspect.ClientHas(l.C1, n, archive: true), $"«{n}» нема в архіві Клієнта 1");
@@ -374,8 +372,7 @@ public static class Scenarios
                     async l =>
                     {
                         await l.C1.RenameAsync("Степлер", "Степлер Max");
-                        l.Later(TimeSpan.FromSeconds(1), () => { l.C1.Link = true; return Task.CompletedTask; });
-                    }),
+                        l.Later(TimeSpan.FromSeconds(1), () => { l.C1.Link = true; return Task.CompletedTask; }); }),
                 new("Клієнт 2 видаляє «Скотч»", "Tombstone має origin = Клієнт 2: Клієнт 1 отримує видалення, а Клієнту 2, який уже прибрав рядок сам, воно не повертається.",
                     l => l.C2.DeleteItemAsync("Скотч")),
             ],
@@ -403,16 +400,14 @@ public static class Scenarios
                         l.C1.Link = false;
                         await l.C1.DeleteItemAsync("Скотч");
                         await l.C2.RenameAsync("Скотч", "Скотч широкий");
-                        l.Later(TimeSpan.FromSeconds(1.5), () => { l.C1.Link = true; return Task.CompletedTask; });
-                    }),
+                        l.Later(TimeSpan.FromSeconds(1.5), () => { l.C1.Link = true; return Task.CompletedTask; }); }),
                 new("Клієнт 2 офлайн змінює «Маркери», Клієнт 1 їх видаляє", "Тут tombstone доходить раніше за Apply: досинхронізація йде до першої відправки черги. Tombstone прибирає рядок і правку з черги, користувач бачить повідомлення.",
                     async l =>
                     {
                         l.C2.Link = false;
                         await l.C2.SetPriceAsync("Маркери", 99);
                         await l.C1.DeleteItemAsync("Маркери");
-                        l.Later(TimeSpan.FromSeconds(1.5), () => { l.C2.Link = true; return Task.CompletedTask; });
-                    }),
+                        l.Later(TimeSpan.FromSeconds(1.5), () => { l.C2.Link = true; return Task.CompletedTask; }); }),
                 new("Пізня пачка: автоматика змінює «Степлер», Клієнт 1 одразу його видаляє", "Потік до Клієнта 1 затримано: пачка з новою ціною «Степлера» вийшла раніше за видалення, а доходить пізніше за ApplyReply. Рядок черги з видаленням лишається з sent = 2, доки курсор таблиці не пройде версію tombstone, тож пізня пачка рядок не повертає.",
                     async l =>
                     {
@@ -424,10 +419,9 @@ public static class Scenarios
             ],
             l =>
             {
-                foreach (var n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" }) Gone(l, n);
+                foreach (string? n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" }) Gone(l, n);
                 Check(HasNote(l.C2, "втрачено"), "Клієнт 2 не отримав повідомлення про втрачену правку");
-                return Task.CompletedTask;
-            }),
+                return Task.CompletedTask; }),
 
         new("schema", "Несумісна версія",
             "Перше повідомлення Start несе версію схеми. При розбіжності власник відповідає SchemaMismatch і закриває потік, синк зупиняється, а черга зберігається.",
@@ -470,8 +464,9 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
 
     public async Task NextAsync()
     {
-        if (Done) return;
-        var s = Scenario.Steps[Step++];
+        if (Done)
+            return;
+        ScenarioStep s = Scenario.Steps[Step++];
         Lab.Say($"— крок {Step}: {s.Title}", SyncLogLevel.Ok);
         await s.Do(Lab);
     }
@@ -482,9 +477,18 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
         await Lab.SettleAsync(timeout);
         var problems = new List<string>();
         if (Scenario.Verify is { } v)
-            try { await v(Lab); }
-            catch (ScenarioCheckException e) { problems.Add(e.Message); }
-        foreach (var c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
+        {
+            try
+            {
+                await v(Lab);
+            }
+            catch (ScenarioCheckException e)
+            {
+                problems.Add(e.Message);
+            }
+        }
+
+        foreach (ClientNode? c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
             problems.AddRange(Inspect.Diff(Lab.Owner, c).Select(d => $"{c.Label}: {d}"));
         Lab.Say(problems.Count == 0 ? "перевірка: репліки дорівнюють власнику, очікуваний результат є" : "перевірка: " + string.Join("; ", problems),
             problems.Count == 0 ? SyncLogLevel.Ok : SyncLogLevel.Bad);

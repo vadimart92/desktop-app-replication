@@ -1,4 +1,6 @@
 using Replication.Model;
+using Replication.Owner;
+using Sample.Lab;
 using Xunit;
 
 namespace Replication.Tests;
@@ -46,10 +48,10 @@ public class EmptyReplicaTests
     [Fact]
     public async Task Empty_replica_fills_from_the_stream_after_tombstones_were_purged()
     {
-        await using var lab = await Sample.Lab.Lab.StartAsync(configureOwner: o => o.CatchupBatchRows = 4);
+        await using Lab lab = await Sample.Lab.Lab.StartAsync(configureOwner: o => o.CatchupBatchRows = 4);
         await lab.Owner.DeleteItemAsync("Скотч");
         await lab.Owner.DeleteItemAsync("Маркери");
-        var purged = await lab.Owner.PurgeAsync(); // no clients yet: every tombstone goes, purged_version > 0
+        OwnerStore.PurgeResult purged = await lab.Owner.PurgeAsync(); // no clients yet: every tombstone goes, purged_version > 0
         Assert.True(purged.PurgedVersion > 0);
 
         lab.C2.Agent.Options.SnapshotMode = Replication.Client.SnapshotMode.EmptyReplica;
@@ -64,7 +66,7 @@ public class ArchiveParentTests
 {
     private static async Task<Sample.Lab.Lab> ArchivedCatalogAsync()
     {
-        var lab = await Sample.Lab.Lab.StartAsync();
+        Lab lab = await Sample.Lab.Lab.StartAsync();
         await lab.SyncNowAsync(lab.C1);
         await lab.SyncNowAsync(lab.C2);
         await lab.C1.ArchiveAsync(("Item", "Каталог 2019"));
@@ -78,13 +80,14 @@ public class ArchiveParentTests
         Assert.True(Sample.Lab.Inspect.ClientHas(lab.C1, "Каталог 2019", archive: true));
         Assert.Contains(Sample.Lab.Inspect.ClientRows(lab.C1, "Category"), r => r.Label == "Офіс" && r.Mark == "архів");
         Assert.False(Sample.Lab.Inspect.OwnerHas(lab.Owner, "Степлер")); // the owner cascaded the live children
-        foreach (var c in lab.Clients) Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, c));
+        foreach (ClientNode c in lab.Clients)
+            Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, c));
     }
 
     [Fact]
     public async Task Local_delete_moves_the_parent_to_the_archive()
     {
-        await using var lab = await ArchivedCatalogAsync();
+        await using Lab lab = await ArchivedCatalogAsync();
         await lab.C1.DeleteCategoryAsync("Офіс");
         await lab.SettleAsync();
         AssertArchiveIntact(lab);
@@ -93,7 +96,7 @@ public class ArchiveParentTests
     [Fact]
     public async Task Tombstone_from_another_client_moves_the_parent_to_the_archive()
     {
-        await using var lab = await ArchivedCatalogAsync();
+        await using Lab lab = await ArchivedCatalogAsync();
         await lab.C2.DeleteCategoryAsync("Офіс");
         await lab.SettleAsync();
         AssertArchiveIntact(lab);

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -52,23 +53,26 @@ public sealed class WriteRouter : SaveChangesInterceptor
 
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
     {
-        if (eventData.Context is { } ctx) Flush(ctx);
+        if (eventData.Context is { } ctx)
+            Flush(ctx);
         return result;
     }
 
     public override ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData eventData, int result, CancellationToken ct = default)
     {
-        if (eventData.Context is { } ctx) Flush(ctx);
+        if (eventData.Context is { } ctx)
+            Flush(ctx);
         return ValueTask.FromResult(result);
     }
 
     public override void SaveChangesFailed(DbContextErrorEventData eventData)
     {
-        if (eventData.Context is { } ctx && _pending.TryGetValue(ctx, out var p))
+        if (eventData.Context is { } ctx && _pending.TryGetValue(ctx, out Pending? p))
         {
             p.OwnTransaction?.Rollback();
             p.OwnTransaction?.Dispose();
-            if (p.OpenedConnection) ctx.Database.CloseConnection();
+            if (p.OpenedConnection)
+                ctx.Database.CloseConnection();
             _pending.Remove(ctx);
         }
     }
@@ -88,13 +92,15 @@ public sealed class WriteRouter : SaveChangesInterceptor
             .ToHashSet();
         var changes = new List<Change>();
         var moves = new List<(SyncTable, string, string)>();
-        var opened = false;
-        foreach (var e in entries)
+        bool opened = false;
+        foreach (EntityEntry? e in entries)
         {
-            if (_model.ForType(e.Metadata.ClrType) is not { } t) continue;
-            var instance = (string?)(e.State == EntityState.Deleted ? e.Property(SyncColumns.InstanceId).OriginalValue : e.Property(SyncColumns.InstanceId).CurrentValue);
-            if (!SyncColumns.IsRemote(instance)) continue;
-            var pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
+            if (_model.ForType(e.Metadata.ClrType) is not { } t)
+                continue;
+            string? instance = (string?)(e.State == EntityState.Deleted ? e.Property(SyncColumns.InstanceId).OriginalValue : e.Property(SyncColumns.InstanceId).CurrentValue);
+            if (!SyncColumns.IsRemote(instance))
+                continue;
+            string pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
             var store = StoreObjectIdentifier.Table(t.Name, null);
             switch (e.State)
             {
@@ -103,17 +109,22 @@ public sealed class WriteRouter : SaveChangesInterceptor
                     break;
                 case EntityState.Modified:
                     var cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
-                    if (cols.Count > 0) changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
+                    if (cols.Count > 0)
+                        changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
                     break;
                 case EntityState.Deleted:
                     // only the parent goes to the outbox; the owner cascades by its own schema (8.7)
-                    var cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
+                    bool cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
                                                           && deleted.Contains((fk.ParentTable, PkText(pid))));
                     changes.Add(new Change(t, instance!, pk, cascaded ? (OutboxKind)0 : OutboxKind.Delete, []));
                     // archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6)
                     if (_model.ChildrenOf(t.Name).Any())
                     {
-                        if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open) { ctx.Database.OpenConnection(); opened = true; }
+                        if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
+                        {
+                            ctx.Database.OpenConnection();
+                            opened = true;
+                        }
                         if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), null, _model, instance!, t, pk))
                         {
                             moves.Add((t, instance!, pk));
@@ -123,8 +134,9 @@ public sealed class WriteRouter : SaveChangesInterceptor
                     break;
             }
         }
-        if (changes.Count == 0) return null;
-        var p = _pending.GetOrCreateValue(ctx);
+        if (changes.Count == 0)
+            return null;
+        Pending p = _pending.GetOrCreateValue(ctx);
         p.Changes.Clear();
         p.Changes.AddRange(changes);
         p.ArchiveMoves.Clear();
@@ -138,23 +150,30 @@ public sealed class WriteRouter : SaveChangesInterceptor
 
     private void Flush(DbContext ctx)
     {
-        if (!_pending.TryGetValue(ctx, out var p)) return;
+        if (!_pending.TryGetValue(ctx, out Pending? p))
+            return;
         _pending.Remove(ctx);
         var conn = (SqliteConnection)ctx.Database.GetDbConnection();
         var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
         try
         {
-            foreach (var (t, inst, pk) in p.ArchiveMoves)
+            foreach ((SyncTable? t, string? inst, string? pk) in p.ArchiveMoves)
+            {
                 if (ArchiveGuard.DeleteOrArchive(conn, tx, _model, inst, t, pk))
                     Routed?.Invoke(inst, $"{t.Name} {Short(pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
-            foreach (var ch in p.Changes.Where(x => x.Kind != 0))
+            }
+
+            foreach (Change? ch in p.Changes.Where(x => x.Kind != 0))
             {
-                var what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, ch.Kind, ch.Columns, OutboxClass.Interactive);
+                string what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, ch.Kind, ch.Columns, OutboxClass.Interactive);
                 Routed?.Invoke(ch.Instance, $"черга: {ch.Table.Name} {Short(ch.Pk)} → {what}");
             }
             if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or 0))
-                foreach (var inst in p.Changes.Select(x => x.Instance).Distinct())
+            {
+                foreach (string? inst in p.Changes.Select(x => x.Instance).Distinct())
                     DropOrphanEntries(conn, tx, _model, inst);
+            }
+
             p.OwnTransaction?.Commit();
         }
         catch
@@ -165,18 +184,22 @@ public sealed class WriteRouter : SaveChangesInterceptor
         finally
         {
             p.OwnTransaction?.Dispose();
-            if (p.OpenedConnection) ctx.Database.CloseConnection();
+            if (p.OpenedConnection)
+                ctx.Database.CloseConnection();
         }
-        foreach (var inst in p.Changes.Select(x => x.Instance).Distinct()) OutboxChanged?.Invoke(inst);
+        foreach (string? inst in p.Changes.Select(x => x.Instance).Distinct())
+            OutboxChanged?.Invoke(inst);
     }
 
     /// <summary>A local cascade removed child rows: their pending creates and patches have nothing left to send.</summary>
     internal static void DropOrphanEntries(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance)
     {
-        foreach (var t in model.Tables)
+        foreach (SyncTable t in model.Tables)
+        {
             c.Exec($"""
                 DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND kind IN (1, 2) AND sent = 0
                 AND NOT EXISTS (SELECT 1 FROM {Q(t.Name)} x WHERE x.Id = _sync_outbox.pk AND x.InstanceId = @i)
                 """, tx, ("@i", instance), ("@t", t.Name));
+        }
     }
 }

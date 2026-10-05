@@ -14,7 +14,7 @@ internal sealed class SyncGrpcService(OwnerStore store, SnapshotStore snapshots)
 
     public override Task<ApplyReply> Apply(ApplyRequest request, ServerCallContext context)
     {
-        var reply = _apply.Apply(request);
+        ApplyReply reply = _apply.Apply(request);
         store.Options.Log.Write("owner", $"Apply від {Short(request.ClientId)}: {string.Join("; ", reply.Results.Select(r => $"#{r.Seq} {r.Status}{(r.HasVersion ? $" → v{r.Version}" : "")}{(r.Reason.Length > 0 ? $" ({r.Reason})" : "")}"))}; applied_seq = {reply.AppliedUpToSeq}",
             reply.Results.Any(r => r.Status is ResultStatus.Rejected or ResultStatus.Ignored || r.Changed.Count > 0) ? SyncLogLevel.Warn : SyncLogLevel.Info);
         return Task.FromResult(reply);
@@ -22,17 +22,19 @@ internal sealed class SyncGrpcService(OwnerStore store, SnapshotStore snapshots)
 
     public override async Task Snapshot(SnapshotRequest request, IServerStreamWriter<SnapshotChunk> responseStream, ServerCallContext context)
     {
-        var snap = (request.SnapshotId.Length > 0 ? snapshots.Find(request.SnapshotId) : null) ?? await snapshots.CreateAsync(request.ClientId);
-        var offset = snap.Id == request.SnapshotId ? request.Offset : 0;
-        if (offset > 0) store.Options.Log.Write("owner", $"знімок {snap.Id}: продовження з {offset / 1024} КБ");
-        var buffer = new byte[store.Options.SnapshotChunkBytes];
-        await using var f = File.OpenRead(snap.Path);
+        SnapshotStore.Snap snap = (request.SnapshotId.Length > 0 ? snapshots.Find(request.SnapshotId) : null) ?? await snapshots.CreateAsync(request.ClientId);
+        long offset = snap.Id == request.SnapshotId ? request.Offset : 0;
+        if (offset > 0)
+            store.Options.Log.Write("owner", $"знімок {snap.Id}: продовження з {offset / 1024} КБ");
+        byte[] buffer = new byte[store.Options.SnapshotChunkBytes];
+        await using FileStream f = File.OpenRead(snap.Path);
         f.Position = offset;
         var hash = ByteString.CopyFrom(snap.Sha256);
         while (true)
         {
-            var n = await f.ReadAsync(buffer, context.CancellationToken);
-            if (n == 0) break;
+            int n = await f.ReadAsync(buffer, context.CancellationToken);
+            if (n == 0)
+                break;
             await responseStream.WriteAsync(new SnapshotChunk
             {
                 SnapshotId = snap.Id,

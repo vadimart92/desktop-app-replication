@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Replication;
 using Replication.Model;
@@ -45,9 +46,10 @@ public sealed class OwnerNode : IAsyncDisposable
         configure?.Invoke(options);
         var store = new OwnerStore(dbPath, model, options);
         store.Install();
-        var host = await OwnerHost.StartAsync(store, port, listenAnywhere);
+        OwnerHost host = await OwnerHost.StartAsync(store, port, listenAnywhere);
         var node = new OwnerNode(dbPath, store, host, log);
-        if (empty) await node.SeedAsync();
+        if (empty)
+            await node.SeedAsync();
         return node;
     }
 
@@ -57,24 +59,28 @@ public sealed class OwnerNode : IAsyncDisposable
 
     private async Task SeedAsync()
     {
-        await using var db = Db();
-        var cats = new[] { "Офіс", "Склад", "Архів" }.ToDictionary(n => n, n => new Category { Name = n });
+        await using SampleDbContext db = Db();
+        Dictionary<string, Category> cats = new[] { "Офіс", "Склад", "Архів" }.ToDictionary(n => n, n => new Category { Name = n });
         db.Categories.AddRange(cats.Values);
-        foreach (var (n, p, s, c) in new[]
+        foreach ((string? n, long p, string? s, string? c) in new[]
                  {
                      ("Степлер", 120L, "активний", "Офіс"), ("Папір A4", 240L, "активний", "Офіс"), ("Маркери", 85L, "новий", "Офіс"),
                      ("Палета", 450L, "активний", "Склад"), ("Стрейч-плівка", 310L, "активний", "Склад"), ("Скотч", 40L, "новий", "Склад"),
                      ("Старий принтер", 900L, "архів", "Архів"), ("Факс", 300L, "архів", "Архів"), ("Каталог 2019", 15L, "архів", "Офіс"),
                  })
+        {
             db.Items.Add(new Item { Name = n, Price = p, Status = s, Category = cats[c] });
-        for (var i = 0; i < 3; i++) db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
+        }
+
+        for (int i = 0; i < 3; i++)
+            db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
         await db.SaveChangesAsync();
         Say($"початкові дані: 3 категорії, 9 товарів, 3 записи журналу; голова {Head()}");
     }
 
     public long Head()
     {
-        using var c = Store.Open();
+        using SqliteConnection c = Store.Open();
         return Store.Head(c);
     }
 
@@ -86,8 +92,8 @@ public sealed class OwnerNode : IAsyncDisposable
     /// <summary>SaveChanges path.</summary>
     public async Task SetPriceAsync(string name, long? price = null)
     {
-        await using var db = Db();
-        var it = await ItemAsync(db, name);
+        await using SampleDbContext db = Db();
+        Item it = await ItemAsync(db, name);
         it.Price = price ?? 10 + _rnd.Next(99) * 10;
         await db.SaveChangesAsync();
         Say($"«{name}».Price = {it.Price}");
@@ -96,17 +102,17 @@ public sealed class OwnerNode : IAsyncDisposable
     /// <summary>ExecuteUpdate path: no change tracker, the trigger still versions the row.</summary>
     public async Task SetStatusAsync(string name, string? status = null)
     {
-        await using var db = Db();
-        var it = await ItemAsync(db, name);
-        var s = status ?? Statuses[(Array.IndexOf(Statuses, it.Status) + 1) % Statuses.Length];
+        await using SampleDbContext db = Db();
+        Item it = await ItemAsync(db, name);
+        string s = status ?? Statuses[(Array.IndexOf(Statuses, it.Status) + 1) % Statuses.Length];
         await db.Items.Where(x => x.Id == it.Id).ExecuteUpdateAsync(u => u.SetProperty(x => x.Status, s).SetProperty(x => x.ModifiedOn, DateTime.UtcNow));
         Say($"«{name}».Status = {s} (ExecuteUpdate)");
     }
 
     public async Task RenameAsync(string name, string newName)
     {
-        await using var db = Db();
-        var it = await ItemAsync(db, name);
+        await using SampleDbContext db = Db();
+        Item it = await ItemAsync(db, name);
         it.Name = newName;
         await db.SaveChangesAsync();
         Say($"«{name}».Name = «{newName}»");
@@ -114,9 +120,9 @@ public sealed class OwnerNode : IAsyncDisposable
 
     public async Task<Guid> NewItemAsync(string? name = null, string status = "новий", string? category = null)
     {
-        await using var db = Db();
-        var cats = await db.Categories.ToListAsync();
-        var cat = category is null ? cats[_rnd.Next(cats.Count)] : cats.First(c => c.Name == category);
+        await using SampleDbContext db = Db();
+        List<Category> cats = await db.Categories.ToListAsync();
+        Category cat = category is null ? cats[_rnd.Next(cats.Count)] : cats.First(c => c.Name == category);
         var it = new Item { Name = name ?? AutoNames[_rnd.Next(AutoNames.Length)], Price = 10 + _rnd.Next(60) * 10, Status = status, CategoryId = cat.Id };
         db.Items.Add(it);
         await db.SaveChangesAsync();
@@ -127,8 +133,8 @@ public sealed class OwnerNode : IAsyncDisposable
     /// <summary>ExecuteDelete path: the delete trigger writes the tombstone.</summary>
     public async Task DeleteItemAsync(string name)
     {
-        await using var db = Db();
-        var it = await ItemAsync(db, name);
+        await using SampleDbContext db = Db();
+        Item it = await ItemAsync(db, name);
         await db.Items.Where(x => x.Id == it.Id).ExecuteDeleteAsync();
         Say($"видалено «{name}» (ExecuteDelete), tombstone", SyncLogLevel.Warn);
     }
@@ -136,9 +142,9 @@ public sealed class OwnerNode : IAsyncDisposable
     /// <summary>The FK cascade in SQLite deletes the items; each gets its tombstone from the trigger.</summary>
     public async Task DeleteCategoryAsync(string name)
     {
-        await using var db = Db();
-        var cat = await db.Categories.FirstAsync(x => x.Name == name);
-        var n = await db.Items.CountAsync(x => x.CategoryId == cat.Id);
+        await using SampleDbContext db = Db();
+        Category cat = await db.Categories.FirstAsync(x => x.Name == name);
+        int n = await db.Items.CountAsync(x => x.CategoryId == cat.Id);
         db.Categories.Remove(cat);
         await db.SaveChangesAsync();
         Say($"видалено категорію «{name}» з каскадом ({n} товарів), tombstones: {n + 1}", SyncLogLevel.Warn);
@@ -146,8 +152,9 @@ public sealed class OwnerNode : IAsyncDisposable
 
     public async Task AddLogAsync(int n)
     {
-        await using var db = Db();
-        for (var i = 0; i < n; i++) db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
+        await using SampleDbContext db = Db();
+        for (int i = 0; i < n; i++)
+            db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
         await db.SaveChangesAsync();
         Say($"+{n} у журнал");
     }
@@ -155,20 +162,22 @@ public sealed class OwnerNode : IAsyncDisposable
     /// <summary>The demo's "packet of 17 changes": 5 edits, 2 new items, 10 log entries.</summary>
     public async Task BurstAsync()
     {
-        await using var db = Db();
-        var items = await db.Items.ToListAsync();
-        var cats = await db.Categories.ToListAsync();
-        for (var i = 0; i < 5; i++)
+        await using SampleDbContext db = Db();
+        List<Item> items = await db.Items.ToListAsync();
+        List<Category> cats = await db.Categories.ToListAsync();
+        for (int i = 0; i < 5; i++)
         {
-            var it = items[_rnd.Next(items.Count)];
-            if (_rnd.Next(2) == 0) it.Price = 10 + _rnd.Next(99) * 10;
-            else it.Status = Statuses[_rnd.Next(3)];
+            Item it = items[_rnd.Next(items.Count)];
+            if (_rnd.Next(2) == 0)
+                it.Price = 10 + _rnd.Next(99) * 10;
+            else
+                it.Status = Statuses[_rnd.Next(3)];
             await db.SaveChangesAsync();
         }
-        for (var i = 0; i < 2; i++)
+        for (int i = 0; i < 2; i++)
             db.Items.Add(new Item { Name = AutoNames[_rnd.Next(AutoNames.Length)], Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
         await db.SaveChangesAsync();
-        for (var i = 0; i < 10; i++)
+        for (int i = 0; i < 10; i++)
         {
             db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
             await db.SaveChangesAsync();
@@ -179,20 +188,22 @@ public sealed class OwnerNode : IAsyncDisposable
     /// <summary>A stream of changes in Items: new rows and price edits, <paramref name="perRound"/> per round.</summary>
     public async Task FlowRoundAsync(int perRound)
     {
-        await using var db = Db();
-        var items = await db.Items.ToListAsync();
-        var cats = await db.Categories.ToListAsync();
-        for (var i = 0; i < perRound; i++)
+        await using SampleDbContext db = Db();
+        List<Item> items = await db.Items.ToListAsync();
+        List<Category> cats = await db.Categories.ToListAsync();
+        for (int i = 0; i < perRound; i++)
         {
-            if (i % 2 == 0) db.Items.Add(new Item { Name = $"{AutoNames[_rnd.Next(AutoNames.Length)]} {++_logN}", Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
-            else items[_rnd.Next(items.Count)].Price = 10 + _rnd.Next(99) * 10;
+            if (i % 2 == 0)
+                db.Items.Add(new Item { Name = $"{AutoNames[_rnd.Next(AutoNames.Length)]} {++_logN}", Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
+            else
+                items[_rnd.Next(items.Count)].Price = 10 + _rnd.Next(99) * 10;
             await db.SaveChangesAsync();
         }
     }
 
     public Task<OwnerStore.PurgeResult> PurgeAsync()
     {
-        var r = Store.Purge();
+        OwnerStore.PurgeResult r = Store.Purge();
         Log.Write("owner", r.Tombstones > 0
             ? $"очищення: видалено {r.Tombstones} tombstones (floor = MIN(acked_version) = {(r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor)}), purged_version = {r.PurgedVersion}"
             : $"очищення: нічого видаляти, floor = {(r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor)}");

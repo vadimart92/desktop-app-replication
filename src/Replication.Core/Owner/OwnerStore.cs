@@ -63,7 +63,7 @@ public sealed class OwnerStore
         }
         c.Exec("PRAGMA foreign_keys = ON;");
 
-        using (var tx = c.BeginTransaction())
+        using (SqliteTransaction tx = c.BeginTransaction())
         {
             c.Exec("""
                 CREATE TABLE IF NOT EXISTS _sync_meta (
@@ -101,12 +101,14 @@ public sealed class OwnerStore
                 """, tx);
             if (c.Scalar<long>("SELECT COUNT(*) FROM _sync_meta", tx) == 0)
                 c.Exec("INSERT INTO _sync_meta(instance_id, version) VALUES (@id, 0)", tx, ("@id", NewInstanceId()));
-            foreach (var t in Model.Tables)
+            foreach (SyncTable t in Model.Tables)
                 c.Exec("INSERT OR IGNORE INTO _sync_floor(tbl, floor) VALUES (@t, @f)", tx, ("@t", t.Name), ("@f", NoFloor));
 
-            foreach (var t in Model.Tables)
-                foreach (var sql in TriggerSql.For(t))
+            foreach (SyncTable t in Model.Tables)
+            {
+                foreach (string sql in TriggerSql.For(t))
                     c.Exec(sql, tx);
+            }
 
             StampUnversioned(c, tx);
             tx.Commit();
@@ -120,13 +122,17 @@ public sealed class OwnerStore
     /// <summary>The first start after enabling sync gives every existing row a unique version (15.2).</summary>
     private void StampUnversioned(SqliteConnection c, SqliteTransaction tx)
     {
-        foreach (var t in Model.Tables)
+        foreach (SyncTable t in Model.Tables)
         {
             var ids = new List<string>();
-            using (var cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE {SyncColumns.Version} = 0", tx))
-            using (var r = cmd.ExecuteReader())
-                while (r.Read()) ids.Add(r.GetString(0));
-            foreach (var id in ids)
+            using (SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE {SyncColumns.Version} = 0", tx))
+            using (SqliteDataReader r = cmd.ExecuteReader())
+            {
+                while (r.Read())
+                    ids.Add(r.GetString(0));
+            }
+
+            foreach (string id in ids)
             {
                 c.Exec("UPDATE _sync_meta SET version = version + 1", tx);
                 c.Exec($"UPDATE {Q(t.Name)} SET SyncVersion = (SELECT version FROM _sync_meta), SyncBase = 0, SyncMask = @m WHERE Id = @id",
@@ -143,10 +149,12 @@ public sealed class OwnerStore
 
     private void CheckVersionFile(SqliteConnection c)
     {
-        if (!File.Exists(VersionFilePath)) return;
-        var parts = File.ReadAllText(VersionFilePath).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2 || !long.TryParse(parts[1], out var fileVersion)) return;
-        var (id, version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
+        if (!File.Exists(VersionFilePath))
+            return;
+        string[] parts = File.ReadAllText(VersionFilePath).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2 || !long.TryParse(parts[1], out long fileVersion))
+            return;
+        (string? id, long version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
         if (parts[0] == id && version < fileVersion)
         {
             // the database was restored or replaced: clients must take a new snapshot
@@ -157,14 +165,14 @@ public sealed class OwnerStore
 
     public void WriteVersionFile()
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         WriteVersionFile(c);
     }
 
     private void WriteVersionFile(SqliteConnection c)
     {
-        var (id, version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
-        var tmp = VersionFilePath + ".tmp";
+        (string? id, long version) = (c.Scalar<string>("SELECT instance_id FROM _sync_meta")!, c.Scalar<long>("SELECT version FROM _sync_meta"));
+        string tmp = VersionFilePath + ".tmp";
         File.WriteAllText(tmp, $"{id} {version}");
         File.Move(tmp, VersionFilePath, overwrite: true);
     }
@@ -182,10 +190,11 @@ public sealed class OwnerStore
     /// <summary>Moves the owner clock forward (the demo's "+31 days"). Triggers use the same offset for <c>deleted_at</c>.</summary>
     public void AdvanceClock(TimeSpan by)
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         c.Exec("UPDATE _sync_meta SET clock_offset = clock_offset + @s", null, ("@s", (long)by.TotalSeconds));
-        foreach (var id in _subscribed.Keys) c.Exec("UPDATE _sync_clients SET last_seen = @n WHERE client_id = @c", null, ("@n", Now(c)), ("@c", id));
-        using var tx = c.BeginTransaction();
+        foreach (string id in _subscribed.Keys)
+            c.Exec("UPDATE _sync_clients SET last_seen = @n WHERE client_id = @c", null, ("@n", Now(c)), ("@c", id));
+        using SqliteTransaction tx = c.BeginTransaction();
         RecomputeFloor(c, tx);
         tx.Commit();
     }
@@ -196,24 +205,30 @@ public sealed class OwnerStore
 
     internal void MarkSubscribed(string clientId, bool on)
     {
-        if (on) _subscribed.AddOrUpdate(clientId, 1, (_, n) => n + 1);
-        else _subscribed.AddOrUpdate(clientId, 0, (_, n) => Math.Max(0, n - 1));
+        if (on)
+            _subscribed.AddOrUpdate(clientId, 1, (_, n) => n + 1);
+        else
+            _subscribed.AddOrUpdate(clientId, 0, (_, n) => Math.Max(0, n - 1));
     }
 
-    public bool IsSubscribed(string clientId) => _subscribed.TryGetValue(clientId, out var n) && n > 0;
+    public bool IsSubscribed(string clientId) => _subscribed.TryGetValue(clientId, out int n) && n > 0;
 
     internal void SaveCursors(SqliteConnection c, SqliteTransaction tx, string clientId, IReadOnlyDictionary<string, long> cursors, bool touchFloor = true)
     {
-        var now = Now(c, tx);
-        var min = cursors.Count > 0 ? cursors.Values.Min() : 0;
+        long now = Now(c, tx);
+        long min = cursors.Count > 0 ? cursors.Values.Min() : 0;
         c.Exec("""
             INSERT INTO _sync_clients(client_id, acked_version, applied_seq, last_seen) VALUES (@c, @a, 0, @n)
             ON CONFLICT(client_id) DO UPDATE SET acked_version = @a, last_seen = @n
             """, tx, ("@c", clientId), ("@a", min), ("@n", now));
-        foreach (var (tbl, cur) in cursors)
+        foreach ((string? tbl, long cur) in cursors)
+        {
             c.Exec("INSERT INTO _sync_client_cursors(client_id, tbl, cursor) VALUES (@c, @t, @v) ON CONFLICT(client_id, tbl) DO UPDATE SET cursor = @v",
                 tx, ("@c", clientId), ("@t", tbl), ("@v", cur));
-        if (touchFloor) RecomputeFloor(c, tx);
+        }
+
+        if (touchFloor)
+            RecomputeFloor(c, tx);
     }
 
     internal void Touch(SqliteConnection c, SqliteTransaction? tx, string clientId) =>
@@ -222,10 +237,10 @@ public sealed class OwnerStore
     /// <summary>floor = MIN(cursor) of active clients per table; with no active client the base moves on every update (5.2).</summary>
     internal void RecomputeFloor(SqliteConnection c, SqliteTransaction tx)
     {
-        var cutoff = Now(c, tx) - (long)Options.ActivityWindow.TotalSeconds;
-        foreach (var t in Model.Tables)
+        long cutoff = Now(c, tx) - (long)Options.ActivityWindow.TotalSeconds;
+        foreach (SyncTable t in Model.Tables)
         {
-            var min = c.Scalar<long?>("""
+            long? min = c.Scalar<long?>("""
                 SELECT MIN(cc.cursor) FROM _sync_client_cursors cc JOIN _sync_clients cl ON cl.client_id = cc.client_id
                 WHERE cc.tbl = @t AND cl.last_seen >= @cut
                 """, tx, ("@t", t.Name), ("@cut", cutoff));
@@ -236,9 +251,10 @@ public sealed class OwnerStore
 
     public void RecomputeFloor()
     {
-        using var c = Open();
-        using var tx = c.BeginTransaction();
-        foreach (var id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key)) Touch(c, tx, id);
+        using SqliteConnection c = Open();
+        using SqliteTransaction tx = c.BeginTransaction();
+        foreach (string? id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
+            Touch(c, tx, id);
         RecomputeFloor(c, tx);
         tx.Commit();
     }
@@ -249,44 +265,51 @@ public sealed class OwnerStore
 
     public PurgeResult Purge()
     {
-        using var c = Open();
-        var now = Now(c);
-        var cutoff = now - (long)Options.Retention.TotalSeconds;
+        using SqliteConnection c = Open();
+        long now = Now(c);
+        long cutoff = now - (long)Options.Retention.TotalSeconds;
         int clients;
-        using (var tx = c.BeginTransaction())
+        using (SqliteTransaction tx = c.BeginTransaction())
         {
-            foreach (var id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key)) Touch(c, tx, id);
+            foreach (string? id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
+                Touch(c, tx, id);
             c.Exec("DELETE FROM _sync_client_cursors WHERE client_id IN (SELECT client_id FROM _sync_clients WHERE last_seen < @cut)", tx, ("@cut", cutoff));
             clients = c.Exec("DELETE FROM _sync_clients WHERE last_seen < @cut", tx, ("@cut", cutoff));
             RecomputeFloor(c, tx);
             tx.Commit();
         }
 
-        var floor = c.Scalar<long?>("SELECT MIN(acked_version) FROM _sync_clients") ?? NoFloor;
-        var total = 0;
+        long floor = c.Scalar<long?>("SELECT MIN(acked_version) FROM _sync_clients") ?? NoFloor;
+        int total = 0;
         while (true)
         {
             // short transactions of ~1000 rows so the application's writer is not held
-            using var tx = c.BeginTransaction();
+            using SqliteTransaction tx = c.BeginTransaction();
             var batch = new List<(string Tbl, string Pk, long V)>();
-            using (var cmd = c.Cmd("SELECT tbl, pk, version FROM _sync_tombstones WHERE version <= @f OR deleted_at < @cut LIMIT 1000", tx, ("@f", floor), ("@cut", cutoff)))
-            using (var r = cmd.ExecuteReader())
-                while (r.Read()) batch.Add((r.GetString(0), r.GetString(1), r.GetInt64(2)));
-            if (batch.Count == 0) break;
-            foreach (var (tbl, pk, _) in batch)
+            using (SqliteCommand cmd = c.Cmd("SELECT tbl, pk, version FROM _sync_tombstones WHERE version <= @f OR deleted_at < @cut LIMIT 1000", tx, ("@f", floor), ("@cut", cutoff)))
+            using (SqliteDataReader r = cmd.ExecuteReader())
+            {
+                while (r.Read())
+                    batch.Add((r.GetString(0), r.GetString(1), r.GetInt64(2)));
+            }
+
+            if (batch.Count == 0)
+                break;
+            foreach ((string? tbl, string? pk, long _) in batch)
                 c.Exec("DELETE FROM _sync_tombstones WHERE tbl = @t AND pk = @p", tx, ("@t", tbl), ("@p", pk));
             c.Exec("UPDATE _sync_meta SET purged_version = MAX(purged_version, @v)", tx, ("@v", batch.Max(x => x.V)));
             tx.Commit();
             total += batch.Count;
         }
-        if (total > 0) NotifyCommitted();
+        if (total > 0)
+            NotifyCommitted();
         return new PurgeResult(total, clients, Purged(c), floor);
     }
 
     /// <summary>Returns free pages to the file system in small steps (11.5).</summary>
     public long IncrementalVacuum(int pages)
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         c.Exec($"PRAGMA incremental_vacuum({pages});");
         return c.Scalar<long>("PRAGMA freelist_count");
     }

@@ -32,7 +32,7 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
     {
         try
         {
-            var m = Inspect.Meta(Owner);
+            OwnerMeta m = Inspect.Meta(Owner);
             Meta = $"instance_id {m.InstanceId} · version {m.Version} · purged_version {m.Purged} · floor {m.Floor} · "
                    + $"годинник +{TimeSpan.FromSeconds(m.ClockOffset).TotalDays:0.#} дн. · файл {m.Pages} стор., вільних {m.FreePages}";
             Items.SyncTo(Inspect.OwnerRows(Owner, "Item"));

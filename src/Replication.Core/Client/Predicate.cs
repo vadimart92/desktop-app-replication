@@ -22,11 +22,12 @@ public sealed class Predicate
 
     public static Predicate? Parse(string? json)
     {
-        if (string.IsNullOrEmpty(json)) return null;
-        var items = JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(json)!;
+        if (string.IsNullOrEmpty(json))
+            return null;
+        List<Dictionary<string, JsonElement>> items = JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(json)!;
         return new Predicate(items.Select(d => new KeyValuePair<string, object?>(d["c"].GetString()!, d["v"].ValueKind switch
         {
-            JsonValueKind.Number when d["v"].TryGetInt64(out var l) => l,
+            JsonValueKind.Number when d["v"].TryGetInt64(out long l) => l,
             JsonValueKind.Number => d["v"].GetDouble(),
             JsonValueKind.String => d["v"].GetString(),
             JsonValueKind.True => 1L,
@@ -39,9 +40,10 @@ public sealed class Predicate
     {
         var where = new List<string>();
         var args = new List<(string, object?)>();
-        for (var i = 0; i < Equals_.Count; i++)
+        for (int i = 0; i < Equals_.Count; i++)
         {
-            if (!t.HasColumn(Equals_[i].Key)) throw new ArgumentException($"{t.Name} has no column {Equals_[i].Key}");
+            if (!t.HasColumn(Equals_[i].Key))
+                throw new ArgumentException($"{t.Name} has no column {Equals_[i].Key}");
             where.Add($"{Q(Equals_[i].Key)} IS @q{i}");
             args.Add(($"@q{i}", Equals_[i].Value));
         }

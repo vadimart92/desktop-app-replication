@@ -28,11 +28,12 @@ public sealed class ClientReplication : IAsyncDisposable
         Router = new WriteRouter(model);
         Router.OutboxChanged += instance =>
         {
-            foreach (var a in Agents.Where(a => a.InstanceId == instance)) a.NotifyOutbox();
+            foreach (SyncAgent? a in Agents.Where(a => a.InstanceId == instance))
+                a.NotifyOutbox();
         };
         Router.Routed += (instance, text) =>
         {
-            var agent = Agents.FirstOrDefault(a => a.InstanceId == instance);
+            SyncAgent? agent = Agents.FirstOrDefault(a => a.InstanceId == instance);
             _log.Write(agent?.Label ?? instance, text);
         };
     }
@@ -50,7 +51,8 @@ public sealed class ClientReplication : IAsyncDisposable
     {
         get
         {
-            lock (_agents) return [.. _agents];
+            lock (_agents)
+                return [.. _agents];
         }
     }
 
@@ -59,13 +61,15 @@ public sealed class ClientReplication : IAsyncDisposable
     public SyncAgent Connect(string address, string name, AgentOptions? options = null, string? label = null)
     {
         var agent = new SyncAgent(Store, address, name, options, _log, label);
-        lock (_agents) _agents.Add(agent);
+        lock (_agents)
+            _agents.Add(agent);
         agent.Start();
         return agent;
     }
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var a in Agents) await a.DisposeAsync();
+        foreach (SyncAgent a in Agents)
+            await a.DisposeAsync();
     }
 }

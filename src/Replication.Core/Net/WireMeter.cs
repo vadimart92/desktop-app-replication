@@ -33,8 +33,8 @@ public sealed class WireMeter
     {
         lock (_rateLock)
         {
-            var now = DateTimeOffset.UtcNow;
-            var dt = (now - _rateMark.At).TotalSeconds;
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            double dt = (now - _rateMark.At).TotalSeconds;
             if (dt >= 0.5)
             {
                 _rate = ((BytesUp - _rateMark.Up) / dt, (BytesDown - _rateMark.Down) / dt);
@@ -49,7 +49,8 @@ public sealed class WireMeter
         Interlocked.Exchange(ref _up, 0);
         Interlocked.Exchange(ref _down, 0);
         _messages.Clear();
-        lock (_rateLock) _rateMark = (DateTimeOffset.UtcNow, 0, 0);
+        lock (_rateLock)
+            _rateMark = (DateTimeOffset.UtcNow, 0, 0);
     }
 
     public static string Format(double bytes) => bytes switch

@@ -49,9 +49,9 @@ public sealed class ClientStore
     /// <summary>Creates the client service tables. Call after EF migrations / EnsureCreated. No sync triggers on the client (5.4).</summary>
     public void Install()
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         c.Exec("PRAGMA journal_mode = WAL;");
-        using var tx = c.BeginTransaction();
+        using SqliteTransaction tx = c.BeginTransaction();
         c.Exec("""
             CREATE TABLE IF NOT EXISTS _sync_local (
               key   TEXT PRIMARY KEY,
@@ -110,7 +110,7 @@ public sealed class ClientStore
 
     public void EnsureInstance(string address, string name)
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         c.Exec("INSERT INTO _sync_instances(address, name) VALUES (@a, @n) ON CONFLICT(address) DO UPDATE SET name = @n", null, ("@a", address), ("@n", name));
     }
 
@@ -122,14 +122,26 @@ public sealed class ClientStore
     public Dictionary<string, CursorState> LoadCursors(SqliteConnection c, string instance, SqliteTransaction? tx = null)
     {
         var result = Model.Tables.ToDictionary(t => t.Name, _ => new CursorState(0), StringComparer.Ordinal);
-        using (var cmd = c.Cmd("SELECT tbl, cursor FROM _sync_cursors WHERE instance = @i", tx, ("@i", instance)))
-        using (var r = cmd.ExecuteReader())
+        using (SqliteCommand cmd = c.Cmd("SELECT tbl, cursor FROM _sync_cursors WHERE instance = @i", tx, ("@i", instance)))
+        using (SqliteDataReader r = cmd.ExecuteReader())
+        {
             while (r.Read())
-                if (result.ContainsKey(r.GetString(0))) result[r.GetString(0)] = new CursorState(r.GetInt64(1));
-        using (var cmd = c.Cmd("SELECT tbl, lo, hi FROM _sync_ranges WHERE instance = @i", tx, ("@i", instance)))
-        using (var r = cmd.ExecuteReader())
+            {
+                if (result.ContainsKey(r.GetString(0)))
+                    result[r.GetString(0)] = new CursorState(r.GetInt64(1));
+            }
+        }
+
+        using (SqliteCommand cmd = c.Cmd("SELECT tbl, lo, hi FROM _sync_ranges WHERE instance = @i", tx, ("@i", instance)))
+        using (SqliteDataReader r = cmd.ExecuteReader())
+        {
             while (r.Read())
-                if (result.TryGetValue(r.GetString(0), out var k)) k.AddRange(r.GetInt64(1), r.GetInt64(2));
+            {
+                if (result.TryGetValue(r.GetString(0), out CursorState? k))
+                    k.AddRange(r.GetInt64(1), r.GetInt64(2));
+            }
+        }
+
         return result;
     }
 
@@ -138,7 +150,7 @@ public sealed class ClientStore
         c.Exec("INSERT INTO _sync_cursors(instance, tbl, cursor) VALUES (@i, @t, @c) ON CONFLICT(instance, tbl) DO UPDATE SET cursor = @c",
             tx, ("@i", instance), ("@t", table), ("@c", k.Cursor));
         c.Exec("DELETE FROM _sync_ranges WHERE instance = @i AND tbl = @t", tx, ("@i", instance), ("@t", table));
-        foreach (var (lo, hi) in k.Ranges)
+        foreach ((long lo, long hi) in k.Ranges)
             c.Exec("INSERT INTO _sync_ranges(instance, tbl, lo, hi) VALUES (@i, @t, @l, @h)", tx, ("@i", instance), ("@t", table), ("@l", lo), ("@h", hi));
     }
 
@@ -154,23 +166,24 @@ public sealed class ClientStore
 
     public static OutboxEntry? FindEntry(SqliteConnection c, SqliteTransaction? tx, string instance, string table, string pk)
     {
-        using var cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE instance = @i AND tbl = @t AND pk = @p", tx, ("@i", instance), ("@t", table), ("@p", pk));
-        using var r = cmd.ExecuteReader();
+        using SqliteCommand cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE instance = @i AND tbl = @t AND pk = @p", tx, ("@i", instance), ("@t", table), ("@p", pk));
+        using SqliteDataReader r = cmd.ExecuteReader();
         return r.Read() ? ReadEntry(r) : null;
     }
 
     public static List<OutboxEntry> Entries(SqliteConnection c, SqliteTransaction? tx, string? instance = null, string where = "1")
     {
         var list = new List<OutboxEntry>();
-        using var cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE (@i IS NULL OR instance = @i) AND ({where}) ORDER BY id", tx, ("@i", instance));
-        using var r = cmd.ExecuteReader();
-        while (r.Read()) list.Add(ReadEntry(r));
+        using SqliteCommand cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE (@i IS NULL OR instance = @i) AND ({where}) ORDER BY id", tx, ("@i", instance));
+        using SqliteDataReader r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(ReadEntry(r));
         return list;
     }
 
     public List<OutboxEntry> Entries(string? instance = null)
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         return Entries(c, null, instance);
     }
 
@@ -194,14 +207,15 @@ public sealed class ClientStore
     public static string Put(SqliteConnection c, SqliteTransaction? tx, string instance, string table, string pk, OutboxKind kind,
         IEnumerable<string>? columns, OutboxClass cls)
     {
-        var cols = columns?.ToList() ?? [];
-        var e = FindEntry(c, tx, instance, table, pk);
+        List<string> cols = columns?.ToList() ?? [];
+        OutboxEntry? e = FindEntry(c, tx, instance, table, pk);
         if (e is null)
         {
             Insert(c, tx, instance, table, pk, kind, cls, cols);
             return $"{kind}";
         }
-        if (e.Sent == 2 || e.Kind is OutboxKind.Delete) return "вже видалено"; // the row is gone locally
+        if (e.Sent == 2 || e.Kind is OutboxKind.Delete)
+            return "вже видалено"; // the row is gone locally
         var newCls = (OutboxClass)Math.Min((int)e.Class, (int)cls);
         OutboxKind nk;
         List<string> nc = [];
@@ -247,10 +261,10 @@ public sealed class ClientStore
 
     public List<ClientNote> Notes(string? instance = null, int limit = 50)
     {
-        using var c = Open();
+        using SqliteConnection c = Open();
         var list = new List<ClientNote>();
-        using var cmd = c.Cmd("SELECT id, instance, at, text, info FROM _sync_notes WHERE @i IS NULL OR instance = @i ORDER BY id DESC LIMIT @n", null, ("@i", instance), ("@n", limit));
-        using var r = cmd.ExecuteReader();
+        using SqliteCommand cmd = c.Cmd("SELECT id, instance, at, text, info FROM _sync_notes WHERE @i IS NULL OR instance = @i ORDER BY id DESC LIMIT @n", null, ("@i", instance), ("@n", limit));
+        using SqliteDataReader r = cmd.ExecuteReader();
         while (r.Read())
             list.Add(new ClientNote(r.GetInt64(0), r.GetString(1), DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(2)), r.GetString(3), r.GetInt64(4) != 0));
         return list;
@@ -263,7 +277,7 @@ public sealed class ClientStore
 
     public static string Label(SqliteConnection c, SqliteTransaction? tx, SyncTable t, string pk)
     {
-        var col = LabelColumns.FirstOrDefault(t.HasColumn);
+        string? col = LabelColumns.FirstOrDefault(t.HasColumn);
         if (col is not null && c.Scalar<string>($"SELECT {Q(col)} FROM {Q(t.Name)} WHERE Id = @id", tx, ("@id", pk)) is { } name)
             return $"«{name}»";
         return Short(pk);

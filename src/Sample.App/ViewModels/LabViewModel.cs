@@ -36,8 +36,8 @@ public sealed partial class LabViewModel : ObservableObject
     [ObservableProperty] private OwnerPanelViewModel? _owner;
     [ObservableProperty] private ClientPanelViewModel? _client1;
     [ObservableProperty] private ClientPanelViewModel? _client2;
-    [ObservableProperty] [NotifyCanExecuteChangedFor(nameof(NextStepCommand), nameof(RestartCommand), nameof(VerifyCommand))] private bool _busy;
-    [ObservableProperty] [NotifyCanExecuteChangedFor(nameof(NextStepCommand))] private bool _done;
+    [ObservableProperty][NotifyCanExecuteChangedFor(nameof(NextStepCommand), nameof(RestartCommand), nameof(VerifyCommand))] private bool _busy;
+    [ObservableProperty][NotifyCanExecuteChangedFor(nameof(NextStepCommand))] private bool _done;
     [ObservableProperty] private string _nextTitle = "";
     [ObservableProperty] private string _verdict = "";
     [ObservableProperty] private string _state = "";
@@ -47,7 +47,8 @@ public sealed partial class LabViewModel : ObservableObject
 
     private async Task StartScenarioAsync(Scenario scenario)
     {
-        if (Busy) return;
+        if (Busy)
+            return;
         Busy = true;
         Verdict = "";
         State = "запускаю власника і двох клієнтів…";
@@ -56,7 +57,8 @@ public sealed partial class LabViewModel : ObservableObject
             Owner = null;
             Client1 = null;
             Client2 = null;
-            if (_lab is not null) await _lab.DisposeAsync();
+            if (_lab is not null)
+                await _lab.DisposeAsync();
             Feed.Clear();
             var log = new SyncLog();
             Feed.Attach(log);
@@ -82,14 +84,16 @@ public sealed partial class LabViewModel : ObservableObject
             UpdateSteps();
         }
         // the scenario was switched while the previous one was starting
-        if (_runner?.Scenario != SelectedScenario) await StartScenarioAsync(SelectedScenario);
+        if (_runner?.Scenario != SelectedScenario)
+            await StartScenarioAsync(SelectedScenario);
     }
 
     private void UpdateSteps()
     {
-        if (_runner is null) return;
+        if (_runner is null)
+            return;
         Steps.Clear();
-        for (var i = 0; i < _runner.Scenario.Steps.Count; i++)
+        for (int i = 0; i < _runner.Scenario.Steps.Count; i++)
             Steps.Add(new StepView(i + 1, _runner.Scenario.Steps[i].Title, _runner.Scenario.Steps[i].Explain, i < _runner.Step));
         Done = _runner.Done;
         NextTitle = _runner.Done ? "Усі кроки виконано" : $"Виконати крок {_runner.Step + 1}";
@@ -100,7 +104,8 @@ public sealed partial class LabViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStep))]
     private async Task NextStep()
     {
-        if (_runner is null) return;
+        if (_runner is null)
+            return;
         Busy = true;
         try
         {
@@ -126,12 +131,13 @@ public sealed partial class LabViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(NotBusy))]
     private async Task Verify()
     {
-        if (_runner is null) return;
+        if (_runner is null)
+            return;
         Busy = true;
         Verdict = "чекаю, поки все доїде…";
         try
         {
-            var problems = await Task.Run(() => _runner.VerifyAsync(TimeSpan.FromSeconds(60)));
+            List<string> problems = await Task.Run(() => _runner.VerifyAsync(TimeSpan.FromSeconds(60)));
             Verdict = problems.Count == 0 ? "✓ репліки дорівнюють власнику, результат як у дизайні" : "✕ " + string.Join("; ", problems);
         }
         catch (Exception e)
@@ -171,7 +177,7 @@ public sealed partial class OwnerWindowViewModel : ObservableObject
     {
         try
         {
-            var node = await Task.Run(() => OwnerNode.StartAsync(o.Db ?? "owner.db", log, o.Port, o.ListenAnywhere));
+            OwnerNode node = await Task.Run(() => OwnerNode.StartAsync(o.Db ?? "owner.db", log, o.Port, o.ListenAnywhere));
             Owner = new OwnerPanelViewModel(node);
             State = $"gRPC-сервер на порту {node.Host.Port}, БД {node.DbPath}";
             var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, (_, _) => Owner.Refresh());

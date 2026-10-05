@@ -9,19 +9,21 @@ internal static class TriggerSql
 {
     public static IEnumerable<string> For(SyncTable t)
     {
-        var T = Q(t.Name);
-        var name = t.Name.Replace("'", "''");
-        var now = "CAST(strftime('%s','now') AS INTEGER) + (SELECT clock_offset FROM _sync_meta)";
+        string T = Q(t.Name);
+        string name = t.Name.Replace("'", "''");
+        string now = "CAST(strftime('%s','now') AS INTEGER) + (SELECT clock_offset FROM _sync_meta)";
 
         // (OLD.c1 IS NOT NEW.c1) << 0 | (OLD.c2 IS NOT NEW.c2) << 1 | ...; service columns are not counted
         var changed = new StringBuilder();
-        for (var i = 0; i < t.Columns.Count; i++)
+        for (int i = 0; i < t.Columns.Count; i++)
         {
-            if (i > 0) changed.Append(" | ");
+            if (i > 0)
+                changed.Append(" | ");
             changed.Append($"((OLD.{Q(t.Columns[i])} IS NOT NEW.{Q(t.Columns[i])}) << {i})");
         }
-        if (t.Columns.Count == 0) changed.Append('0');
-        var floor = $"(SELECT floor FROM _sync_floor WHERE tbl = '{name}')";
+        if (t.Columns.Count == 0)
+            changed.Append('0');
+        string floor = $"(SELECT floor FROM _sync_floor WHERE tbl = '{name}')";
 
         yield return $"DROP TRIGGER IF EXISTS \"_sync_{t.Name}_ins\";";
         yield return $"DROP TRIGGER IF EXISTS \"_sync_{t.Name}_upd\";";

@@ -55,5 +55,5 @@ public sealed class OwnerFaults
         _streamDelay[clientId] = (delay, DateTimeOffset.UtcNow + window);
 
     internal TimeSpan StreamDelay(string clientId) =>
-        _streamDelay.TryGetValue(clientId, out var d) && d.Until > DateTimeOffset.UtcNow ? d.Delay : TimeSpan.Zero;
+        _streamDelay.TryGetValue(clientId, out (TimeSpan Delay, DateTimeOffset Until) d) && d.Until > DateTimeOffset.UtcNow ? d.Delay : TimeSpan.Zero;
 }

@@ -39,7 +39,7 @@ public sealed class ClientNode : IAsyncDisposable
         }
         var replication = new ClientReplication(dbPath, model, log);
         replication.Install();
-        var agent = replication.Connect(ownerAddress, "Власник", options, label);
+        SyncAgent agent = replication.Connect(ownerAddress, "Власник", options, label);
         agent.SetOpenTables("Item");
         return new ClientNode(id, label, dbPath, replication, agent, log);
     }
@@ -64,8 +64,8 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task EditItemAsync(string name, Action<Item> change, string what)
     {
-        await using var db = Db();
-        var it = await ItemAsync(db, name);
+        await using SampleDbContext db = Db();
+        Item it = await ItemAsync(db, name);
         change(it);
         await db.SaveChangesAsync();
         Say($"«{name}» {what}");
@@ -77,7 +77,7 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task<Guid> CreateCategoryAsync(string name)
     {
-        await using var db = Db();
+        await using SampleDbContext db = Db();
         var c = new Category { Name = name };
         db.Categories.Add(c).SetInstance(Instance);
         await db.SaveChangesAsync();
@@ -87,8 +87,8 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task<Guid> CreateItemAsync(string name, long price, string status, string category)
     {
-        await using var db = Db();
-        var cat = await Mine<Category>(db).FirstAsync(x => x.Name == category);
+        await using SampleDbContext db = Db();
+        Category cat = await Mine<Category>(db).FirstAsync(x => x.Name == category);
         var it = new Item { Name = name, Price = price, Status = status, CategoryId = cat.Id };
         db.Items.Add(it).SetInstance(Instance);
         await db.SaveChangesAsync();
@@ -98,7 +98,7 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task DeleteItemAsync(string name)
     {
-        await using var db = Db();
+        await using SampleDbContext db = Db();
         db.Items.Remove(await ItemAsync(db, name));
         await db.SaveChangesAsync();
         Say($"видалив «{name}»");
@@ -106,7 +106,7 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task DeleteCategoryAsync(string name)
     {
-        await using var db = Db();
+        await using SampleDbContext db = Db();
         db.Categories.Remove(await Mine<Category>(db).FirstAsync(x => x.Name == name));
         await db.SaveChangesAsync();
         Say($"видалив категорію «{name}» (локальний каскад прибрав товари, у чергу йде тільки категорія)");
@@ -116,8 +116,8 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task UpdateItemAsync(Guid id, string name, long price, string status)
     {
-        await using var db = Db();
-        var it = await Mine<Item>(db).FirstAsync(x => x.Id == id);
+        await using SampleDbContext db = Db();
+        Item it = await Mine<Item>(db).FirstAsync(x => x.Id == id);
         (it.Name, it.Price, it.Status) = (name, price, status);
         await db.SaveChangesAsync();
         Say($"«{name}»: Price = {price}, Status = {status}");
@@ -125,8 +125,8 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task RenameCategoryAsync(Guid id, string name)
     {
-        await using var db = Db();
-        var c = await Mine<Category>(db).FirstAsync(x => x.Id == id);
+        await using SampleDbContext db = Db();
+        Category c = await Mine<Category>(db).FirstAsync(x => x.Id == id);
         c.Name = name;
         await db.SaveChangesAsync();
         Say($"категорія «{name}»");
@@ -134,7 +134,7 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task DeleteAsync(string table, Guid id)
     {
-        await using var db = Db();
+        await using SampleDbContext db = Db();
         BaseEntity e = table switch
         {
             "Category" => await Mine<Category>(db).FirstAsync(x => x.Id == id),
@@ -148,9 +148,9 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task<Guid> AddItemAsync()
     {
-        await using var db = Db();
-        var cat = await Mine<Category>(db).OrderBy(x => x.Name).FirstAsync();
-        var n = await Mine<Item>(db).CountAsync() + 1;
+        await using SampleDbContext db = Db();
+        Category cat = await Mine<Category>(db).OrderBy(x => x.Name).FirstAsync();
+        int n = await Mine<Item>(db).CountAsync() + 1;
         var it = new Item { Name = $"Товар {n}", Price = 100, Status = "новий", CategoryId = cat.Id };
         db.Items.Add(it).SetInstance(Instance);
         await db.SaveChangesAsync();
@@ -172,9 +172,9 @@ public sealed class ClientNode : IAsyncDisposable
 
     public async Task<string> ArchiveAsync(params (string Table, string Name)[] rows)
     {
-        await using var db = Db();
+        await using SampleDbContext db = Db();
         var ids = new List<(string, Guid)>();
-        foreach (var (t, n) in rows)
+        foreach ((string? t, string? n) in rows)
             ids.Add((t, t == "Category" ? (await Mine<Category>(db).FirstAsync(x => x.Name == n)).Id : (await ItemAsync(db, n)).Id));
         Say($"переносить в архів: {string.Join(", ", rows.Select(r => $"«{r.Name}»"))}");
         return await Agent.ArchiveAsync(ids);
