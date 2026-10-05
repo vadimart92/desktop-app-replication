@@ -13,7 +13,7 @@ namespace Sample.App;
 /// </summary>
 public static class Program
 {
-    public static StartOptions Options { get; private set; } = new();
+    public static StartOptions Options { get; private set; } = new StartOptions();
 
     [STAThread]
     public static int Main(string[] args)

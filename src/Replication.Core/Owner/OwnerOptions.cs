@@ -42,7 +42,7 @@ public sealed class OwnerOptions
     public SyncLog Log { get; set; } = SyncLog.Null;
 
     /// <summary>Fault injection for demos and tests. Not used in production paths unless set.</summary>
-    public OwnerFaults Faults { get; } = new();
+    public OwnerFaults Faults { get; } = new OwnerFaults();
 }
 
 /// <summary>Knobs the sample scenarios use to reproduce timing cases from the demo page.</summary>

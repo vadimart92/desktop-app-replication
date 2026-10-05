@@ -61,7 +61,7 @@ public sealed partial class LabViewModel : ObservableObject
     }
 
     public IReadOnlyList<Scenario> ScenarioList => Scenarios.All;
-    public LogFeed Feed { get; } = new();
+    public LogFeed Feed { get; } = new LogFeed();
     public ObservableCollection<StepView> Steps { get; } = [];
 
     partial void OnSelectedScenarioChanged(Scenario value) => _ = StartScenarioAsync(value);
@@ -195,7 +195,7 @@ public sealed partial class OwnerWindowViewModel : ObservableObject
         _ = StartAsync(o, log);
     }
 
-    public LogFeed Feed { get; } = new();
+    public LogFeed Feed { get; } = new LogFeed();
 
     private async Task StartAsync(StartOptions o, SyncLog log)
     {
@@ -242,5 +242,5 @@ public sealed partial class ClientWindowViewModel : ObservableObject
         }
     }
 
-    public LogFeed Feed { get; } = new();
+    public LogFeed Feed { get; } = new LogFeed();
 }

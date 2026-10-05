@@ -66,10 +66,6 @@ public sealed class SyncAgent : IAsyncDisposable
 {
     private static readonly Metadata s_gzip = new() { { "grpc-internal-encoding-request", "gzip" } };
 
-    private sealed record Download(string Id, string Path, long Total);
-
-    private sealed record ArchiveRetry(string Table, string Pk, string Why, long Version, int Tries);
-
     private readonly ClientStore _store;
     private readonly SyncLog _log;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -96,6 +92,11 @@ public sealed class SyncAgent : IAsyncDisposable
     private Download? _download;
     private double? _snapshotProgress;
     private double _applyRate;
+    private readonly Dictionary<string, int> _archiveTries = [];
+
+    private sealed record Download(string Id, string Path, long Total);
+
+    private sealed record ArchiveRetry(string Table, string Pk, string Why, long Version, int Tries);
 
     public SyncAgent(ClientStore store, string address, string name, AgentOptions? options = null, SyncLog? log = null, string? label = null)
     {
@@ -106,7 +107,8 @@ public sealed class SyncAgent : IAsyncDisposable
         Options = options ?? new AgentOptions();
         _log = log ?? SyncLog.Null;
         store.EnsureInstance(address, name);
-        _conn = store.Open(foreignKeys: false); // children may arrive before parents during catch-up (7)
+        // Children may arrive before parents during catch-up (7).
+        _conn = store.Open(foreignKeys: false);
         _instance = store.InstanceOf(_conn, address);
         _cursors = _instance is null ? NewCursors() : store.LoadCursors(_conn, _instance);
     }
@@ -116,8 +118,8 @@ public sealed class SyncAgent : IAsyncDisposable
     public string Label { get; }
     public AgentOptions Options { get; }
     public string? InstanceId => _instance;
-    public WireMeter Meter { get; } = new();
-    public NetworkProfile Network { get; } = new();
+    public WireMeter Meter { get; } = new WireMeter();
+    public NetworkProfile Network { get; } = new NetworkProfile();
 
     /// <summary>Drop the next ApplyReply as if it was lost in the network (the demo's "lost reply").</summary>
     public bool LoseNextApplyReply { get; set; }
@@ -207,7 +209,9 @@ public sealed class SyncAgent : IAsyncDisposable
 
     public AgentStatus GetStatus()
     {
-        int pending = 0, deletes = 0, inflight = 0;
+        int pending = 0;
+        int deletes = 0;
+        int inflight = 0;
         if (_instance is not null)
         {
             using SqliteConnection c = _store.Open();
@@ -286,7 +290,8 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         var handler = new SocketsHttpHandler
         {
-            InitialHttp2StreamWindowSize = Options.Http2StreamWindowBytes, // window ≥ bandwidth × RTT (6.1)
+            // Window ≥ bandwidth × RTT (6.1).
+            InitialHttp2StreamWindowSize = Options.Http2StreamWindowBytes,
             KeepAlivePingDelay = TimeSpan.FromSeconds(20),
             KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
             KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always,
@@ -357,7 +362,8 @@ public sealed class SyncAgent : IAsyncDisposable
             {
                 Log($"← SnapshotRequired: {first.SnapshotRequired.Reason}, знімок ~{first.SnapshotRequired.SizeBytes / 1024} КБ", SyncLogLevel.Warn);
                 await SnapshotFlowAsync(client, first.SnapshotRequired, ct);
-                continue; // a new Start with the fresh replica
+                // A new Start with the fresh replica.
+                continue;
             }
 
             SetState(AgentState.Catchup);
@@ -377,7 +383,10 @@ public sealed class SyncAgent : IAsyncDisposable
             {
                 await Task.WhenAll(tasks);
             }
-            catch { /* the first failure is rethrown below */ }
+            catch
+            {
+                // The first failure is rethrown below.
+            }
             await done;
             throw new IOException("власник закрив потік");
         }
@@ -484,7 +493,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 }
                 foreach ((string t, CursorState k) in _cursors)
                     _store.SaveCursor(_conn, tx, _instance!, t, k);
-                // a confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1)
+                // A confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1).
                 foreach ((string t, CursorState k) in _cursors)
                 {
                     _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND sent = 2 AND expected_version <= @c", tx,
@@ -583,7 +592,8 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             LoseNextApplyReply = false;
             Log("✕ відповідь ApplyReply загубилась у мережі; дії лишаються в черзі з sent = 1", SyncLogLevel.Bad);
-            await Task.Delay(TimeSpan.FromSeconds(1), ct); // the timeout before a retry
+            // The timeout before a retry.
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
             return false;
         }
         await ProcessReplyAsync(reply, entries);
@@ -627,7 +637,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 {
                     foreach (SyncForeignKey fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
                     {
-                        // a create this row points to must go in the same or an earlier batch (8.4)
+                        // A create this row points to must go in the same or an earlier batch (8.4).
                         string? pid = _conn.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
                         if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == 0) is { } pe)
                             Add(pe);
@@ -650,7 +660,7 @@ public sealed class SyncAgent : IAsyncDisposable
             var sent = new List<OutboxEntry>();
             foreach (OutboxEntry e in batch)
             {
-                // seq is given at the first send, so the owner always sees seq ascending (8.5)
+                // Seq is given at the first send, so the owner always sees seq ascending (8.5).
                 long seq = e.Seq ?? next++;
                 _conn.Exec("UPDATE _sync_outbox SET seq = @s, sent = 1 WHERE id = @id", tx, ("@s", seq), ("@id", e.Id));
                 if (actions[e.Id] is { } a)
@@ -684,7 +694,11 @@ public sealed class SyncAgent : IAsyncDisposable
                 using SqliteCommand cmd = _conn.Cmd($"SELECT {string.Join(", ", cols.Select(Q).DefaultIfEmpty("1"))} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
                 using SqliteDataReader r = cmd.ExecuteReader();
                 if (!r.Read())
-                    return null; // the row is gone: nothing to send, the reply's applied_up_to_seq clears the entry
+                {
+                    // The row is gone: nothing to send, the reply's applied_up_to_seq clears the entry.
+                    return null;
+                }
+
                 a.Pk = PkBytes(e.Pk!);
                 for (int i = 0; i < cols.Count; i++)
                 {
@@ -739,7 +753,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     }
                     case ResultStatus.Ignored when t is not null && e.Pk is not null:
                     {
-                        // delete wins: the record goes here right away, without waiting for the tombstone (6.5, 9.1)
+                        // Delete wins: the record goes here right away, without waiting for the tombstone (6.5, 9.1).
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
                         w.Note(_conn, tx, $"правку запису {label} втрачено: його видалено на інстансі");
@@ -794,7 +808,7 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private async Task SnapshotFlowAsync(Sync.SyncClient client, SnapshotRequired sr, CancellationToken ct)
     {
-        // 1. the outbox goes first: Apply does not depend on the cursor
+        // 1. The outbox goes first: Apply does not depend on the cursor.
         if (_instance is not null && HasSendable())
         {
             SetState(AgentState.Flushing);
@@ -933,9 +947,10 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             if (_instance is null)
                 return 0;
-            using SqliteConnection c = _store.Open(); // FK on: the local cascade removes children the same way the owner will (8.7)
+            // FK on: the local cascade removes children the same way the owner will (8.7).
+            using SqliteConnection c = _store.Open();
             using SqliteTransaction tx = c.BeginTransaction();
-            (string? where, (string, object?)[]? args) = predicate.ToSql(t);
+            (string where, (string, object?)[] args) = predicate.ToSql(t);
             var ids = new List<string>();
             using (SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE InstanceId = @inst AND {where}", tx, [("@inst", _instance), .. args]))
             using (SqliteDataReader r = cmd.ExecuteReader())
@@ -961,7 +976,7 @@ public sealed class SyncAgent : IAsyncDisposable
             }
             else
             {
-                // rows with their own actions in the outbox go by key, the rest as one predicate
+                // Rows with their own actions in the outbox go by key, the rest as one predicate.
                 List<string> own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
                 foreach (string id in ids)
                     c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
@@ -1016,7 +1031,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 if (_conn.Scalar<string>($"SELECT InstanceId FROM {Q(table)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", pk), ("@i", _instance)) is null)
                     return;
                 set.Add((table, pk));
-                // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3)
+                // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3).
                 foreach ((SyncTable child, SyncForeignKey fk) in _store.Model.ChildrenOf(table))
                 {
                     var ids = new List<string>();
@@ -1058,8 +1073,6 @@ public sealed class SyncAgent : IAsyncDisposable
         NotifyOutbox();
         return text;
     }
-
-    private readonly Dictionary<string, int> _archiveTries = [];
 
     /// <summary>
     /// Rows the owner kept: changed after V, or parents of kept children. They go back from the archive to the replica;
