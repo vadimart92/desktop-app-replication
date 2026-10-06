@@ -25,7 +25,8 @@ internal sealed class SnapshotStore(OwnerStore store)
         }
     }
 
-    public Snap? Find(string id) => _snaps.GetValueOrDefault(id);
+    /// <summary>A tracked snapshot whose file is still there; another owner sharing the folder may have swept it.</summary>
+    public Snap? Find(string id) => _snaps.TryGetValue(id, out Snap? s) && File.Exists(s.Path) ? s : null;
 
     /// <summary>
     /// VACUUM INTO is a consistent copy as of the start of reading and does not block the writer.
@@ -39,27 +40,38 @@ internal sealed class SnapshotStore(OwnerStore store)
             Cleanup();
             string id = "snap-" + Guid.NewGuid().ToString("N")[..10];
             string path = System.IO.Path.Combine(Dir, id + ".db");
-            using (SqliteConnection c = store.Open())
-                c.Exec("VACUUM INTO @p", null, ("@p", path));
-
-            long v;
-            string instance;
-            using (var s = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()))
+            Snap snap;
+            try
             {
-                s.Open();
-                v = s.Scalar<long>("SELECT version FROM _sync_meta");
-                instance = s.Scalar<string>("SELECT instance_id FROM _sync_meta")!;
+                using (SqliteConnection c = store.Open())
+                    c.Exec("VACUUM INTO @p", null, ("@p", path));
+
+                long v;
+                string instance;
+                using (var s = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()))
+                {
+                    s.Open();
+                    v = s.Scalar<long>("SELECT version FROM _sync_meta");
+                    instance = s.Scalar<string>("SELECT instance_id FROM _sync_meta")!;
+                }
+
+                using (SqliteConnection c = store.Open())
+                    store.SaveCursors(c, clientId, store.Model.Tables.ToDictionary(t => t.Name, _ => v));
+
+                byte[] hash;
+                await using (FileStream f = File.OpenRead(path))
+                    hash = await SHA256.HashDataAsync(f);
+                snap = new Snap(id, path, v, instance, new FileInfo(path).Length, hash, DateTimeOffset.UtcNow);
+            }
+            catch
+            {
+                // Not tracked yet, and a failed VACUUM INTO can leave a partial file.
+                TryDelete(path);
+                throw;
             }
 
-            using (SqliteConnection c = store.Open())
-                store.SaveCursors(c, clientId, store.Model.Tables.ToDictionary(t => t.Name, _ => v));
-
-            byte[] hash;
-            await using (FileStream f = File.OpenRead(path))
-                hash = await SHA256.HashDataAsync(f);
-            var snap = new Snap(id, path, v, instance, new FileInfo(path).Length, hash, DateTimeOffset.UtcNow);
             _snaps[id] = snap;
-            store.Options.Log.Write("owner", $"VACUUM INTO → {id}, V = {v}, {snap.Size / 1024} КБ; клієнт зареєстровано з acked_version = {v}");
+            store.Options.Log.Write("owner", $"VACUUM INTO → {id}, V = {snap.Version}, {snap.Size / 1024} КБ; клієнт зареєстровано з acked_version = {snap.Version}");
             return snap;
         }
         finally
@@ -68,16 +80,38 @@ internal sealed class SnapshotStore(OwnerStore store)
         }
     }
 
+    /// <summary>
+    /// Deletes snapshots older than SnapshotKeep: tracked ones, which stay tracked while a delete fails (a download may
+    /// still hold the file), and files left by an earlier run of the owner. A fresh untracked file may belong to another
+    /// owner sharing the folder, so it stays.
+    /// </summary>
     private void Cleanup()
     {
-        foreach (Snap s in _snaps.Values.Where(s => DateTimeOffset.UtcNow - s.Created > store.Options.SnapshotKeep).ToList())
+        DateTimeOffset cutoff = DateTimeOffset.UtcNow - store.Options.SnapshotKeep;
+        foreach (Snap s in _snaps.Values.Where(s => s.Created < cutoff).ToList())
         {
-            _snaps.TryRemove(s.Id, out _);
-            try
-            {
-                File.Delete(s.Path);
-            }
-            catch (IOException) { }
+            if (TryDelete(s.Path))
+                _snaps.TryRemove(s.Id, out _);
+        }
+
+        foreach (string f in Directory.EnumerateFiles(Dir, "snap-*.db"))
+        {
+            if (!_snaps.ContainsKey(System.IO.Path.GetFileNameWithoutExtension(f)) && File.GetLastWriteTimeUtc(f) < cutoff.UtcDateTime)
+                TryDelete(f);
+        }
+    }
+
+    private bool TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            store.Options.Log.Write("owner", $"знімок {System.IO.Path.GetFileName(path)}: не вдалося видалити ({e.Message})", SyncLogLevel.Warn);
+            return false;
         }
     }
 }

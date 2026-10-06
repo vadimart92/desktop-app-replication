@@ -32,15 +32,6 @@
       "baselinedAt": "2026-10-05T20:40:07.9814211+00:00"
     },
     {
-      "hash": "2451574d75ff05c7",
-      "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Owner/SnapshotStore.cs",
-      "lineNumber": 79,
-      "codeSnippet": "catch (IOException) { }",
-      "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-10-05T20:40:07.9814408+00:00"
-    },
-    {
       "hash": "a4902b939b291638",
       "ruleId": "SW003",
       "filePath": "src/Sample.Lab/Lab.cs",
