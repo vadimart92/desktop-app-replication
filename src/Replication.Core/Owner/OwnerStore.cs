@@ -304,24 +304,29 @@ public sealed class OwnerStore
             using SqliteTransaction tx = c.BeginTransaction();
             floor = c.Scalar<long?>("SELECT MIN(acked_version) FROM _sync_clients", tx) ?? NoFloor;
             long guard = SubscribedFloor(c, tx);
-            var batch = new List<(string Tbl, string Pk, long V)>();
+            int n = 0;
+            long max = 0;
+            // RETURNING ties MAX(version) to exactly the rows the LIMIT picked.
             using (SqliteCommand cmd = c.Cmd("""
-                SELECT tbl, pk, version FROM _sync_tombstones
-                WHERE version <= @f OR (deleted_at < @cut AND version <= @g) LIMIT 1000
+                DELETE FROM _sync_tombstones WHERE (tbl, pk) IN (
+                  SELECT tbl, pk FROM _sync_tombstones
+                  WHERE version <= @f OR (deleted_at < @cut AND version <= @g) LIMIT 1000)
+                RETURNING version
                 """, tx, ("@f", floor), ("@cut", cutoff), ("@g", guard)))
             using (SqliteDataReader r = cmd.ExecuteReader())
             {
                 while (r.Read())
-                    batch.Add((r.GetString(0), r.GetString(1), r.GetInt64(2)));
+                {
+                    n++;
+                    max = Math.Max(max, r.GetInt64(0));
+                }
             }
 
-            if (batch.Count == 0)
+            if (n == 0)
                 break;
-            foreach ((string tbl, string pk, long _) in batch)
-                c.Exec("DELETE FROM _sync_tombstones WHERE tbl = @t AND pk = @p", tx, ("@t", tbl), ("@p", pk));
-            c.Exec("UPDATE _sync_meta SET purged_version = MAX(purged_version, @v)", tx, ("@v", batch.Max(x => x.V)));
+            c.Exec("UPDATE _sync_meta SET purged_version = MAX(purged_version, @v)", tx, ("@v", max));
             tx.Commit();
-            total += batch.Count;
+            total += n;
         }
         if (total > 0)
             NotifyCommitted();

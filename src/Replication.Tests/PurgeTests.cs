@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Replication.Owner;
 using Sample.Lab;
 using Xunit;
@@ -7,6 +8,37 @@ namespace Replication.Tests;
 /// <summary>Tombstone cleanup and the activity window on the owner (design 5.2, 10.2).</summary>
 public class PurgeTests
 {
+    private static long OwnerScalar(Lab lab, string sql)
+    {
+        using SqliteConnection c = lab.Owner.Store.Open();
+        using SqliteCommand cmd = c.CreateCommand();
+        cmd.CommandText = sql;
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    [Fact]
+    public async Task Purge_takes_every_tombstone_in_batches_and_reports_the_count()
+    {
+        await using Lab lab = await Lab.StartAsync();
+        long head = lab.Owner.Head();
+        long before = OwnerScalar(lab, "SELECT COUNT(*) FROM _sync_tombstones");
+        // More than two batches of 1000, with versions above every real tombstone.
+        long added = OwnerScalar(lab, $"""
+            WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2500)
+            INSERT INTO _sync_tombstones(tbl, pk, version, deleted_at) SELECT 'Item', 'gone-' || i, {head} + i, 0 FROM n;
+            SELECT changes();
+            """);
+        Assert.Equal(2500, added);
+
+        // No client is registered: the floor is open and every tombstone goes.
+        OwnerStore.PurgeResult r = await lab.Owner.PurgeAsync();
+
+        Assert.Equal(before + added, r.Tombstones);
+        Assert.Equal(head + added, r.PurgedVersion);
+        Assert.Equal(OwnerStore.NoFloor, r.Floor);
+        Assert.Equal(0, OwnerScalar(lab, "SELECT COUNT(*) FROM _sync_tombstones"));
+    }
+
     [Fact]
     public async Task Clock_jump_forgets_a_client_whose_stream_has_ended()
     {
