@@ -11,8 +11,14 @@ namespace Replication.Client;
 internal static class ArchiveGuard
 {
     /// <summary>Whether archived rows of the instance point to this row, directly or through live children.</summary>
-    public static bool HasArchiveBelow(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk)
+    public static bool HasArchiveBelow(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk) =>
+        HasArchiveBelow(c, tx, model, instance, t, pk, []);
+
+    private static bool HasArchiveBelow(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk, HashSet<(string Table, string Pk)> seen)
     {
+        // An FK cycle (a row pointing to itself) leads back to a row already checked.
+        if (!seen.Add((t.Name, pk)))
+            return false;
         string archive = SyncColumns.ArchiveOf(instance);
         foreach ((SyncTable child, SyncForeignKey fk) in model.ChildrenOf(t.Name))
         {
@@ -23,7 +29,7 @@ internal static class ArchiveGuard
                 continue;
             foreach (string id in ClientStore.ChildIds(c, tx, instance, child, fk, pk))
             {
-                if (HasArchiveBelow(c, tx, model, instance, child, id))
+                if (HasArchiveBelow(c, tx, model, instance, child, id, seen))
                     return true;
             }
         }
@@ -35,8 +41,14 @@ internal static class ArchiveGuard
     /// <c>InstanceId = X:archive</c> instead. Works the same with FK on (no cascade reaches the archive) and off.
     /// </summary>
     /// <returns>true when the row itself was moved to the archive.</returns>
-    public static bool DeleteOrArchive(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk)
+    public static bool DeleteOrArchive(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk) =>
+        DeleteOrArchive(c, tx, model, instance, t, pk, []);
+
+    private static bool DeleteOrArchive(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance, SyncTable t, string pk, HashSet<(string Table, string Pk)> seen)
     {
+        // An FK cycle leads back to a row that is already being deleted or moved further up.
+        if (!seen.Add((t.Name, pk)))
+            return false;
         if (!HasArchiveBelow(c, tx, model, instance, t, pk))
         {
             c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", pk), ("@i", instance));
@@ -52,7 +64,7 @@ internal static class ArchiveGuard
             else
             {
                 foreach (string id in ClientStore.ChildIds(c, tx, instance, child, fk, pk))
-                    DeleteOrArchive(c, tx, model, instance, child, id);
+                    DeleteOrArchive(c, tx, model, instance, child, id, seen);
             }
         }
 
