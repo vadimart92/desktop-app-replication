@@ -35,7 +35,7 @@ public sealed class OwnerHost : IAsyncDisposable
     /// <param name="listenAnywhere">Listen on all interfaces instead of loopback only.</param>
     public static async Task<OwnerHost> StartAsync(OwnerStore store, int port = 0, bool listenAnywhere = false)
     {
-        var builder = WebApplication.CreateSlimBuilder();
+        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(k =>
         {
@@ -43,33 +43,37 @@ public sealed class OwnerHost : IAsyncDisposable
             k.Limits.Http2.InitialConnectionWindowSize = store.Options.Http2ConnectionWindowBytes;
             k.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(20);
             k.Limits.Http2.KeepAlivePingTimeout = TimeSpan.FromSeconds(20);
-            void Listen(ListenOptions o) => o.Protocols = HttpProtocols.Http2; // h2c: plain HTTP/2, no TLS in v1 (2)
-            if (listenAnywhere) k.ListenAnyIP(port, Listen);
-            else k.Listen(System.Net.IPAddress.Loopback, port, Listen);
+            // Plain HTTP/2 (h2c), no TLS in v1 (2).
+            void Listen(ListenOptions o) => o.Protocols = HttpProtocols.Http2;
+            if (listenAnywhere)
+                k.ListenAnyIP(port, Listen);
+            else
+                k.Listen(System.Net.IPAddress.Loopback, port, Listen);
         });
         builder.Services.AddSingleton(store);
         builder.Services.AddSingleton<SnapshotStore>();
         builder.Services.AddGrpc(o =>
         {
-            o.ResponseCompressionAlgorithm = "gzip"; // 3-5x on table data (6.1)
+            // Gzip: 3-5x on table data (6.1).
+            o.ResponseCompressionAlgorithm = "gzip";
             o.ResponseCompressionLevel = CompressionLevel.Optimal;
             o.MaxReceiveMessageSize = 32 * 1024 * 1024;
             o.MaxSendMessageSize = 32 * 1024 * 1024;
             o.EnableDetailedErrors = true;
         });
-        var app = builder.Build();
+        WebApplication app = builder.Build();
         app.MapGrpcService<SyncGrpcService>();
         await app.StartAsync();
-        var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
-        var actualPort = new Uri(address.Replace("[::]", "localhost").Replace("+", "localhost").Replace("*", "localhost")).Port;
+        string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
+        int actualPort = new Uri(address.Replace("[::]", "localhost").Replace("+", "localhost").Replace("*", "localhost")).Port;
         store.Options.Log.Write("owner", $"gRPC-сервер слухає порт {actualPort}, instance_id {store.InstanceId}", SyncLogLevel.Ok);
         return new OwnerHost(app, store, actualPort);
     }
 
     private async Task JobsAsync(CancellationToken ct)
     {
-        var lastPurge = DateTimeOffset.UtcNow;
-        var lastFloor = DateTimeOffset.UtcNow;
+        DateTimeOffset lastPurge = DateTimeOffset.UtcNow;
+        DateTimeOffset lastFloor = DateTimeOffset.UtcNow;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -78,13 +82,15 @@ public sealed class OwnerHost : IAsyncDisposable
                 Store.WriteVersionFile();
                 if (DateTimeOffset.UtcNow - lastFloor > TimeSpan.FromMinutes(1))
                 {
-                    Store.RecomputeFloor(); // a client that left the activity window stops holding the base back
+                    // A client that left the activity window stops holding the base back.
+                    Store.RecomputeFloor();
                     lastFloor = DateTimeOffset.UtcNow;
                 }
                 if (DateTimeOffset.UtcNow - lastPurge > Store.Options.PurgeInterval)
                 {
-                    var r = Store.Purge();
-                    if (r.Tombstones > 0) Store.Options.Log.Write("owner", $"очищення: видалено {r.Tombstones} tombstones, purged_version = {r.PurgedVersion}");
+                    OwnerStore.PurgeResult r = Store.Purge();
+                    if (r.Tombstones > 0)
+                        Store.Options.Log.Write("owner", $"очищення: видалено {r.Tombstones} tombstones, purged_version = {r.PurgedVersion}");
                     Store.IncrementalVacuum(256);
                     lastPurge = DateTimeOffset.UtcNow;
                 }
@@ -100,9 +106,18 @@ public sealed class OwnerHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
-        try { await _jobs; } catch { }
-        using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2))) await _app.StopAsync(stop.Token);
+        try
+        {
+            await _jobs;
+        }
+        catch { }
+        using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+            await _app.StopAsync(stop.Token);
         await _app.DisposeAsync();
-        try { Store.WriteVersionFile(); } catch { }
+        try
+        {
+            Store.WriteVersionFile();
+        }
+        catch { }
     }
 }

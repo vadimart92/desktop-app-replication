@@ -20,21 +20,23 @@ public sealed class WireMeter
     public long BytesDown => Interlocked.Read(ref _down);
 
     internal void AddUp(int n) => Interlocked.Add(ref _up, n);
+
     internal void AddDown(int n) => Interlocked.Add(ref _down, n);
 
     /// <summary>Uncompressed protobuf size of a message, by direction and type (for example "↓ Batch").</summary>
     public void CountMessage(string key, int bytes) =>
         _messages.AddOrUpdate(key, (1, bytes), (_, v) => (v.Count + 1, v.Bytes + bytes));
 
-    public IReadOnlyList<KeyValuePair<string, (long Count, long Bytes)>> Messages => _messages.ToArray(); // ToArray is atomic on ConcurrentDictionary
+    // ToArray is atomic on ConcurrentDictionary.
+    public IReadOnlyList<KeyValuePair<string, (long Count, long Bytes)>> Messages => _messages.ToArray();
 
     /// <summary>Bytes per second over the last sampling period (call about once a second).</summary>
     public (double Up, double Down) SampleRate()
     {
         lock (_rateLock)
         {
-            var now = DateTimeOffset.UtcNow;
-            var dt = (now - _rateMark.At).TotalSeconds;
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            double dt = (now - _rateMark.At).TotalSeconds;
             if (dt >= 0.5)
             {
                 _rate = ((BytesUp - _rateMark.Up) / dt, (BytesDown - _rateMark.Down) / dt);
@@ -49,7 +51,8 @@ public sealed class WireMeter
         Interlocked.Exchange(ref _up, 0);
         Interlocked.Exchange(ref _down, 0);
         _messages.Clear();
-        lock (_rateLock) _rateMark = (DateTimeOffset.UtcNow, 0, 0);
+        lock (_rateLock)
+            _rateMark = (DateTimeOffset.UtcNow, 0, 0);
     }
 
     public static string Format(double bytes) => bytes switch

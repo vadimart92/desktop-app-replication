@@ -10,16 +10,16 @@ namespace Replication.Owner;
 /// </summary>
 internal sealed class SnapshotStore(OwnerStore store)
 {
-    internal sealed record Snap(string Id, string Path, long Version, string InstanceId, long Size, byte[] Sha256, DateTimeOffset Created);
-
     private readonly ConcurrentDictionary<string, Snap> _snaps = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    internal sealed record Snap(string Id, string Path, long Version, string InstanceId, long Size, byte[] Sha256, DateTimeOffset Created);
 
     private string Dir
     {
         get
         {
-            var d = store.Options.SnapshotDirectory ?? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(store.DbPath)!, "snapshots");
+            string d = store.Options.SnapshotDirectory ?? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(store.DbPath)!, "snapshots");
             Directory.CreateDirectory(d);
             return d;
         }
@@ -37,9 +37,9 @@ internal sealed class SnapshotStore(OwnerStore store)
         try
         {
             Cleanup();
-            var id = "snap-" + Guid.NewGuid().ToString("N")[..10];
-            var path = System.IO.Path.Combine(Dir, id + ".db");
-            using (var c = store.Open())
+            string id = "snap-" + Guid.NewGuid().ToString("N")[..10];
+            string path = System.IO.Path.Combine(Dir, id + ".db");
+            using (SqliteConnection c = store.Open())
                 c.Exec("VACUUM INTO @p", null, ("@p", path));
 
             long v;
@@ -51,15 +51,16 @@ internal sealed class SnapshotStore(OwnerStore store)
                 instance = s.Scalar<string>("SELECT instance_id FROM _sync_meta")!;
             }
 
-            using (var c = store.Open())
-            using (var tx = c.BeginTransaction())
+            using (SqliteConnection c = store.Open())
+            using (SqliteTransaction tx = c.BeginTransaction())
             {
                 store.SaveCursors(c, tx, clientId, store.Model.Tables.ToDictionary(t => t.Name, _ => v));
                 tx.Commit();
             }
 
             byte[] hash;
-            await using (var f = File.OpenRead(path)) hash = await SHA256.HashDataAsync(f);
+            await using (FileStream f = File.OpenRead(path))
+                hash = await SHA256.HashDataAsync(f);
             var snap = new Snap(id, path, v, instance, new FileInfo(path).Length, hash, DateTimeOffset.UtcNow);
             _snaps[id] = snap;
             store.Options.Log.Write("owner", $"VACUUM INTO → {id}, V = {v}, {snap.Size / 1024} КБ; клієнт зареєстровано з acked_version = {v}");
@@ -73,10 +74,14 @@ internal sealed class SnapshotStore(OwnerStore store)
 
     private void Cleanup()
     {
-        foreach (var s in _snaps.Values.Where(s => DateTimeOffset.UtcNow - s.Created > store.Options.SnapshotKeep).ToList())
+        foreach (Snap s in _snaps.Values.Where(s => DateTimeOffset.UtcNow - s.Created > store.Options.SnapshotKeep).ToList())
         {
             _snaps.TryRemove(s.Id, out _);
-            try { File.Delete(s.Path); } catch (IOException) { }
+            try
+            {
+                File.Delete(s.Path);
+            }
+            catch (IOException) { }
         }
     }
 }

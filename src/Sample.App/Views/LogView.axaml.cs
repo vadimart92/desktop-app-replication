@@ -13,9 +13,11 @@ public partial class LogView : UserControl
         InitializeComponent();
         DataContextChanged += (_, _) =>
         {
-            if (_feed is not null) _feed.Appended -= ScrollToEnd;
+            if (_feed is not null)
+                _feed.Appended -= ScrollToEnd;
             _feed = DataContext as LogFeed;
-            if (_feed is not null) _feed.Appended += ScrollToEnd;
+            if (_feed is not null)
+                _feed.Appended += ScrollToEnd;
         };
     }
 

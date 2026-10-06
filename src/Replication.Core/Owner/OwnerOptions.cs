@@ -42,7 +42,7 @@ public sealed class OwnerOptions
     public SyncLog Log { get; set; } = SyncLog.Null;
 
     /// <summary>Fault injection for demos and tests. Not used in production paths unless set.</summary>
-    public OwnerFaults Faults { get; } = new();
+    public OwnerFaults Faults { get; } = new OwnerFaults();
 }
 
 /// <summary>Knobs the sample scenarios use to reproduce timing cases from the demo page.</summary>
@@ -55,5 +55,5 @@ public sealed class OwnerFaults
         _streamDelay[clientId] = (delay, DateTimeOffset.UtcNow + window);
 
     internal TimeSpan StreamDelay(string clientId) =>
-        _streamDelay.TryGetValue(clientId, out var d) && d.Until > DateTimeOffset.UtcNow ? d.Delay : TimeSpan.Zero;
+        _streamDelay.TryGetValue(clientId, out (TimeSpan Delay, DateTimeOffset Until) d) && d.Until > DateTimeOffset.UtcNow ? d.Delay : TimeSpan.Zero;
 }

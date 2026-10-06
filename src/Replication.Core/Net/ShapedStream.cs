@@ -12,10 +12,10 @@ public sealed class NetworkProfile
     public long UpBitsPerSecond { get; set; }
     public long DownBitsPerSecond { get; set; }
 
-    public static NetworkProfile Local() => new();
+    public static NetworkProfile Local() => new NetworkProfile();
 
     /// <summary>1.5 s each way, 70 kbit/s up, 2 Mbit/s down.</summary>
-    public static NetworkProfile Target() => new() { Latency = TimeSpan.FromMilliseconds(1500), UpBitsPerSecond = 70_000, DownBitsPerSecond = 2_000_000 };
+    public static NetworkProfile Target() => new NetworkProfile { Latency = TimeSpan.FromMilliseconds(1500), UpBitsPerSecond = 70_000, DownBitsPerSecond = 2_000_000 };
 
     public void CopyFrom(NetworkProfile p)
     {
@@ -38,8 +38,6 @@ public sealed class NetworkProfile
 /// </summary>
 internal sealed class ShapedStream : Stream
 {
-    private sealed record Chunk(byte[] Data, int Length, DateTimeOffset DeliverAt);
-
     private readonly Stream _inner;
     private readonly WireMeter _meter;
     private readonly NetworkProfile _profile;
@@ -54,6 +52,8 @@ internal sealed class ShapedStream : Stream
     private readonly Task _upPump;
     private readonly Task _downPump;
 
+    private sealed record Chunk(byte[] Data, int Length, DateTimeOffset DeliverAt);
+
     public ShapedStream(Stream inner, WireMeter meter, NetworkProfile profile)
     {
         _inner = inner;
@@ -65,25 +65,28 @@ internal sealed class ShapedStream : Stream
 
     private static DateTimeOffset Schedule(ref DateTimeOffset freeAt, int length, long bps, TimeSpan latency)
     {
-        var now = DateTimeOffset.UtcNow;
-        var start = freeAt > now ? freeAt : now;
-        var transmit = bps > 0 ? TimeSpan.FromSeconds(length * 8.0 / bps) : TimeSpan.Zero;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset start = freeAt > now ? freeAt : now;
+        TimeSpan transmit = bps > 0 ? TimeSpan.FromSeconds(length * 8.0 / bps) : TimeSpan.Zero;
         freeAt = start + transmit;
         return freeAt + latency;
     }
 
     private static async Task WaitUntil(DateTimeOffset at, CancellationToken ct)
     {
-        var d = at - DateTimeOffset.UtcNow;
-        if (d > TimeSpan.FromMilliseconds(1)) await Task.Delay(d, ct);
+        TimeSpan d = at - DateTimeOffset.UtcNow;
+        if (d > TimeSpan.FromMilliseconds(1))
+            await Task.Delay(d, ct);
     }
 
     public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
     {
-        if (buffer.Length == 0) return;
-        var copy = buffer.ToArray();
+        if (buffer.Length == 0)
+            return;
+        byte[] copy = buffer.ToArray();
         DateTimeOffset at;
-        lock (_upLock) at = Schedule(ref _upFreeAt, copy.Length, _profile.UpBitsPerSecond, _profile.Latency);
+        lock (_upLock)
+            at = Schedule(ref _upFreeAt, copy.Length, _profile.UpBitsPerSecond, _profile.Latency);
         await _up.Writer.WriteAsync(new Chunk(copy, copy.Length, at), ct);
     }
 
@@ -96,7 +99,7 @@ internal sealed class ShapedStream : Stream
     {
         try
         {
-            await foreach (var c in _up.Reader.ReadAllAsync(_cts.Token))
+            await foreach (Chunk c in _up.Reader.ReadAllAsync(_cts.Token))
             {
                 await WaitUntil(c.DeliverAt, _cts.Token);
                 await _inner.WriteAsync(c.Data.AsMemory(0, c.Length), _cts.Token);
@@ -105,7 +108,10 @@ internal sealed class ShapedStream : Stream
             }
         }
         catch (Exception) when (_cts.IsCancellationRequested) { }
-        catch (Exception) { _cts.Cancel(); }
+        catch (Exception)
+        {
+            _cts.Cancel();
+        }
     }
 
     private async Task DownPumpAsync()
@@ -114,10 +120,11 @@ internal sealed class ShapedStream : Stream
         {
             while (!_cts.IsCancellationRequested)
             {
-                var buf = new byte[16 * 1024];
-                var n = await _inner.ReadAsync(buf, _cts.Token);
-                if (n == 0) break;
-                var at = Schedule(ref _downFreeAt, n, _profile.DownBitsPerSecond, _profile.Latency);
+                byte[] buf = new byte[16 * 1024];
+                int n = await _inner.ReadAsync(buf, _cts.Token);
+                if (n == 0)
+                    break;
+                DateTimeOffset at = Schedule(ref _downFreeAt, n, _profile.DownBitsPerSecond, _profile.Latency);
                 await _down.Writer.WriteAsync(new Chunk(buf, n, at), _cts.Token);
             }
             _down.Writer.TryComplete();
@@ -132,16 +139,19 @@ internal sealed class ShapedStream : Stream
     {
         if (_current is null)
         {
-            if (!await _down.Reader.WaitToReadAsync(ct)) return 0;
-            if (!_down.Reader.TryRead(out _current)) return 0;
+            if (!await _down.Reader.WaitToReadAsync(ct))
+                return 0;
+            if (!_down.Reader.TryRead(out _current))
+                return 0;
             _currentOffset = 0;
             await WaitUntil(_current.DeliverAt, ct);
             _meter.AddDown(_current.Length);
         }
-        var n = Math.Min(buffer.Length, _current.Length - _currentOffset);
+        int n = Math.Min(buffer.Length, _current.Length - _currentOffset);
         _current.Data.AsMemory(_currentOffset, n).CopyTo(buffer);
         _currentOffset += n;
-        if (_currentOffset >= _current.Length) _current = null;
+        if (_currentOffset >= _current.Length)
+            _current = null;
         return n;
     }
 
@@ -151,14 +161,22 @@ internal sealed class ShapedStream : Stream
     public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer, offset, count).GetAwaiter().GetResult();
 
     public override Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+
     public override void Flush() { }
 
     public override bool CanRead => true;
     public override bool CanWrite => true;
     public override bool CanSeek => false;
     public override long Length => throw new NotSupportedException();
-    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
     public override void SetLength(long value) => throw new NotSupportedException();
 
     protected override void Dispose(bool disposing)

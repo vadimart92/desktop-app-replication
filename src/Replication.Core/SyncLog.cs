@@ -1,6 +1,12 @@
 namespace Replication;
 
-public enum SyncLogLevel { Info, Ok, Warn, Bad }
+public enum SyncLogLevel
+{
+    Info,
+    Ok,
+    Warn,
+    Bad
+}
 
 public sealed record SyncLogEntry(DateTimeOffset At, string Source, string Text, SyncLogLevel Level);
 

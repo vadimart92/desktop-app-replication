@@ -37,14 +37,14 @@ public sealed class Lab : IAsyncDisposable
         dir ??= Path.Combine(Path.GetTempPath(), "replication-lab", $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
         Directory.CreateDirectory(dir);
         log ??= new SyncLog();
-        var owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), log, configure: o =>
+        OwnerNode owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), log, configure: o =>
         {
             o.OnlineInterval = TimeSpan.FromMilliseconds(300);
             configureOwner?.Invoke(o);
         });
-        AgentOptions Opt() => new() { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
-        var c1 = ClientNode.Create("c1", "Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
-        var c2 = ClientNode.Create("c2", "Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
+        AgentOptions Opt() => new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
+        ClientNode c1 = ClientNode.Create("c1", "Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
+        ClientNode c2 = ClientNode.Create("c2", "Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
         return new Lab(dir, log, owner, c1, c2);
     }
 
@@ -61,10 +61,11 @@ public sealed class Lab : IAsyncDisposable
 
     public static async Task WaitAsync(Func<bool> condition, TimeSpan timeout, string what)
     {
-        var until = DateTimeOffset.UtcNow + timeout;
+        DateTimeOffset until = DateTimeOffset.UtcNow + timeout;
         while (!condition())
         {
-            if (DateTimeOffset.UtcNow > until) throw new TimeoutException(what);
+            if (DateTimeOffset.UtcNow > until)
+                throw new TimeoutException(what);
             await Task.Delay(50);
         }
     }
@@ -77,11 +78,18 @@ public sealed class Lab : IAsyncDisposable
         {
             try
             {
-                var until = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(60));
+                DateTimeOffset until = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(60));
                 while (!_cts.IsCancellationRequested && DateTimeOffset.UtcNow < until)
                 {
                     bool ok;
-                    try { ok = condition(); } catch { ok = false; }
+                    try
+                    {
+                        ok = condition();
+                    }
+                    catch
+                    {
+                        ok = false;
+                    }
                     if (ok)
                     {
                         await action();
@@ -91,15 +99,21 @@ public sealed class Lab : IAsyncDisposable
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception e) { Say("відкладена дія: " + e.Message, SyncLogLevel.Bad); }
-            finally { Interlocked.Decrement(ref _scheduled); }
+            catch (Exception e)
+            {
+                Say("відкладена дія: " + e.Message, SyncLogLevel.Bad);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _scheduled);
+            }
         });
     }
 
     /// <summary>Runs <paramref name="action"/> after a delay (the demo's later()).</summary>
     public void Later(TimeSpan delay, Func<Task> action)
     {
-        var at = DateTimeOffset.UtcNow + delay;
+        DateTimeOffset at = DateTimeOffset.UtcNow + delay;
         When(() => DateTimeOffset.UtcNow >= at, action);
     }
 
@@ -109,8 +123,8 @@ public sealed class Lab : IAsyncDisposable
     /// </summary>
     public async Task SettleAsync(TimeSpan? timeout = null)
     {
-        var until = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
-        var quiet = 0;
+        DateTimeOffset until = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
+        int quiet = 0;
         while (quiet < 3)
         {
             if (DateTimeOffset.UtcNow > until)
@@ -122,20 +136,24 @@ public sealed class Lab : IAsyncDisposable
 
     private string Describe(ClientNode c)
     {
-        var s = c.Agent.GetStatus();
+        AgentStatus s = c.Agent.GetStatus();
         return $"{s.State}, черга {s.Pending}, курсор {c.Agent.MinCursor}, голова {Owner.Head()}";
     }
 
     public bool IsQuiet()
     {
-        if (Scheduled > 0) return false;
-        var head = Owner.Head();
-        foreach (var c in Clients)
+        if (Scheduled > 0)
+            return false;
+        long head = Owner.Head();
+        foreach (ClientNode c in Clients)
         {
-            if (!c.Link) continue;
-            var s = c.Agent.GetStatus();
-            if (s.State == AgentState.SchemaMismatch) continue;
-            if (s.State != AgentState.Online || s.Pending > 0 || c.Agent.HasPendingArchiveWork || c.Agent.MinCursor < head) return false;
+            if (!c.Link)
+                continue;
+            AgentStatus s = c.Agent.GetStatus();
+            if (s.State == AgentState.SchemaMismatch)
+                continue;
+            if (s.State != AgentState.Online || s.Pending > 0 || c.Agent.HasPendingArchiveWork || c.Agent.MinCursor < head)
+                return false;
         }
         return true;
     }

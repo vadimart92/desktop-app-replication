@@ -11,22 +11,23 @@ namespace Replication.Client;
 /// </summary>
 public sealed class Predicate
 {
-    public Predicate(IEnumerable<KeyValuePair<string, object?>> equals) => Equals_ = [.. equals];
+    public Predicate(IEnumerable<KeyValuePair<string, object?>> equals) => Equalities = [.. equals];
 
     public Predicate(string column, object? value) : this([new KeyValuePair<string, object?>(column, value)]) { }
 
-    public IReadOnlyList<KeyValuePair<string, object?>> Equals_ { get; }
+    public IReadOnlyList<KeyValuePair<string, object?>> Equalities { get; }
 
     public string Serialize() =>
-        JsonSerializer.Serialize(Equals_.Select(kv => new Dictionary<string, object?> { ["c"] = kv.Key, ["v"] = kv.Value }));
+        JsonSerializer.Serialize(Equalities.Select(kv => new Dictionary<string, object?> { ["c"] = kv.Key, ["v"] = kv.Value }));
 
     public static Predicate? Parse(string? json)
     {
-        if (string.IsNullOrEmpty(json)) return null;
-        var items = JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(json)!;
+        if (string.IsNullOrEmpty(json))
+            return null;
+        List<Dictionary<string, JsonElement>> items = JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(json)!;
         return new Predicate(items.Select(d => new KeyValuePair<string, object?>(d["c"].GetString()!, d["v"].ValueKind switch
         {
-            JsonValueKind.Number when d["v"].TryGetInt64(out var l) => l,
+            JsonValueKind.Number when d["v"].TryGetInt64(out long l) => l,
             JsonValueKind.Number => d["v"].GetDouble(),
             JsonValueKind.String => d["v"].GetString(),
             JsonValueKind.True => 1L,
@@ -39,18 +40,19 @@ public sealed class Predicate
     {
         var where = new List<string>();
         var args = new List<(string, object?)>();
-        for (var i = 0; i < Equals_.Count; i++)
+        for (int i = 0; i < Equalities.Count; i++)
         {
-            if (!t.HasColumn(Equals_[i].Key)) throw new ArgumentException($"{t.Name} has no column {Equals_[i].Key}");
-            where.Add($"{Q(Equals_[i].Key)} IS @q{i}");
-            args.Add(($"@q{i}", Equals_[i].Value));
+            if (!t.HasColumn(Equalities[i].Key))
+                throw new ArgumentException($"{t.Name} has no column {Equalities[i].Key}");
+            where.Add($"{Q(Equalities[i].Key)} IS @q{i}");
+            args.Add(($"@q{i}", Equalities[i].Value));
         }
         return (where.Count > 0 ? string.Join(" AND ", where) : "1", [.. args]);
     }
 
-    public IEnumerable<Condition> ToWire() => Equals_.Select(kv => new Condition { Column = kv.Key, Value = ToValue(kv.Value) });
+    public IEnumerable<Condition> ToWire() => Equalities.Select(kv => new Condition { Column = kv.Key, Value = ToValue(kv.Value) });
 
-    public override string ToString() => string.Join(" AND ", Equals_.Select(kv => $"{kv.Key} = '{kv.Value}'"));
+    public override string ToString() => string.Join(" AND ", Equalities.Select(kv => $"{kv.Key} = '{kv.Value}'"));
 }
 
 /// <summary>The row set of an archive action, stored in <c>_sync_outbox.predicate</c>.</summary>

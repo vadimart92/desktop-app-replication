@@ -11,9 +11,23 @@ using static Replication.Model.Wire;
 
 namespace Replication.Client;
 
-public enum AgentState { Offline, Connecting, Flushing, Snapshot, Catchup, Online, SchemaMismatch }
+public enum AgentState
+{
+    Offline,
+    Connecting,
+    Flushing,
+    Snapshot,
+    Catchup,
+    Online,
+    SchemaMismatch
+}
 
-public enum SnapshotMode { Auto, File, EmptyReplica }
+public enum SnapshotMode
+{
+    Auto,
+    File,
+    EmptyReplica
+}
 
 public sealed class AgentOptions
 {
@@ -50,11 +64,7 @@ public sealed record AgentStatus(
 /// </summary>
 public sealed class SyncAgent : IAsyncDisposable
 {
-    private static readonly Metadata Gzip = new() { { "grpc-internal-encoding-request", "gzip" } };
-
-    private sealed record Download(string Id, string Path, long Total);
-
-    private sealed record ArchiveRetry(string Table, string Pk, string Why, long Version, int Tries);
+    private static readonly Metadata s_gzip = new() { { "grpc-internal-encoding-request", "gzip" } };
 
     private readonly ClientStore _store;
     private readonly SyncLog _log;
@@ -82,6 +92,11 @@ public sealed class SyncAgent : IAsyncDisposable
     private Download? _download;
     private double? _snapshotProgress;
     private double _applyRate;
+    private readonly Dictionary<string, int> _archiveTries = [];
+
+    private sealed record Download(string Id, string Path, long Total);
+
+    private sealed record ArchiveRetry(string Table, string Pk, string Why, long Version, int Tries);
 
     public SyncAgent(ClientStore store, string address, string name, AgentOptions? options = null, SyncLog? log = null, string? label = null)
     {
@@ -92,7 +107,8 @@ public sealed class SyncAgent : IAsyncDisposable
         Options = options ?? new AgentOptions();
         _log = log ?? SyncLog.Null;
         store.EnsureInstance(address, name);
-        _conn = store.Open(foreignKeys: false); // children may arrive before parents during catch-up (7)
+        // Children may arrive before parents during catch-up (7).
+        _conn = store.Open(foreignKeys: false);
         _instance = store.InstanceOf(_conn, address);
         _cursors = _instance is null ? NewCursors() : store.LoadCursors(_conn, _instance);
     }
@@ -102,8 +118,8 @@ public sealed class SyncAgent : IAsyncDisposable
     public string Label { get; }
     public AgentOptions Options { get; }
     public string? InstanceId => _instance;
-    public WireMeter Meter { get; } = new();
-    public NetworkProfile Network { get; } = new();
+    public WireMeter Meter { get; } = new WireMeter();
+    public NetworkProfile Network { get; } = new NetworkProfile();
 
     /// <summary>Drop the next ApplyReply as if it was lost in the network (the demo's "lost reply").</summary>
     public bool LoseNextApplyReply { get; set; }
@@ -113,12 +129,17 @@ public sealed class SyncAgent : IAsyncDisposable
 
     public CursorState CursorOf(string table)
     {
-        lock (_cursors) return _cursors[table].Clone();
+        lock (_cursors)
+            return _cursors[table].Clone();
     }
 
     public long MinCursor
     {
-        get { lock (_cursors) return _cursors.Values.Min(k => k.Cursor); }
+        get
+        {
+            lock (_cursors)
+                return _cursors.Values.Min(k => k.Cursor);
+        }
     }
 
     public event System.Action? StatusChanged;
@@ -130,17 +151,19 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private Dictionary<string, CursorState> NewCursors() => _store.Model.Tables.ToDictionary(t => t.Name, _ => new CursorState(0), StringComparer.Ordinal);
 
-    // ---------- control ----------
+    // Control.
 
     public bool LinkEnabled
     {
         get => _link;
         set
         {
-            if (_link == value) return;
+            if (_link == value)
+                return;
             _link = value;
             Log(value ? "зв'язок є" : "зв'язок вимкнено", value ? SyncLogLevel.Info : SyncLogLevel.Warn);
-            if (!value) _sessionCts?.Cancel();
+            if (!value)
+                _sessionCts?.Cancel();
             _linkSignal.Set();
             StatusChanged?.Invoke();
         }
@@ -169,26 +192,36 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private void SetState(AgentState s)
     {
-        if (_state == s) return;
+        if (_state == s)
+            return;
         _state = s;
-        if (s == AgentState.Offline) _offlineSince ??= DateTimeOffset.Now;
-        else if (s is AgentState.Catchup or AgentState.Online) _offlineSince = null;
-        if (s != AgentState.Catchup) { _lag.Clear(); _lagWarning = false; }
+        if (s == AgentState.Offline)
+            _offlineSince ??= DateTimeOffset.Now;
+        else if (s is AgentState.Catchup or AgentState.Online)
+            _offlineSince = null;
+        if (s != AgentState.Catchup)
+        {
+            _lag.Clear();
+            _lagWarning = false;
+        }
         StatusChanged?.Invoke();
     }
 
     public AgentStatus GetStatus()
     {
-        int pending = 0, deletes = 0, inflight = 0;
+        int pending = 0;
+        int deletes = 0;
+        int inflight = 0;
         if (_instance is not null)
         {
-            using var c = _store.Open();
+            using SqliteConnection c = _store.Open();
             pending = (int)c.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent < 2", null, ("@i", _instance));
             deletes = (int)c.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent < 2 AND kind IN (3, 5)", null, ("@i", _instance));
             inflight = (int)c.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent = 1", null, ("@i", _instance));
         }
         Dictionary<string, string> cursors;
-        lock (_cursors) cursors = _cursors.ToDictionary(x => x.Key, x => x.Value.ToString());
+        lock (_cursors)
+            cursors = _cursors.ToDictionary(x => x.Key, x => x.Value.ToString());
         return new AgentStatus(_state, _link, _instance, _remaining, _lagWarning, _link && _state is AgentState.Catchup or AgentState.Online ? null : _offlineSince,
             pending, deletes, inflight, _snapshotProgress, _lastError, cursors);
     }
@@ -201,11 +234,11 @@ public sealed class SyncAgent : IAsyncDisposable
         _linkSignal.Set();
     }
 
-    // ---------- main loop ----------
+    // Main loop.
 
     private async Task RunAsync(CancellationToken life)
     {
-        var backoff = Options.ReconnectMin;
+        TimeSpan backoff = Options.ReconnectMin;
         while (!life.IsCancellationRequested)
         {
             if (!_link)
@@ -214,23 +247,33 @@ public sealed class SyncAgent : IAsyncDisposable
                 await _linkSignal.WaitAsync(TimeSpan.FromSeconds(1), life);
                 continue;
             }
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(life);
+            using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(life);
             _sessionCts = cts;
             try
             {
-                var schemaAtStart = Options.SchemaVersion;
+                int schemaAtStart = Options.SchemaVersion;
                 await SessionAsync(cts.Token);
                 backoff = Options.ReconnectMin;
                 if (_state == AgentState.SchemaMismatch)
+                {
                     while (_link && Options.SchemaVersion == schemaAtStart && !life.IsCancellationRequested)
                         await _linkSignal.WaitAsync(TimeSpan.FromSeconds(1), life);
+                }
             }
-            catch (Exception) when (life.IsCancellationRequested) { break; }
+            catch (Exception) when (life.IsCancellationRequested)
+            {
+                break;
+            }
             catch (Exception e)
             {
-                if (cts.IsCancellationRequested && !_link) { SetState(AgentState.Offline); continue; }
+                if (cts.IsCancellationRequested && !_link)
+                {
+                    SetState(AgentState.Offline);
+                    continue;
+                }
                 _lastError = e is RpcException re ? $"{re.StatusCode}: {re.Status.Detail}" : e.Message;
-                if (_state != AgentState.SchemaMismatch) SetState(AgentState.Offline);
+                if (_state != AgentState.SchemaMismatch)
+                    SetState(AgentState.Offline);
                 Log($"зв'язок обірвався ({_lastError}), повтор через {backoff.TotalSeconds:0.#} с", SyncLogLevel.Warn);
                 await _linkSignal.WaitAsync(backoff, life);
                 backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, Options.ReconnectMax.Ticks));
@@ -247,7 +290,8 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         var handler = new SocketsHttpHandler
         {
-            InitialHttp2StreamWindowSize = Options.Http2StreamWindowBytes, // window ≥ bandwidth × RTT (6.1)
+            // Window ≥ bandwidth × RTT (6.1).
+            InitialHttp2StreamWindowSize = Options.Http2StreamWindowBytes,
             KeepAlivePingDelay = TimeSpan.FromSeconds(20),
             KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
             KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always,
@@ -278,13 +322,13 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private async Task SessionAsync(CancellationToken ct)
     {
-        using var channel = CreateChannel();
+        using GrpcChannel channel = CreateChannel();
         var client = new Sync.SyncClient(channel);
         while (true)
         {
             ct.ThrowIfCancellationRequested();
             SetState(AgentState.Connecting);
-            using var call = client.Subscribe(Gzip, cancellationToken: ct);
+            using AsyncDuplexStreamingCall<SubscribeMessage, ChangeMessage> call = client.Subscribe(s_gzip, cancellationToken: ct);
             var writeGate = new SemaphoreSlim(1, 1);
             async Task Write(SubscribeMessage m)
             {
@@ -294,14 +338,18 @@ public sealed class SyncAgent : IAsyncDisposable
                     Meter.CountMessage("↑ " + m.BodyCase, m.CalculateSize());
                     await call.RequestStream.WriteAsync(m, ct);
                 }
-                finally { writeGate.Release(); }
+                finally
+                {
+                    writeGate.Release();
+                }
             }
 
-            var start = BuildStart();
+            Start start = BuildStart();
             Log($"→ Start: схема {start.SchemaVersion}, {(start.InstanceId.Length > 0 ? $"instance_id {start.InstanceId}, " + string.Join(", ", _cursors.Select(x => $"{x.Key}={x.Value}")) : "репліки нема")}");
             await Write(new SubscribeMessage { Start = start });
-            if (!await call.ResponseStream.MoveNext(ct)) throw new IOException("власник закрив потік");
-            var first = call.ResponseStream.Current;
+            if (!await call.ResponseStream.MoveNext(ct))
+                throw new IOException("власник закрив потік");
+            ChangeMessage first = call.ResponseStream.Current;
             Meter.CountMessage("↓ " + first.BodyCase, first.CalculateSize());
 
             if (first.BodyCase == ChangeMessage.BodyOneofCase.SchemaMismatch)
@@ -314,23 +362,31 @@ public sealed class SyncAgent : IAsyncDisposable
             {
                 Log($"← SnapshotRequired: {first.SnapshotRequired.Reason}, знімок ~{first.SnapshotRequired.SizeBytes / 1024} КБ", SyncLogLevel.Warn);
                 await SnapshotFlowAsync(client, first.SnapshotRequired, ct);
-                continue; // a new Start with the fresh replica
+                // A new Start with the fresh replica.
+                continue;
             }
 
             SetState(AgentState.Catchup);
             Log("Start прийнято: потік пішов, Apply паралельно", SyncLogLevel.Ok);
             _write = Write;
             await HandleAsync(first);
-            using var inner = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var tasks = new[]
+            using CancellationTokenSource inner = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task[] tasks = new[]
             {
                 ReadLoopAsync(call, inner.Token),
                 ApplyLoopAsync(client, inner.Token),
                 AckLoopAsync(Write, inner.Token),
             };
-            var done = await Task.WhenAny(tasks);
+            Task done = await Task.WhenAny(tasks);
             inner.Cancel();
-            try { await Task.WhenAll(tasks); } catch { /* the first failure is rethrown below */ }
+            try
+            {
+                await Task.WhenAll(tasks);
+            }
+            catch
+            {
+                // The first failure is rethrown below.
+            }
             await done;
             throw new IOException("власник закрив потік");
         }
@@ -340,8 +396,14 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         var s = new Start { ClientId = _store.ClientId, SchemaVersion = Options.SchemaVersion, InstanceId = _instance ?? "" };
         if (_instance is not null)
+        {
             lock (_cursors)
-                foreach (var (t, k) in _cursors) s.Cursors.Add(k.ToWire(t));
+            {
+                foreach ((string t, CursorState k) in _cursors)
+                    s.Cursors.Add(k.ToWire(t));
+            }
+        }
+
         s.OpenTables.AddRange(_open);
         return s;
     }
@@ -350,7 +412,7 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         while (await call.ResponseStream.MoveNext(ct))
         {
-            var m = call.ResponseStream.Current;
+            ChangeMessage m = call.ResponseStream.Current;
             Meter.CountMessage("↓ " + m.BodyCase, m.CalculateSize());
             await HandleAsync(m);
         }
@@ -362,19 +424,29 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             await Task.Delay(Options.AckInterval, ct);
             List<RowRef> nf;
-            lock (_needFull) { nf = [.. _needFull]; _needFull.Clear(); }
-            if (!_ackDirty && nf.Count == 0) continue;
+            lock (_needFull)
+            {
+                nf = [.. _needFull];
+                _needFull.Clear();
+            }
+            if (!_ackDirty && nf.Count == 0)
+                continue;
             _ackDirty = false;
             var ack = new Ack();
             lock (_cursors)
-                foreach (var (t, k) in _cursors) ack.Cursors.Add(k.ToWire(t, withRanges: false));
+            {
+                foreach ((string t, CursorState k) in _cursors)
+                    ack.Cursors.Add(k.ToWire(t, withRanges: false));
+            }
+
             ack.NeedFull.AddRange(nf);
             await write(new SubscribeMessage { Ack = ack });
-            if (nf.Count > 0) Log($"→ Ack з NeedFull: {nf.Count} рядк.");
+            if (nf.Count > 0)
+                Log($"→ Ack з NeedFull: {nf.Count} рядк.");
         }
     }
 
-    // ---------- receiving (7) ----------
+    // Receiving (7).
 
     private async Task HandleAsync(ChangeMessage m)
     {
@@ -384,18 +456,24 @@ public sealed class SyncAgent : IAsyncDisposable
         try
         {
             w = new ReplicaWriter(_store.Model, _instance!);
-            using var tx = _conn.BeginTransaction();
+            using SqliteTransaction tx = _conn.BeginTransaction();
             lock (_cursors)
             {
-                foreach (var x in m.Extra) _cursors[x.Tbl].AddRange(x.Lo, x.Hi);
+                foreach (RangeExtra x in m.Extra)
+                    _cursors[x.Tbl].AddRange(x.Lo, x.Hi);
                 switch (m.BodyCase)
                 {
                     case ChangeMessage.BodyOneofCase.Batch:
-                        var b = m.Batch;
-                        var n = w.ApplyBatch(_conn, tx, b);
-                        if (_cursors.TryGetValue(b.Tbl, out var k))
-                            foreach (var c in b.Covers) k.AddRange(c.Lo, c.Hi);
-                        if (!b.Online && b.Covers.Count > 0) TrackRemaining(b.Remaining);
+                        Batch b = m.Batch;
+                        int n = w.ApplyBatch(_conn, tx, b);
+                        if (_cursors.TryGetValue(b.Tbl, out CursorState? k))
+                        {
+                            foreach (RangeExtra c in b.Covers)
+                                k.AddRange(c.Lo, c.Hi);
+                        }
+
+                        if (!b.Online && b.Covers.Count > 0)
+                            TrackRemaining(b.Remaining);
                         text = $"← Batch {b.Tbl}{(b.Online ? " онлайн" : "")}: застосовано {n} з {b.Rows.Count + b.Tombstones.Count}"
                                + (b.Covers.Count > 0 ? $", курсор {_cursors[b.Tbl]}" : "");
                         break;
@@ -404,50 +482,64 @@ public sealed class SyncAgent : IAsyncDisposable
                         text = $"← TableSynced {m.TableSynced.Tbl}, курсор = {m.TableSynced.Version}";
                         break;
                     case ChangeMessage.BodyOneofCase.Head:
-                        foreach (var kc in _cursors.Values) kc.LiftTo(m.Head.Version);
+                        foreach (CursorState kc in _cursors.Values)
+                            kc.LiftTo(m.Head.Version);
                         break;
                     case ChangeMessage.BodyOneofCase.Progress:
                         TrackRemaining(m.Progress.Remaining);
-                        if (m.Progress.Done) text = "усі таблиці досинхронізовано, репліка цілісна";
+                        if (m.Progress.Done)
+                            text = "усі таблиці досинхронізовано, репліка цілісна";
                         break;
                 }
-                foreach (var (t, k) in _cursors) _store.SaveCursor(_conn, tx, _instance!, t, k);
-                // a confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1)
-                foreach (var (t, k) in _cursors)
+                foreach ((string t, CursorState k) in _cursors)
+                    _store.SaveCursor(_conn, tx, _instance!, t, k);
+                // A confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1).
+                foreach ((string t, CursorState k) in _cursors)
+                {
                     _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND sent = 2 AND expected_version <= @c", tx,
                         ("@i", _instance), ("@t", t), ("@c", k.Cursor));
+                }
             }
             tx.Commit();
-            lock (_needFull) _needFull.AddRange(w.NeedFull);
+            lock (_needFull)
+                _needFull.AddRange(w.NeedFull);
             _ackDirty = true;
         }
         finally
         {
             _gate.Release();
         }
-        if (text is not null) Log(text, m.Progress?.Done == true ? SyncLogLevel.Ok : SyncLogLevel.Info);
-        foreach (var n in w.Notes) Log(n, SyncLogLevel.Bad);
-        if (w.NeedFull.Count > 0) Log($"часткові рядки без рядка в репліці: {w.NeedFull.Count}, прошу повні через NeedFull", SyncLogLevel.Warn);
-        if (m.Progress?.Done == true) SetState(AgentState.Online);
-        if (w.TouchedTables.Count > 0) DataChanged?.Invoke(w.TouchedTables);
+        if (text is not null)
+            Log(text, m.Progress?.Done == true ? SyncLogLevel.Ok : SyncLogLevel.Info);
+        foreach (string n in w.Notes)
+            Log(n, SyncLogLevel.Bad);
+        if (w.NeedFull.Count > 0)
+            Log($"часткові рядки без рядка в репліці: {w.NeedFull.Count}, прошу повні через NeedFull", SyncLogLevel.Warn);
+        if (m.Progress?.Done == true)
+            SetState(AgentState.Online);
+        if (w.TouchedTables.Count > 0)
+            DataChanged?.Invoke(w.TouchedTables);
         StatusChanged?.Invoke();
     }
 
     private void TrackRemaining(long remaining)
     {
         _remaining = remaining;
-        var now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
         _lag.Add((now, remaining));
         _lag.RemoveAll(x => now - x.At > Options.LagWarningWindow + TimeSpan.FromSeconds(5));
-        var span = _lag.Count > 1 ? _lag[^1].At - _lag[0].At : TimeSpan.Zero;
-        var growing = span >= Options.LagWarningWindow && _lag[^1].Remaining > _lag[0].Remaining
+        TimeSpan span = _lag.Count > 1 ? _lag[^1].At - _lag[0].At : TimeSpan.Zero;
+        bool growing = span >= Options.LagWarningWindow && _lag[^1].Remaining > _lag[0].Remaining
                       && _lag.Zip(_lag.Skip(1)).All(p => p.Second.Remaining >= p.First.Remaining);
-        if (growing && !_lagWarning) Log($"канал не встигає: відстаємо на {remaining} змін, росте", SyncLogLevel.Warn);
-        if (growing) _lagWarning = true;
-        else if (_lagWarning && _lag[^1].Remaining < _lag[0].Remaining) _lagWarning = false;
+        if (growing && !_lagWarning)
+            Log($"канал не встигає: відстаємо на {remaining} змін, росте", SyncLogLevel.Warn);
+        if (growing)
+            _lagWarning = true;
+        else if (_lagWarning && _lag[^1].Remaining < _lag[0].Remaining)
+            _lagWarning = false;
     }
 
-    // ---------- sending (6.5, 8) ----------
+    // Sending (6.5, 8).
 
     private async Task ApplyLoopAsync(Sync.SyncClient client, CancellationToken ct)
     {
@@ -456,8 +548,11 @@ public sealed class SyncAgent : IAsyncDisposable
             await _outboxSignal.WaitAsync(TimeSpan.FromMilliseconds(500), ct);
             try
             {
-                while (await SendOnceAsync(client, ct)) { }
-                if (_state == AgentState.Online) await RetryArchiveAsync();
+                while (await SendOnceAsync(client, ct))
+                {
+                }
+                if (_state == AgentState.Online)
+                    await RetryArchiveAsync();
             }
             catch (RpcException e) when (!ct.IsCancellationRequested)
             {
@@ -473,30 +568,32 @@ public sealed class SyncAgent : IAsyncDisposable
     /// <summary>Sends one batch: retries first, then interactive actions, then bulk ones, closed over FK dependencies.</summary>
     private async Task<bool> SendOnceAsync(Sync.SyncClient client, CancellationToken ct)
     {
-        var (req, entries) = await BuildBatchAsync();
-        if (req is null) return false;
-        var size = req.CalculateSize();
+        (ApplyRequest? req, List<OutboxEntry> entries) = await BuildBatchAsync();
+        if (req is null)
+            return false;
+        int size = req.CalculateSize();
         Meter.CountMessage("↑ Apply", size);
         Log($"→ Apply: {string.Join("; ", req.Actions.Select(a => Describe(a, entries)))}");
-        var sw = Stopwatch.StartNew();
+        Stopwatch sw = Stopwatch.StartNew();
         ApplyReply reply;
         try
         {
-            reply = await client.ApplyAsync(req, Gzip, DateTime.UtcNow + Options.ApplyTimeout, ct);
+            reply = await client.ApplyAsync(req, s_gzip, DateTime.UtcNow + Options.ApplyTimeout, ct);
         }
         catch (RpcException e) when (e.StatusCode is StatusCode.DeadlineExceeded or StatusCode.Unavailable && !ct.IsCancellationRequested)
         {
             Log("відповіді на Apply нема, повторна відправка тих самих дій з тими самими seq", SyncLogLevel.Warn);
             return false;
         }
-        var secs = Math.Max(sw.Elapsed.TotalSeconds, 0.05);
+        double secs = Math.Max(sw.Elapsed.TotalSeconds, 0.05);
         _applyRate = _applyRate <= 0 ? size / secs : _applyRate * 0.5 + size / secs * 0.5;
         Meter.CountMessage("↓ ApplyReply", reply.CalculateSize());
         if (LoseNextApplyReply)
         {
             LoseNextApplyReply = false;
             Log("✕ відповідь ApplyReply загубилась у мережі; дії лишаються в черзі з sent = 1", SyncLogLevel.Bad);
-            await Task.Delay(TimeSpan.FromSeconds(1), ct); // the timeout before a retry
+            // The timeout before a retry.
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
             return false;
         }
         await ProcessReplyAsync(reply, entries);
@@ -505,8 +602,8 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private string Describe(Protocol.Action a, List<OutboxEntry> entries)
     {
-        var e = entries.FirstOrDefault(x => x.Seq == a.Seq);
-        var cls = e?.Class == OutboxClass.Bulk ? "[масова] " : "";
+        OutboxEntry? e = entries.FirstOrDefault(x => x.Seq == a.Seq);
+        string cls = e?.Class == OutboxClass.Bulk ? "[масова] " : "";
         return a.Kind switch
         {
             ActionKind.Archive => $"#{a.Seq} {cls}архів {a.Rows.Count} записів, SyncVersion ≤ {a.ExpectedVersion}",
@@ -520,45 +617,54 @@ public sealed class SyncAgent : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            if (_instance is null) return (null, []);
-            using var tx = _conn.BeginTransaction();
-            var all = ClientStore.Entries(_conn, tx, _instance, "sent IN (0, 1)")
+            if (_instance is null)
+                return (null, []);
+            using SqliteTransaction tx = _conn.BeginTransaction();
+            List<OutboxEntry> all = ClientStore.Entries(_conn, tx, _instance, "sent IN (0, 1)")
                 .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();
-            if (all.Count == 0) return (null, []);
+            if (all.Count == 0)
+                return (null, []);
 
             var batch = new List<OutboxEntry>();
             var actions = new Dictionary<long, Protocol.Action>();
-            var budget = ApplyBudget();
-            var size = 0;
+            int budget = ApplyBudget();
+            int size = 0;
             void Add(OutboxEntry e)
             {
-                if (actions.ContainsKey(e.Id)) return;
-                if (_store.Model.TryGet(e.Table, out var t) && e.Kind is OutboxKind.Create or OutboxKind.Patch && e.Pk is not null)
-                    foreach (var fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
+                if (actions.ContainsKey(e.Id))
+                    return;
+                if (_store.Model.TryGet(e.Table, out SyncTable? t) && e.Kind is OutboxKind.Create or OutboxKind.Patch && e.Pk is not null)
+                {
+                    foreach (SyncForeignKey fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
                     {
-                        // a create this row points to must go in the same or an earlier batch (8.4)
-                        var pid = _conn.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
-                        if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == 0) is { } pe) Add(pe);
+                        // A create this row points to must go in the same or an earlier batch (8.4).
+                        string? pid = _conn.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
+                        if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == 0) is { } pe)
+                            Add(pe);
                     }
-                var a = ToAction(e, tx);
+                }
+
+                Protocol.Action? a = ToAction(e, tx);
                 actions[e.Id] = a!;
                 batch.Add(e);
                 size += a?.CalculateSize() ?? 0;
             }
-            foreach (var e in all)
+            foreach (OutboxEntry e in all)
             {
-                if (size >= budget && batch.Count > 0) break;
+                if (size >= budget && batch.Count > 0)
+                    break;
                 Add(e);
             }
 
-            var next = _conn.Scalar<long>("SELECT next_seq FROM _sync_instances WHERE address = @a", tx, ("@a", Address));
+            long next = _conn.Scalar<long>("SELECT next_seq FROM _sync_instances WHERE address = @a", tx, ("@a", Address));
             var sent = new List<OutboxEntry>();
-            foreach (var e in batch)
+            foreach (OutboxEntry e in batch)
             {
-                // seq is given at the first send, so the owner always sees seq ascending (8.5)
-                var seq = e.Seq ?? next++;
+                // Seq is given at the first send, so the owner always sees seq ascending (8.5).
+                long seq = e.Seq ?? next++;
                 _conn.Exec("UPDATE _sync_outbox SET seq = @s, sent = 1 WHERE id = @id", tx, ("@s", seq), ("@id", e.Id));
-                if (actions[e.Id] is { } a) a.Seq = seq;
+                if (actions[e.Id] is { } a)
+                    a.Seq = seq;
                 sent.Add(e with { Seq = seq, Sent = 1 });
             }
             _conn.Exec("UPDATE _sync_instances SET next_seq = @n WHERE address = @a", tx, ("@n", next), ("@a", Address));
@@ -583,13 +689,18 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             case OutboxKind.Create or OutboxKind.Patch:
             {
-                var t = _store.Model[e.Table];
-                var cols = e.Kind == OutboxKind.Create ? t.Columns.ToList() : e.Columns.Where(t.HasColumn).ToList();
-                using var cmd = _conn.Cmd($"SELECT {string.Join(", ", cols.Select(Q).DefaultIfEmpty("1"))} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
-                using var r = cmd.ExecuteReader();
-                if (!r.Read()) return null; // the row is gone: nothing to send, the reply's applied_up_to_seq clears the entry
+                SyncTable t = _store.Model[e.Table];
+                List<string> cols = e.Kind == OutboxKind.Create ? t.Columns.ToList() : e.Columns.Where(t.HasColumn).ToList();
+                using SqliteCommand cmd = _conn.Cmd($"SELECT {string.Join(", ", cols.Select(Q).DefaultIfEmpty("1"))} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
+                using SqliteDataReader r = cmd.ExecuteReader();
+                if (!r.Read())
+                {
+                    // The row is gone: nothing to send, the reply's applied_up_to_seq clears the entry.
+                    return null;
+                }
+
                 a.Pk = PkBytes(e.Pk!);
-                for (var i = 0; i < cols.Count; i++)
+                for (int i = 0; i < cols.Count; i++)
                 {
                     a.Columns.Add(cols[i]);
                     a.Values.Add(ToValue(r.Raw(i)));
@@ -619,14 +730,15 @@ public sealed class SyncAgent : IAsyncDisposable
         try
         {
             w = new ReplicaWriter(_store.Model, _instance!);
-            using var tx = _conn.BeginTransaction();
-            var bySeq = sent.ToDictionary(e => e.Seq!.Value);
+            using SqliteTransaction tx = _conn.BeginTransaction();
+            Dictionary<long, OutboxEntry> bySeq = sent.ToDictionary(e => e.Seq!.Value);
             var versions = new List<string>();
-            foreach (var r in reply.Results)
+            foreach (ActionResult r in reply.Results)
             {
-                if (!bySeq.TryGetValue(r.Seq, out var e)) continue;
-                var t = _store.Model.TryGet(e.Table, out var tt) ? tt : null;
-                var label = t is not null && e.Pk is not null ? ClientStore.Label(_conn, tx, t, e.Pk) : "";
+                if (!bySeq.TryGetValue(r.Seq, out OutboxEntry? e))
+                    continue;
+                SyncTable? t = _store.Model.TryGet(e.Table, out SyncTable? tt) ? tt : null;
+                string label = t is not null && e.Pk is not null ? ClientStore.Label(_conn, tx, t, e.Pk) : "";
                 switch (r.Status)
                 {
                     case ResultStatus.Rejected when r.Reason == "unique":
@@ -641,7 +753,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     }
                     case ResultStatus.Ignored when t is not null && e.Pk is not null:
                     {
-                        // delete wins: the record goes here right away, without waiting for the tombstone (6.5, 9.1)
+                        // Delete wins: the record goes here right away, without waiting for the tombstone (6.5, 9.1).
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
                         w.Note(_conn, tx, $"правку запису {label} втрачено: його видалено на інстансі");
@@ -656,7 +768,8 @@ public sealed class SyncAgent : IAsyncDisposable
                                 break;
                             case OutboxKind.Delete when r.HasVersion:
                                 long cur;
-                                lock (_cursors) cur = _cursors[e.Table].Cursor;
+                                lock (_cursors)
+                                    cur = _cursors[e.Table].Cursor;
                                 if (cur < r.Version)
                                     _conn.Exec("UPDATE _sync_outbox SET sent = 2, expected_version = @v WHERE id = @id", tx, ("@v", r.Version), ("@id", e.Id));
                                 break;
@@ -672,38 +785,46 @@ public sealed class SyncAgent : IAsyncDisposable
             }
             _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND sent = 1 AND seq <= @s", tx, ("@i", _instance), ("@s", reply.AppliedUpToSeq));
             tx.Commit();
-            lock (_needFull) _needFull.AddRange(w.NeedFull);
-            if (versions.Count > 0) logs.Add(($"версії з ApplyReply: {string.Join(", ", versions)}; відлуння цих змін не прийде", SyncLogLevel.Info));
+            lock (_needFull)
+                _needFull.AddRange(w.NeedFull);
+            if (versions.Count > 0)
+                logs.Add(($"версії з ApplyReply: {string.Join(", ", versions)}; відлуння цих змін не прийде", SyncLogLevel.Info));
             logs.Add(($"← ApplyReply: applied_up_to_seq = {reply.AppliedUpToSeq}", SyncLogLevel.Ok));
         }
         finally
         {
             _gate.Release();
         }
-        foreach (var (text, level) in logs) Log(text, level);
-        foreach (var n in w.Notes) Log(n, SyncLogLevel.Bad);
-        if (w.TouchedTables.Count > 0) DataChanged?.Invoke(w.TouchedTables);
+        foreach ((string text, SyncLogLevel level) in logs)
+            Log(text, level);
+        foreach (string n in w.Notes)
+            Log(n, SyncLogLevel.Bad);
+        if (w.TouchedTables.Count > 0)
+            DataChanged?.Invoke(w.TouchedTables);
         StatusChanged?.Invoke();
     }
 
-    // ---------- snapshot (6.3, 10.3) ----------
+    // Snapshot (6.3, 10.3).
 
     private async Task SnapshotFlowAsync(Sync.SyncClient client, SnapshotRequired sr, CancellationToken ct)
     {
-        // 1. the outbox goes first: Apply does not depend on the cursor
+        // 1. The outbox goes first: Apply does not depend on the cursor.
         if (_instance is not null && HasSendable())
         {
             SetState(AgentState.Flushing);
             Log("потрібен знімок: спершу відправляю чергу дій");
             while (HasSendable())
-                if (!await SendOnceAsync(client, ct)) await Task.Delay(300, ct);
+            {
+                if (!await SendOnceAsync(client, ct))
+                    await Task.Delay(300, ct);
+            }
         }
 
-        var mode = Options.SnapshotMode;
+        SnapshotMode mode = Options.SnapshotMode;
         if (mode == SnapshotMode.Auto)
         {
-            var rate = Meter.SampleRate().Down is > 10_000 and var r ? r : Options.AssumedDownBytesPerSecond;
-            var eta = TimeSpan.FromSeconds(sr.SizeBytes / rate);
+            double rate = Meter.SampleRate().Down is > 10_000 and double r ? r : Options.AssumedDownBytesPerSecond;
+            TimeSpan eta = TimeSpan.FromSeconds(sr.SizeBytes / rate);
             mode = eta > Options.SnapshotFileThreshold && _instance is null ? SnapshotMode.EmptyReplica : SnapshotMode.File;
             Log($"знімок ~{sr.SizeBytes / 1024} КБ, за швидкістю ≈ {eta.TotalSeconds:0} с: {(mode == SnapshotMode.File ? "беру файл" : "порожня репліка, дані прийдуть потоком від нових до старих")}");
         }
@@ -713,33 +834,43 @@ public sealed class SyncAgent : IAsyncDisposable
             await _gate.WaitAsync(ct);
             try
             {
-                using var tx = _conn.BeginTransaction();
-                foreach (var t in _store.Model.Tables)
+                using SqliteTransaction tx = _conn.BeginTransaction();
+                foreach (SyncTable t in _store.Model.Tables)
                 {
-                    if (_instance is not null) _conn.Exec($"DELETE FROM {Q(t.Name)} WHERE InstanceId = @i", tx, ("@i", _instance));
+                    if (_instance is not null)
+                        _conn.Exec($"DELETE FROM {Q(t.Name)} WHERE InstanceId = @i", tx, ("@i", _instance));
                     _store.SaveCursor(_conn, tx, sr.InstanceId, t.Name, new CursorState(0));
                 }
                 _conn.Exec("UPDATE _sync_instances SET instance = @i WHERE address = @a", tx, ("@i", sr.InstanceId), ("@a", Address));
                 tx.Commit();
                 _instance = sr.InstanceId;
-                lock (_cursors) _cursors = NewCursors();
+                lock (_cursors)
+                    _cursors = NewCursors();
             }
-            finally { _gate.Release(); }
+            finally
+            {
+                _gate.Release();
+            }
             return;
         }
 
         SetState(AgentState.Snapshot);
-        var path = await DownloadAsync(client, ct);
+        string path = await DownloadAsync(client, ct);
         await _gate.WaitAsync(ct);
         try
         {
-            var (inst, carried, notes) = ReplicaWriter.InstallSnapshot(_store, Address, path);
+            (string inst, int carried, List<string> notes) = ReplicaWriter.InstallSnapshot(_store, Address, path);
             _instance = inst;
-            lock (_cursors) _cursors = _store.LoadCursors(_conn, inst);
+            lock (_cursors)
+                _cursors = _store.LoadCursors(_conn, inst);
             Log($"знімок перевірено і влито однією транзакцією: рядки InstanceId = {inst} замінено, курсори = {_cursors.Values.First().Cursor}{(carried > 0 ? $", у нову репліку перенесено {carried} дій зі значеннями" : "")}", SyncLogLevel.Ok);
-            foreach (var n in notes) Log(n, SyncLogLevel.Bad);
+            foreach (string n in notes)
+                Log(n, SyncLogLevel.Bad);
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            _gate.Release();
+        }
         File.Delete(path);
         _download = null;
         _snapshotProgress = null;
@@ -749,31 +880,34 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private bool HasSendable()
     {
-        using var c = _store.Open();
+        using SqliteConnection c = _store.Open();
         return c.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent IN (0, 1)", null, ("@i", _instance)) > 0;
     }
 
     /// <summary>Downloads the snapshot file, resuming from the same offset by snapshot_id after a break (6.3).</summary>
     private async Task<string> DownloadAsync(Sync.SyncClient client, CancellationToken ct)
     {
-        var offset = _download is { } d && File.Exists(d.Path) ? new FileInfo(d.Path).Length : 0;
-        if (offset > 0) Log($"знімок {_download!.Id}: продовжую з {offset / 1024} КБ");
-        using var call = client.Snapshot(new SnapshotRequest { ClientId = _store.ClientId, SnapshotId = _download?.Id ?? "", Offset = offset }, cancellationToken: ct);
+        long offset = _download is { } d && File.Exists(d.Path) ? new FileInfo(d.Path).Length : 0;
+        if (offset > 0)
+            Log($"знімок {_download!.Id}: продовжую з {offset / 1024} КБ");
+        using AsyncServerStreamingCall<SnapshotChunk> call = client.Snapshot(new SnapshotRequest { ClientId = _store.ClientId, SnapshotId = _download?.Id ?? "", Offset = offset }, cancellationToken: ct);
         byte[]? sha = null;
         while (await call.ResponseStream.MoveNext(ct))
         {
-            var ch = call.ResponseStream.Current;
+            SnapshotChunk ch = call.ResponseStream.Current;
             Meter.CountMessage("↓ SnapshotChunk", ch.CalculateSize());
             if (_download is null || _download.Id != ch.SnapshotId)
             {
-                if (_download is not null) File.Delete(_download.Path);
+                if (_download is not null)
+                    File.Delete(_download.Path);
                 _download = new Download(ch.SnapshotId, _store.DbPath + "." + ch.SnapshotId + ".part", ch.TotalSize);
                 File.Delete(_download.Path);
                 Log($"знімок {ch.SnapshotId}: V = {ch.Version}, {ch.TotalSize / 1024} КБ");
             }
             await using (var f = new FileStream(_download.Path, FileMode.OpenOrCreate, FileAccess.Write))
             {
-                if (f.Length != ch.Offset) f.SetLength(ch.Offset);
+                if (f.Length != ch.Offset)
+                    f.SetLength(ch.Offset);
                 f.Position = ch.Offset;
                 await f.WriteAsync(ch.Data.Memory, ct);
             }
@@ -781,10 +915,12 @@ public sealed class SyncAgent : IAsyncDisposable
             _snapshotProgress = (double)(ch.Offset + ch.Data.Length) / Math.Max(1, ch.TotalSize);
             StatusChanged?.Invoke();
         }
-        if (_download is null) throw new IOException("знімок порожній");
-        await using (var f = File.OpenRead(_download.Path))
+        if (_download is null)
+            throw new IOException("знімок порожній");
+        await using (FileStream f = File.OpenRead(_download.Path))
         {
-            if (f.Length != _download.Total) throw new IOException("знімок обірвався");
+            if (f.Length != _download.Total)
+                throw new IOException("знімок обірвався");
             if (sha is not null && !(await SHA256.HashDataAsync(f, ct)).SequenceEqual(sha))
             {
                 f.Close();
@@ -796,7 +932,7 @@ public sealed class SyncAgent : IAsyncDisposable
         return _download.Path;
     }
 
-    // ---------- bulk actions (8.6) and archive (11) ----------
+    // Bulk actions (8.6) and archive (11).
 
     /// <summary>
     /// Deletes the rows matching <paramref name="predicate"/> locally and queues one predicate action with the version V the
@@ -804,26 +940,34 @@ public sealed class SyncAgent : IAsyncDisposable
     /// </summary>
     public async Task<int> DeleteWhereAsync(string table, Predicate predicate)
     {
-        var t = _store.Model[table];
+        SyncTable t = _store.Model[table];
         await _gate.WaitAsync();
         int count;
         try
         {
-            if (_instance is null) return 0;
-            using var c = _store.Open(); // FK on: the local cascade removes children the same way the owner will (8.7)
-            using var tx = c.BeginTransaction();
-            var (where, args) = predicate.ToSql(t);
+            if (_instance is null)
+                return 0;
+            // FK on: the local cascade removes children the same way the owner will (8.7).
+            using SqliteConnection c = _store.Open();
+            using SqliteTransaction tx = c.BeginTransaction();
+            (string where, (string, object?)[] args) = predicate.ToSql(t);
             var ids = new List<string>();
-            using (var cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE InstanceId = @inst AND {where}", tx, [("@inst", _instance), .. args]))
-            using (var r = cmd.ExecuteReader())
-                while (r.Read()) ids.Add(r.GetString(0));
+            using (SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE InstanceId = @inst AND {where}", tx, [("@inst", _instance), .. args]))
+            using (SqliteDataReader r = cmd.ExecuteReader())
+            {
+                while (r.Read())
+                    ids.Add(r.GetString(0));
+            }
+
             count = ids.Count;
-            if (count == 0) return 0;
+            if (count == 0)
+                return 0;
             CursorState k;
-            lock (_cursors) k = _cursors[table].Clone();
+            lock (_cursors)
+                k = _cursors[table].Clone();
             if (k.Ranges.Count > 0)
             {
-                foreach (var id in ids)
+                foreach (string id in ids)
                 {
                     c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
                     ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
@@ -832,11 +976,12 @@ public sealed class SyncAgent : IAsyncDisposable
             }
             else
             {
-                // rows with their own actions in the outbox go by key, the rest as one predicate
-                var own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
-                foreach (var id in ids)
+                // Rows with their own actions in the outbox go by key, the rest as one predicate.
+                List<string> own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
+                foreach (string id in ids)
                     c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
-                foreach (var id in own) ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
+                foreach (string id in own)
+                    ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
                 ClientStore.Insert(c, tx, _instance, table, null, OutboxKind.PredicateDelete, OutboxClass.Bulk, predicate: predicate.Serialize(), expectedVersion: k.Cursor);
                 Log($"масове видалення {count} записів: у черзі одна дія {predicate} і SyncVersion ≤ {k.Cursor}{(own.Count > 0 ? $", ключами ще {own.Count} (мають свої дії в черзі)" : "")}");
             }
@@ -865,10 +1010,11 @@ public sealed class SyncAgent : IAsyncDisposable
         string text;
         try
         {
-            if (_instance is null) return "репліки нема";
+            if (_instance is null)
+                return "репліки нема";
             if (tries == 0)
             {
-                var pending = _conn.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i", null, ("@i", _instance));
+                long pending = _conn.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i", null, ("@i", _instance));
                 if (_state != AgentState.Online || pending > 0)
                 {
                     text = "перенесення доступне, коли інстанс на зв'язку, повністю досинхронізований і черга порожня";
@@ -876,36 +1022,47 @@ public sealed class SyncAgent : IAsyncDisposable
                     return text;
                 }
             }
-            using var tx = _conn.BeginTransaction();
+            using SqliteTransaction tx = _conn.BeginTransaction();
             var set = new List<(string Table, string Pk)>();
             void Add(string table, string pk)
             {
-                if (set.Contains((table, pk))) return;
-                if (_conn.Scalar<string>($"SELECT InstanceId FROM {Q(table)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", pk), ("@i", _instance)) is null) return;
+                if (set.Contains((table, pk)))
+                    return;
+                if (_conn.Scalar<string>($"SELECT InstanceId FROM {Q(table)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", pk), ("@i", _instance)) is null)
+                    return;
                 set.Add((table, pk));
-                // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3)
-                foreach (var (child, fk) in _store.Model.ChildrenOf(table))
+                // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3).
+                foreach ((SyncTable child, SyncForeignKey fk) in _store.Model.ChildrenOf(table))
                 {
                     var ids = new List<string>();
-                    using (var cmd = _conn.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", _instance)))
-                    using (var r = cmd.ExecuteReader())
-                        while (r.Read()) ids.Add(r.GetString(0));
-                    foreach (var id in ids) Add(child.Name, id);
+                    using (SqliteCommand cmd = _conn.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", _instance)))
+                    using (SqliteDataReader r = cmd.ExecuteReader())
+                    {
+                        while (r.Read())
+                            ids.Add(r.GetString(0));
+                    }
+
+                    foreach (string id in ids)
+                        Add(child.Name, id);
                 }
             }
-            foreach (var (table, pk) in rows) Add(table, pk);
-            if (set.Count == 0) return "нічого переносити";
-            var archive = SyncColumns.ArchiveOf(_instance);
-            var labels = set.Select(x => ClientStore.Label(_conn, tx, _store.Model[x.Table], x.Pk)).ToList();
-            foreach (var (table, pk) in set)
+            foreach ((string table, string pk) in rows)
+                Add(table, pk);
+            if (set.Count == 0)
+                return "нічого переносити";
+            string archive = SyncColumns.ArchiveOf(_instance);
+            List<string> labels = set.Select(x => ClientStore.Label(_conn, tx, _store.Model[x.Table], x.Pk)).ToList();
+            foreach ((string table, string pk) in set)
                 _conn.Exec($"UPDATE {Q(table)} SET InstanceId = @a WHERE Id = @id AND InstanceId = @i", tx, ("@a", archive), ("@id", pk), ("@i", _instance));
             long v;
-            lock (_cursors) v = _cursors.Values.Min(k => k.Cursor);
+            lock (_cursors)
+                v = _cursors.Values.Min(k => k.Cursor);
             ClientStore.Insert(_conn, tx, _instance, set[0].Table, null, OutboxKind.Archive, OutboxClass.Bulk, predicate: ArchiveSet.Serialize(set), expectedVersion: v);
             tx.Commit();
             text = $"{(tries > 0 ? "повторне перенесення" : "перенесення в архів")}: {string.Join(", ", labels)} отримали InstanceId = {archive} в одній транзакції; у черзі одна дія: Id ∈ набір і SyncVersion ≤ {v}";
             _archiveRetry.RemoveAll(x => set.Contains((x.Table, x.Pk)));
-            foreach (var (_, pk) in set) _archiveTries[pk] = tries;
+            foreach ((string _, string pk) in set)
+                _archiveTries[pk] = tries;
         }
         finally
         {
@@ -917,55 +1074,65 @@ public sealed class SyncAgent : IAsyncDisposable
         return text;
     }
 
-    private readonly Dictionary<string, int> _archiveTries = [];
-
     /// <summary>
     /// Rows the owner kept: changed after V, or parents of kept children. They go back from the archive to the replica;
     /// changed ones also into NeedFull, since their updates bypassed the archive (11.2, step 6).
     /// </summary>
     private void ArchiveLeftovers(SqliteTransaction tx, ReplicaWriter w, ActionResult r, OutboxEntry e, List<(string, SyncLogLevel)> logs)
     {
-        var archive = SyncColumns.ArchiveOf(_instance!);
+        string archive = SyncColumns.ArchiveOf(_instance!);
         var names = new List<string>();
-        foreach (var (why, list) in new[] { ("changed", r.Changed), ("children", r.Children) })
-            foreach (var x in list)
+        foreach ((string why, Google.Protobuf.Collections.RepeatedField<RowRef> list) in new[] { ("changed", r.Changed), ("children", r.Children) })
+        {
+            foreach (RowRef x in list)
             {
-                var pk = PkText(x.Pk);
-                var v = _conn.Scalar<long>($"SELECT SyncVersion FROM {Q(x.Tbl)} WHERE Id = @id", tx, ("@id", pk));
+                string pk = PkText(x.Pk);
+                long v = _conn.Scalar<long>($"SELECT SyncVersion FROM {Q(x.Tbl)} WHERE Id = @id", tx, ("@id", pk));
                 _conn.Exec($"UPDATE {Q(x.Tbl)} SET InstanceId = @i WHERE Id = @id AND InstanceId = @a", tx, ("@i", _instance), ("@id", pk), ("@a", archive));
                 names.Add(ClientStore.Label(_conn, tx, _store.Model[x.Tbl], pk));
-                if (why == "changed") w.NeedFull.Add(x);
+                if (why == "changed")
+                    w.NeedFull.Add(x);
                 _archiveRetry.Add(new ArchiveRetry(x.Tbl, pk, why, v, _archiveTries.GetValueOrDefault(pk) + 1));
                 w.TouchedTables.Add(x.Tbl);
             }
+        }
+
         logs.Add(($"лишились на власнику: {string.Join(", ", names)} (змінено після V або мають дочірні); повернуто з архіву в репліку, змінені в NeedFull, повторю перенесення", SyncLogLevel.Warn));
     }
 
     private async Task RetryArchiveAsync()
     {
-        if (_archiveRetry.Count == 0) return;
+        if (_archiveRetry.Count == 0)
+            return;
         List<ArchiveRetry> ready = [];
-        foreach (var pass in new[] { "changed", "children" })
-            foreach (var rt in _archiveRetry.Where(x => x.Why == pass).ToList())
+        foreach (string pass in new[] { "changed", "children" })
+        {
+            foreach (ArchiveRetry rt in _archiveRetry.Where(x => x.Why == pass).ToList())
             {
                 long? v;
-                using (var c = _store.Open())
+                using (SqliteConnection c = _store.Open())
                     v = c.Scalar<long?>($"SELECT SyncVersion FROM {Q(rt.Table)} WHERE Id = @id AND InstanceId = @i", null, ("@id", rt.Pk), ("@i", _instance));
-                if (v is null) { _archiveRetry.Remove(rt); continue; }
-                var ok = pass == "changed"
+                if (v is null)
+                {
+                    _archiveRetry.Remove(rt);
+                    continue;
+                }
+                bool ok = pass == "changed"
                     ? v > rt.Version
                     : !_archiveRetry.Any(o => o != rt && IsChild(o, rt));
-                if (!ok) continue;
+                if (!ok)
+                    continue;
                 _archiveRetry.Remove(rt);
                 if (rt.Tries >= 3)
                 {
-                    using var c = _store.Open();
+                    using SqliteConnection c = _store.Open();
                     ClientStore.Note(c, null, _instance!, $"{ClientStore.Label(c, null, _store.Model[rt.Table], rt.Pk)} лишився на власнику: автоматика постійно його змінює");
                     continue;
                 }
                 await ArchiveCoreAsync([(rt.Table, rt.Pk)], rt.Tries);
                 return;
             }
+        }
     }
 
     private bool IsChild(ArchiveRetry child, ArchiveRetry parent) =>
@@ -976,7 +1143,14 @@ public sealed class SyncAgent : IAsyncDisposable
         _life.Cancel();
         _sessionCts?.Cancel();
         if (_loop is not null)
-            try { await _loop; } catch { }
+        {
+            try
+            {
+                await _loop;
+            }
+            catch { }
+        }
+
         _conn.Dispose();
     }
 }
