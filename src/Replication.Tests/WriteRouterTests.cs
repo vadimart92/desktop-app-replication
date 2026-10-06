@@ -82,6 +82,70 @@ public class WriteRouterTests
         await AssertNextSaveQueuesNothingAsync(client, db);
     }
 
+    [Fact]
+    public async Task Save_cancelled_before_the_router_begins_its_transaction_queues_nothing()
+    {
+        await using ClientDb client = ClientDb.Create();
+        (_, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.Db();
+        Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
+        item.Price = 1;
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        // The router's BEGIN throws inside SavingChanges; EF reports that to no interceptor.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => db.SaveChangesAsync(cts.Token));
+
+        AssertReleased(client, db);
+        await AssertNextSaveQueuesNothingAsync(client, db);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Save_rejected_by_a_later_interceptor_leaves_nothing_to_the_next_save(bool retry, bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (_, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
+        item.Price = 1;
+
+        // EF reports a failure inside SavingChanges to no interceptor: the router's transaction outlives the save.
+        if (async)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync(TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            Assert.Throws<InvalidOperationException>(() => db.SaveChanges());
+        }
+
+        if (!retry)
+        {
+            await AssertNextSaveQueuesNothingAsync(client, db);
+            AssertReleased(client, db);
+            return;
+        }
+
+        if (async)
+        {
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        else
+        {
+            db.SaveChanges();
+        }
+
+        await using (SampleDbContext other = client.Db())
+            Assert.Equal(1L, (await other.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken)).Price);
+        OutboxEntry entry = Assert.Single(client.Replication.Store.Entries());
+        Assert.Equal(("Item", Wire.PkText(itemId), OutboxKind.Patch), (entry.Table, entry.Pk, entry.Kind));
+        AssertReleased(client, db);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
@@ -193,6 +257,23 @@ public class WriteRouterTests
             cts.Cancel();
             return ValueTask.FromResult(result);
         }
+    }
+
+    /// <summary>An application's validation after the router: it turns down the first save.</summary>
+    private sealed class RejectFirstSave : SaveChangesInterceptor
+    {
+        private bool _rejected;
+
+        public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
+        {
+            if (_rejected)
+                return result;
+            _rejected = true;
+            throw new InvalidOperationException("перевірка не пройшла");
+        }
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default) =>
+            ValueTask.FromResult(SavingChanges(eventData, result));
     }
 }
 

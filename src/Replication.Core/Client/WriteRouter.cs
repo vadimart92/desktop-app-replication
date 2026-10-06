@@ -39,16 +39,26 @@ public sealed class WriteRouter : SaveChangesInterceptor
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
-        if (eventData.Context is { } ctx && Collect(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
+        if (eventData.Context is { } ctx && Start(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
             p.OwnTransaction = ctx.Database.BeginTransaction();
         return result;
     }
 
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
     {
-        if (eventData.Context is { } ctx && Collect(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
+        if (eventData.Context is { } ctx && Start(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
             p.OwnTransaction = await ctx.Database.BeginTransactionAsync(ct);
         return result;
+    }
+
+    /// <summary>
+    /// EF reports a failure inside SavingChanges (an interceptor after the router, a cancelled BEGIN) to no interceptor:
+    /// what such a save left behind is dropped before the next save collects its changes (8.1).
+    /// </summary>
+    private Pending? Start(DbContext ctx)
+    {
+        Abort(ctx);
+        return Collect(ctx);
     }
 
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
