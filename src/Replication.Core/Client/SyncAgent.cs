@@ -843,6 +843,7 @@ public sealed class SyncAgent : IAsyncDisposable
 
         if (mode == SnapshotMode.EmptyReplica)
         {
+            bool hadReplica = _instance is not null;
             await _gate.WaitAsync(ct);
             try
             {
@@ -862,6 +863,11 @@ public sealed class SyncAgent : IAsyncDisposable
             finally
             {
                 _gate.Release();
+            }
+            if (hadReplica)
+            {
+                DataChanged?.Invoke(_store.Model.Tables.Select(t => t.Name).ToList());
+                StatusChanged?.Invoke();
             }
             return;
         }
