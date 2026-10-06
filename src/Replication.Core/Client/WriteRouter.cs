@@ -25,8 +25,11 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 
     private sealed record Change(SyncTable Table, string Instance, string Pk, OutboxKind? Kind, List<string> Columns);
 
+    /// <summary>A delete kept from EF because archived rows point to the row: the router moves the row to the archive instead (11.6).</summary>
+    private sealed record ArchiveMove(SyncTable Table, string Instance, string Pk, EntityEntry Entry);
+
     private sealed record Pending(
-        IReadOnlyList<Change> Changes, IReadOnlyList<(SyncTable Table, string Instance, string Pk, EntityEntry Entry)> ArchiveMoves,
+        IReadOnlyList<Change> Changes, IReadOnlyList<ArchiveMove> ArchiveMoves,
         bool OpenedConnection, IDbContextTransaction? OwnTransaction);
 
     /// <summary>Raised after an outbox change commits, with the instance it belongs to; the agent wakes and sends.</summary>
@@ -137,12 +140,12 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
     }
 
     /// <summary>A delete kept from EF for an archive move goes back to EF, so a retry of the save collects it again (11.6).</summary>
-    private static void RestoreDeletes(IEnumerable<(SyncTable, string, string, EntityEntry Entry)> moves)
+    private static void RestoreDeletes(IEnumerable<ArchiveMove> moves)
     {
-        foreach ((_, _, _, EntityEntry e) in moves)
+        foreach (ArchiveMove m in moves)
         {
-            if (e.State == EntityState.Unchanged)
-                e.State = EntityState.Deleted;
+            if (m.Entry.State == EntityState.Unchanged)
+                m.Entry.State = EntityState.Deleted;
         }
     }
 
@@ -154,7 +157,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
             .Select(e => (model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
             .ToHashSet();
         var changes = new List<Change>();
-        var moves = new List<(SyncTable, string, string, EntityEntry)>();
+        var moves = new List<ArchiveMove>();
         bool opened = false;
         IDbContextTransaction? own = null;
         try
@@ -197,7 +200,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
                             var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
                             if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), tx, model, instance!, t, pk))
                             {
-                                moves.Add((t, instance!, pk, e));
+                                moves.Add(new ArchiveMove(t, instance!, pk, e));
                                 e.State = EntityState.Unchanged;
                             }
                         }
@@ -230,10 +233,10 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
         try
         {
-            foreach ((SyncTable t, string inst, string pk, _) in p.ArchiveMoves)
+            foreach (ArchiveMove m in p.ArchiveMoves)
             {
-                if (ArchiveGuard.DeleteOrArchive(conn, tx, model, inst, t, pk))
-                    Routed?.Invoke(inst, $"{t.Name} {Short(pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
+                if (ArchiveGuard.DeleteOrArchive(conn, tx, model, m.Instance, m.Table, m.Pk))
+                    Routed?.Invoke(m.Instance, $"{m.Table.Name} {Short(m.Pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
             }
 
             foreach (Change ch in p.Changes)
