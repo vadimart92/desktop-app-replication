@@ -121,7 +121,7 @@ internal sealed class ApplyHandler(OwnerStore store)
         c.Exec("SAVEPOINT batch", tx);
         for (bool rerun = true; rerun;)
         {
-            // Counting creates in the same batch; a rejected parent rejects its children.
+            // FK pre-check to a fixpoint, run again on every pass: a parent create rejected so far rejects its in-batch children.
             for (bool changed = true; changed;)
             {
                 changed = false;
