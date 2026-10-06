@@ -25,7 +25,7 @@ public sealed class ApplyHandlerTests(ITestOutputHelper output)
             await using Lab lab = await StartWithUniqueNamesAsync(log);
 
             // Offline, so the new category and its item go in one batch (8.4).
-            lab.C1.Link = false;
+            await lab.GoOfflineAsync(lab.C1);
             await using (SampleDbContext db = lab.C1.Db())
             {
                 var category = new Category { Name = "Офіс" };
@@ -73,7 +73,7 @@ public sealed class ApplyHandlerTests(ITestOutputHelper output)
         await using Lab lab = await StartWithUniqueNamesAsync();
 
         // Offline, the user creates a duplicate category and moves an existing item into it: both go in one batch (8.4).
-        lab.C1.Link = false;
+        await lab.GoOfflineAsync(lab.C1);
         var duplicate = new Category { Name = "Склад" };
         await using (SampleDbContext db = lab.C1.Db())
         {
