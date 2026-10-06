@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Replication.Model;
 using static Replication.Model.Wire;
@@ -14,6 +15,7 @@ public sealed class OwnerStore
     public const long NoFloor = long.MaxValue;
 
     private readonly ConcurrentDictionary<string, int> _subscribed = new();
+    private readonly string _floorTables;
     private string _instanceId = "";
 
     public OwnerStore(string dbPath, SyncModel model, OwnerOptions? options = null)
@@ -22,6 +24,7 @@ public sealed class OwnerStore
         Model = model;
         Options = options ?? new OwnerOptions();
         ConnectionString = new SqliteConnectionStringBuilder { DataSource = DbPath, Pooling = true, DefaultTimeout = 30 }.ToString();
+        _floorTables = JsonSerializer.Serialize(model.Tables.Select(t => t.Name));
     }
 
     public string DbPath { get; }
@@ -254,15 +257,13 @@ public sealed class OwnerStore
     internal void RecomputeFloor(SqliteConnection c, SqliteTransaction tx)
     {
         long cutoff = Now(c, tx) - (long)Options.ActivityWindow.TotalSeconds;
-        foreach (SyncTable t in Model.Tables)
-        {
-            long? min = c.Scalar<long?>("""
-                SELECT MIN(cc.cursor) FROM _sync_client_cursors cc JOIN _sync_clients cl ON cl.client_id = cc.client_id
-                WHERE cc.tbl = @t AND cl.last_seen >= @cut
-                """, tx, ("@t", t.Name), ("@cut", cutoff));
-            c.Exec("INSERT INTO _sync_floor(tbl, floor) VALUES (@t, @f) ON CONFLICT(tbl) DO UPDATE SET floor = @f",
-                tx, ("@t", t.Name), ("@f", min ?? NoFloor));
-        }
+        // Install keeps a row for every model table; rows of tables no longer in the model stay as they are.
+        c.Exec("""
+            UPDATE _sync_floor SET floor = COALESCE((
+              SELECT MIN(cc.cursor) FROM _sync_client_cursors cc JOIN _sync_clients cl ON cl.client_id = cc.client_id
+              WHERE cc.tbl = _sync_floor.tbl AND cl.last_seen >= @cut), @none)
+            WHERE tbl IN (SELECT value FROM json_each(@tables))
+            """, tx, ("@cut", cutoff), ("@none", NoFloor), ("@tables", _floorTables));
     }
 
     public void RecomputeFloor()
