@@ -142,26 +142,16 @@ public sealed class ClientStore
     public Dictionary<string, CursorState> LoadCursors(SqliteConnection c, string instance, SqliteTransaction? tx = null)
     {
         Dictionary<string, CursorState> result = Model.Tables.ToDictionary(t => t.Name, _ => new CursorState(0), StringComparer.Ordinal);
-        using (SqliteCommand cmd = c.Cmd("SELECT tbl, cursor FROM _sync_cursors WHERE instance = @i", tx, ("@i", instance)))
-        using (SqliteDataReader r = cmd.ExecuteReader())
+        foreach ((string tbl, long cursor) in c.Query("SELECT tbl, cursor FROM _sync_cursors WHERE instance = @i", tx, r => (r.GetString(0), r.GetInt64(1)), ("@i", instance)))
         {
-            while (r.Read())
-            {
-                if (result.ContainsKey(r.GetString(0)))
-                    result[r.GetString(0)] = new CursorState(r.GetInt64(1));
-            }
+            if (result.ContainsKey(tbl))
+                result[tbl] = new CursorState(cursor);
         }
-
-        using (SqliteCommand cmd = c.Cmd("SELECT tbl, lo, hi FROM _sync_ranges WHERE instance = @i", tx, ("@i", instance)))
-        using (SqliteDataReader r = cmd.ExecuteReader())
+        foreach ((string tbl, long lo, long hi) in c.Query("SELECT tbl, lo, hi FROM _sync_ranges WHERE instance = @i", tx, r => (r.GetString(0), r.GetInt64(1), r.GetInt64(2)), ("@i", instance)))
         {
-            while (r.Read())
-            {
-                if (result.TryGetValue(r.GetString(0), out CursorState? k))
-                    k.AddRange(r.GetInt64(1), r.GetInt64(2));
-            }
+            if (result.TryGetValue(tbl, out CursorState? k))
+                k.AddRange(lo, hi);
         }
-
         return result;
     }
 
@@ -189,15 +179,8 @@ public sealed class ClientStore
         return r.Read() ? ReadEntry(r) : null;
     }
 
-    public static List<OutboxEntry> Entries(SqliteConnection c, SqliteTransaction? tx, string? instance = null, bool pendingOnly = false)
-    {
-        var list = new List<OutboxEntry>();
-        using SqliteCommand cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE (@i IS NULL OR instance = @i){(pendingOnly ? " AND sent IN (0, 1)" : "")} ORDER BY id", tx, ("@i", instance));
-        using SqliteDataReader r = cmd.ExecuteReader();
-        while (r.Read())
-            list.Add(ReadEntry(r));
-        return list;
-    }
+    public static List<OutboxEntry> Entries(SqliteConnection c, SqliteTransaction? tx, string? instance = null, bool pendingOnly = false) =>
+        c.Query($"SELECT {EntryColumns} FROM _sync_outbox WHERE (@i IS NULL OR instance = @i){(pendingOnly ? " AND sent IN (0, 1)" : "")} ORDER BY id", tx, ReadEntry, ("@i", instance));
 
     public List<OutboxEntry> Entries(string? instance = null)
     {
@@ -284,12 +267,8 @@ public sealed class ClientStore
     public List<ClientNote> Notes(string? instance = null, int limit = 50)
     {
         using SqliteConnection c = Open();
-        var list = new List<ClientNote>();
-        using SqliteCommand cmd = c.Cmd("SELECT id, instance, at, text, info FROM _sync_notes WHERE @i IS NULL OR instance = @i ORDER BY id DESC LIMIT @n", null, ("@i", instance), ("@n", limit));
-        using SqliteDataReader r = cmd.ExecuteReader();
-        while (r.Read())
-            list.Add(new ClientNote(r.GetInt64(0), r.GetString(1), DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(2)), r.GetString(3), r.GetInt64(4) != 0));
-        return list;
+        return c.Query("SELECT id, instance, at, text, info FROM _sync_notes WHERE @i IS NULL OR instance = @i ORDER BY id DESC LIMIT @n", null,
+            r => new ClientNote(r.GetInt64(0), r.GetString(1), DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(2)), r.GetString(3), r.GetInt64(4) != 0), ("@i", instance), ("@n", limit));
     }
 
     // Rows.
@@ -303,13 +282,6 @@ public sealed class ClientStore
     }
 
     /// <summary>Ids of the live rows of the instance that point to the row through the FK.</summary>
-    internal static List<string> ChildIds(SqliteConnection c, SqliteTransaction? tx, string instance, SyncTable child, SyncForeignKey fk, string pk)
-    {
-        var ids = new List<string>();
-        using SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", instance));
-        using SqliteDataReader r = cmd.ExecuteReader();
-        while (r.Read())
-            ids.Add(r.GetString(0));
-        return ids;
-    }
+    internal static List<string> ChildIds(SqliteConnection c, SqliteTransaction? tx, string instance, SyncTable child, SyncForeignKey fk, string pk) =>
+        c.Query($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, r => r.GetString(0), ("@p", pk), ("@i", instance));
 }

@@ -76,5 +76,15 @@ internal static class SqliteExtensions
         return (T)Convert.ChangeType(r, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    public static List<T> Query<T>(this SqliteConnection c, string sql, SqliteTransaction? tx, Func<SqliteDataReader, T> read, params (string, object?)[] args)
+    {
+        using SqliteCommand cmd = c.Cmd(sql, tx, args);
+        using SqliteDataReader r = cmd.ExecuteReader();
+        var list = new List<T>();
+        while (r.Read())
+            list.Add(read(r));
+        return list;
+    }
+
     public static object? Raw(this SqliteDataReader r, int i) => r.IsDBNull(i) ? null : r.GetValue(i);
 }

@@ -967,14 +967,7 @@ public sealed class SyncAgent : IAsyncDisposable
             using SqliteConnection c = _store.Open();
             using SqliteTransaction tx = c.BeginTransaction();
             (string where, (string, object?)[] args) = predicate.ToSql(t);
-            var ids = new List<string>();
-            using (SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE InstanceId = @inst AND {where}", tx, [("@inst", _instance), .. args]))
-            using (SqliteDataReader r = cmd.ExecuteReader())
-            {
-                while (r.Read())
-                    ids.Add(r.GetString(0));
-            }
-
+            List<string> ids = c.Query($"SELECT Id FROM {Q(t.Name)} WHERE InstanceId = @inst AND {where}", tx, r => r.GetString(0), [("@inst", _instance), .. args]);
             count = ids.Count;
             if (count == 0)
                 return 0;
