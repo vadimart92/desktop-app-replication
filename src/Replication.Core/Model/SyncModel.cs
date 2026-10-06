@@ -144,16 +144,16 @@ public sealed class SyncModel
 
         // Parents first, so FK-ordered work (snapshot copy, archive) has a stable order.
         var ordered = new List<SyncTable>();
-        var visiting = new HashSet<string>();
+        var visited = new HashSet<string>();
         Dictionary<string, SyncTable> byName = tables.ToDictionary(t => t.Name);
 
         void Visit(SyncTable t)
         {
-            if (ordered.Contains(t) || !visiting.Add(t.Name))
+            if (!visited.Add(t.Name))
                 return;
             foreach (SyncForeignKey fk in t.ForeignKeys)
             {
-                if (byName.TryGetValue(fk.ParentTable, out SyncTable? p) && p != t)
+                if (byName.TryGetValue(fk.ParentTable, out SyncTable? p))
                     Visit(p);
             }
 
