@@ -22,8 +22,7 @@ internal sealed class SubscribeSession
     private readonly Dictionary<string, CursorState> _mirror = new(StringComparer.Ordinal);
     private readonly HashSet<string> _synced = new(StringComparer.Ordinal);
     private readonly List<RangeExtra> _extra = [];
-    private readonly object _lock = new();
-    private string[] _open = [];
+    private volatile string[] _open = [];
     private string _clientId = "";
     private string _who = "";
     private bool _online;
@@ -159,8 +158,7 @@ internal sealed class SubscribeSession
             switch (m.BodyCase)
             {
                 case SubscribeMessage.BodyOneofCase.OpenTables:
-                    lock (_lock)
-                        _open = [.. m.OpenTables.Tables];
+                    _open = [.. m.OpenTables.Tables];
                     Log($"OpenTables: {string.Join(", ", m.OpenTables.Tables)}");
                     _wake.Set();
                     break;
@@ -217,9 +215,7 @@ internal sealed class SubscribeSession
 
     private IEnumerable<SyncTable> PriorityTables()
     {
-        string[] open;
-        lock (_lock)
-            open = _open;
+        string[] open = _open;
         // Open tables first, together with the tables they reference by FK (6.4).
         bool First(SyncTable t) => open.Contains(t.Name) || Model.ChildrenOf(t.Name).Any(c => open.Contains(c.Child.Name));
         return Model.Tables.OrderBy(t => First(t) ? 0 : 1);
