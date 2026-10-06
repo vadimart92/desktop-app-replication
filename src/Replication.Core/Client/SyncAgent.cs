@@ -660,7 +660,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     {
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
-                        w.Note(_conn, tx, $"не збережено: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({(r.Reason == ApplyReasons.ParentDeleted ? "батьківський запис видалено" : "запис видалено на інстансі")})");
+                        w.Note(_conn, tx, $"не збережено: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({(r.Reason == ApplyReasons.ParentDeleted ? "батьківський запис не збережено або видалено" : "запис видалено на інстансі")})");
                         break;
                     }
                     case ResultStatus.Ignored when t is not null && e.Pk is not null:

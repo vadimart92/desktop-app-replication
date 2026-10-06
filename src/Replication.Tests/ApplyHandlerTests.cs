@@ -52,7 +52,7 @@ public sealed class ApplyHandlerTests(ITestOutputHelper output)
             Assert.False(Inspect.OwnerHas(lab.Owner, "Діркопробивач"));
             List<ClientNote> notes = lab.C1.Replication.Store.Notes();
             Assert.Contains(notes, n => n.Text.Contains("«Офіс»", StringComparison.Ordinal) && n.Text.Contains("вже є запис", StringComparison.Ordinal));
-            Assert.Contains(notes, n => n.Text.Contains("«Діркопробивач»", StringComparison.Ordinal) && n.Text.Contains("батьківський запис видалено", StringComparison.Ordinal));
+            Assert.Contains(notes, n => n.Text.Contains("«Діркопробивач»", StringComparison.Ordinal) && n.Text.Contains("батьківський запис не збережено або видалено", StringComparison.Ordinal));
             lock (entries)
             {
                 Assert.Contains(entries, e => e.Source == "owner" && e.Text.Contains("Rejected (unique)", StringComparison.Ordinal)
