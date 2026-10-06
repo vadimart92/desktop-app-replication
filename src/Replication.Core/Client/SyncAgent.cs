@@ -602,7 +602,7 @@ public sealed class SyncAgent : IAsyncDisposable
         return true;
     }
 
-    private string Describe(Protocol.Action a, List<OutboxEntry> entries)
+    private static string Describe(Protocol.Action a, List<OutboxEntry> entries)
     {
         OutboxEntry? e = entries.FirstOrDefault(x => x.Seq == a.Seq);
         string cls = e?.Class == OutboxClass.Bulk ? "[масова] " : "";
@@ -621,110 +621,15 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             if (_instance is null)
                 return (null, []);
-            using SqliteTransaction tx = _conn.BeginTransaction();
-            List<OutboxEntry> all = ClientStore.Entries(_conn, tx, _instance, pendingOnly: true)
-                .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();
-            if (all.Count == 0)
-                return (null, []);
-
-            var batch = new List<OutboxEntry>();
-            var actions = new Dictionary<long, Protocol.Action?>();
-            var visiting = new HashSet<long>();
-            int budget = ApplyBudget();
-            int size = 0;
-
-            void Add(OutboxEntry e)
-            {
-                if (actions.ContainsKey(e.Id) || !visiting.Add(e.Id))
-                    return;
-                if (_store.Model.TryGet(e.Table, out SyncTable? t) && e.Kind is OutboxKind.Create or OutboxKind.Patch && e.Pk is not null)
-                {
-                    foreach (SyncForeignKey fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
-                    {
-                        // A create this row points to must go in the same or an earlier batch (8.4).
-                        string? pid = _conn.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
-                        if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == OutboxSendState.Waiting) is { } pe)
-                            Add(pe);
-                    }
-                }
-
-                Protocol.Action? a = ToAction(e, tx);
-                actions[e.Id] = a;
-                batch.Add(e);
-                size += a?.CalculateSize() ?? 0;
-            }
-
-            foreach (OutboxEntry e in all)
-            {
-                if (size >= budget && batch.Count > 0)
-                    break;
-                Add(e);
-            }
-
-            long next = _conn.Scalar<long>("SELECT next_seq FROM _sync_instances WHERE address = @a", tx, ("@a", Address));
-            var sent = new List<OutboxEntry>();
-            foreach (OutboxEntry e in batch)
-            {
-                // Seq is given at the first send, so the owner always sees seq ascending (8.5).
-                long seq = e.Seq ?? next++;
-                _conn.Exec("UPDATE _sync_outbox SET seq = @s, sent = 1 WHERE id = @id", tx, ("@s", seq), ("@id", e.Id));
-                if (actions[e.Id] is { } a)
-                    a.Seq = seq;
-                sent.Add(e with { Seq = seq, Sent = OutboxSendState.InFlight });
-            }
-            _conn.Exec("UPDATE _sync_instances SET next_seq = @n WHERE address = @a", tx, ("@n", next), ("@a", Address));
-            tx.Commit();
-
-            var req = new ApplyRequest { ClientId = _store.ClientId };
-            req.Actions.AddRange(batch.Select(e => actions[e.Id]).OfType<Protocol.Action>().OrderBy(a => a.Seq));
-            StatusChanged?.Invoke();
-            return (req.Actions.Count > 0 ? req : null, sent);
+            (ApplyRequest? req, List<OutboxEntry> sent) = ApplyBatchBuilder.Build(_conn, _store.Model, _store.ClientId, Address, _instance, ApplyBudget);
+            if (sent.Count > 0)
+                StatusChanged?.Invoke();
+            return (req, sent);
         }
         finally
         {
             _gate.Release();
         }
-    }
-
-    /// <summary>Values are read from the replica at send time, so the latest state goes and edits collapse by themselves (5.4).</summary>
-    private Protocol.Action? ToAction(OutboxEntry e, SqliteTransaction tx)
-    {
-        var a = new Protocol.Action { Tbl = e.Table, Kind = (ActionKind)e.Kind };
-        switch (e.Kind)
-        {
-            case OutboxKind.Create or OutboxKind.Patch:
-            {
-                SyncTable t = _store.Model[e.Table];
-                List<string> cols = e.Kind == OutboxKind.Create ? t.Columns.ToList() : e.Columns.Where(t.HasColumn).ToList();
-                using SqliteCommand cmd = _conn.Cmd($"SELECT {string.Join(", ", cols.Select(Q).DefaultIfEmpty("1"))} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
-                using SqliteDataReader r = cmd.ExecuteReader();
-                if (!r.Read())
-                {
-                    // The row is gone: nothing to send, the reply's applied_up_to_seq clears the entry.
-                    return null;
-                }
-
-                a.Pk = PkBytes(e.Pk!);
-                for (int i = 0; i < cols.Count; i++)
-                {
-                    a.Columns.Add(cols[i]);
-                    a.Values.Add(ToValue(r.Raw(i)));
-                }
-                return a;
-            }
-            case OutboxKind.Delete:
-                a.Pk = PkBytes(e.Pk!);
-                return a;
-            case OutboxKind.Archive:
-                a.ExpectedVersion = e.ExpectedVersion ?? 0;
-                a.Rows.AddRange(ArchiveSet.Parse(e.Predicate).Select(x => Ref(x.Table, x.Pk)));
-                return a;
-            case OutboxKind.PredicateDelete:
-                a.ExpectedVersion = e.ExpectedVersion ?? 0;
-                a.Predicate.AddRange(Predicate.Parse(e.Predicate)!.ToWire());
-                return a;
-        }
-        return null;
     }
 
     private async Task ProcessReplyAsync(ApplyReply reply, List<OutboxEntry> sent)
