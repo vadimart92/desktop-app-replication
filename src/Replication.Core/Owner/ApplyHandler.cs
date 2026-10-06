@@ -19,6 +19,13 @@ internal sealed class ApplyHandler(OwnerStore store)
         public const string AlreadyApplied = "already applied";
     }
 
+    private enum Kept
+    {
+        Gone,
+        Changed,
+        Children
+    }
+
     private SyncModel Model => store.Model;
 
     public ApplyReply Apply(ApplyRequest req)
@@ -235,19 +242,19 @@ internal sealed class ApplyHandler(OwnerStore store)
     private ActionResult Archive(SqliteConnection c, SqliteTransaction tx, Protocol.Action a)
     {
         List<(string Tbl, string Pk)> items = a.Rows.Select(r => (Tbl: r.Tbl, Pk: PkText(r.Pk))).ToList();
-        var why = new Dictionary<(string, string), string>();
+        var why = new Dictionary<(string Tbl, string Pk), Kept>();
         foreach ((string Tbl, string Pk) it in items)
         {
             if (!Model.TryGet(it.Tbl, out SyncTable? t))
             {
-                why[it] = "gone";
+                why[it] = Kept.Gone;
                 continue;
             }
             OwnerItem? row = OwnerReader.Row(c, tx, t, it.Pk);
             if (row is null)
-                why[it] = "gone";
+                why[it] = Kept.Gone;
             else if (row.Version > a.ExpectedVersion)
-                why[it] = "changed";
+                why[it] = Kept.Changed;
         }
         HashSet<(string Tbl, string Pk)> set = items.ToHashSet();
         for (bool changed = true; changed;)
@@ -264,7 +271,7 @@ internal sealed class ApplyHandler(OwnerStore store)
                         (string Name, string) k = (child.Name, r.GetString(0));
                         if (!set.Contains(k) || why.ContainsKey(k))
                         {
-                            why[it] = "children";
+                            why[it] = Kept.Children;
                             changed = true;
                             break;
                         }
@@ -280,8 +287,8 @@ internal sealed class ApplyHandler(OwnerStore store)
         foreach ((string tbl, string pk) in toDelete)
             deleted += c.Exec($"DELETE FROM {Q(tbl)} WHERE Id = @id AND SyncVersion <= @v", tx, ("@id", pk), ("@v", a.ExpectedVersion));
         var res = new ActionResult { Seq = a.Seq, Status = ResultStatus.Applied, Deleted = deleted };
-        res.Changed.AddRange(why.Where(x => x.Value == "changed").Select(x => Ref(x.Key.Item1, x.Key.Item2)));
-        res.Children.AddRange(why.Where(x => x.Value == "children").Select(x => Ref(x.Key.Item1, x.Key.Item2)));
+        res.Changed.AddRange(why.Where(x => x.Value == Kept.Changed).Select(x => Ref(x.Key.Tbl, x.Key.Pk)));
+        res.Children.AddRange(why.Where(x => x.Value == Kept.Children).Select(x => Ref(x.Key.Tbl, x.Key.Pk)));
         return res;
     }
 
