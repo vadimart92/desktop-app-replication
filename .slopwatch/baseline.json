@@ -5,15 +5,6 @@
   "description": "Initial baseline created by 'slopwatch init' on 2026-10-05 20:40:07 UTC",
   "entries": [
     {
-      "hash": "49479122a8f064b7",
-      "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Client/SyncAgent.cs",
-      "lineNumber": 979,
-      "codeSnippet": "catch { }",
-      "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-10-05T20:40:07.9814032+00:00"
-    },
-    {
       "hash": "e93eb0841a85c516",
       "ruleId": "SW003",
       "filePath": "src/Replication.Core/Net/ShapedStream.cs",
@@ -57,15 +48,6 @@
       "codeSnippet": "catch (OperationCanceledException) { }",
       "message": "Empty catch block swallows exceptions without handling",
       "baselinedAt": "2026-10-05T20:40:07.9814502+00:00"
-    },
-    {
-      "hash": "b1542fc53d3ea81c",
-      "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Client/SyncAgent.cs",
-      "lineNumber": 386,
-      "codeSnippet": "catch\r\n            {\r\n                // The first failure is rethrown below.\r\n            }",
-      "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-10-06T05:31:56.5623862+00:00"
     },
     {
       "hash": "89697910f2bf9248",

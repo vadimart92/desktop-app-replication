@@ -384,14 +384,7 @@ public sealed class SyncAgent : IAsyncDisposable
             };
             Task done = await Task.WhenAny(tasks);
             inner.Cancel();
-            try
-            {
-                await Task.WhenAll(tasks);
-            }
-            catch
-            {
-                // The first failure is rethrown below.
-            }
+            await Task.WhenAll(tasks).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             await done;
             throw new IOException("власник закрив потік");
         }
@@ -1180,14 +1173,7 @@ public sealed class SyncAgent : IAsyncDisposable
         _life.Cancel();
         _sessionCts?.Cancel();
         if (_loop is not null)
-        {
-            try
-            {
-                await _loop;
-            }
-            catch { }
-        }
-
+            await _loop.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
         _conn.Dispose();
     }
 }
