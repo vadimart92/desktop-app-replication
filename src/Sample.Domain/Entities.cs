@@ -8,13 +8,13 @@ public abstract class BaseEntity
     public DateTime ModifiedOn { get; set; }
 }
 
-public class Category : BaseEntity
+public sealed class Category : BaseEntity
 {
     public string Name { get; set; } = "";
     public List<Item> Items { get; set; } = [];
 }
 
-public class Item : BaseEntity
+public sealed class Item : BaseEntity
 {
     public string Name { get; set; } = "";
     public long Price { get; set; }
@@ -23,7 +23,7 @@ public class Item : BaseEntity
     public Category? Category { get; set; }
 }
 
-public class LogEntry : BaseEntity
+public sealed class LogEntry : BaseEntity
 {
     public string Text { get; set; } = "";
 }

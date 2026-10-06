@@ -6,7 +6,7 @@ using Replication.Model;
 namespace Sample.Domain;
 
 /// <summary>One DbContext for the owner and the client (design 5.4).</summary>
-public class SampleDbContext(DbContextOptions<SampleDbContext> options) : DbContext(options)
+public sealed class SampleDbContext(DbContextOptions<SampleDbContext> options) : DbContext(options)
 {
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Item> Items => Set<Item>();
