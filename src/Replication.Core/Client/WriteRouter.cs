@@ -14,22 +14,15 @@ namespace Replication.Client;
 /// EF interceptor for the client's DbContext (8.1): an edit of a row with <c>InstanceId = X</c> is written to
 /// the replica and, in the same transaction, to the outbox of X. Rows of <c>local</c> and archives are not touched.
 /// </summary>
-public sealed class WriteRouter : SaveChangesInterceptor
+public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 {
-    private readonly SyncModel _model;
     private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
 
     private sealed record Change(SyncTable Table, string Instance, string Pk, OutboxKind? Kind, List<string> Columns);
 
-    private sealed class Pending
-    {
-        public List<Change> Changes { get; } = [];
-        public IDbContextTransaction? OwnTransaction { get; set; }
-        public List<(SyncTable Table, string Instance, string Pk)> ArchiveMoves { get; } = [];
-        public bool OpenedConnection { get; set; }
-    }
-
-    public WriteRouter(SyncModel model) => _model = model;
+    private sealed record Pending(
+        IReadOnlyList<Change> Changes, IReadOnlyList<(SyncTable Table, string Instance, string Pk)> ArchiveMoves,
+        bool OpenedConnection, IDbContextTransaction? OwnTransaction);
 
     /// <summary>Raised after an outbox change commits, with the instance it belongs to; the agent wakes and sends.</summary>
     public event Action<string>? OutboxChanged;
@@ -39,15 +32,23 @@ public sealed class WriteRouter : SaveChangesInterceptor
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
-        if (eventData.Context is { } ctx && Start(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
-            p.OwnTransaction = ctx.Database.BeginTransaction();
+        if (eventData.Context is { } ctx && Start(ctx) is { } p)
+        {
+            if (p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
+                p = p with { OwnTransaction = ctx.Database.BeginTransaction() };
+            _pending.AddOrUpdate(ctx, p);
+        }
         return result;
     }
 
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
     {
-        if (eventData.Context is { } ctx && Start(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
-            p.OwnTransaction = await ctx.Database.BeginTransactionAsync(ct);
+        if (eventData.Context is { } ctx && Start(ctx) is { } p)
+        {
+            if (p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
+                p = p with { OwnTransaction = await ctx.Database.BeginTransactionAsync(ct) };
+            _pending.AddOrUpdate(ctx, p);
+        }
         return result;
     }
 
@@ -126,8 +127,8 @@ public sealed class WriteRouter : SaveChangesInterceptor
     {
         ctx.ChangeTracker.DetectChanges();
         List<EntityEntry> entries = ctx.ChangeTracker.Entries().ToList();
-        HashSet<(string Name, string)> deleted = entries.Where(e => e.State == EntityState.Deleted && _model.ForType(e.Metadata.ClrType) is not null)
-            .Select(e => (_model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
+        HashSet<(string Name, string)> deleted = entries.Where(e => e.State == EntityState.Deleted && model.ForType(e.Metadata.ClrType) is not null)
+            .Select(e => (model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
             .ToHashSet();
         var changes = new List<Change>();
         var moves = new List<(SyncTable, string, string)>();
@@ -137,7 +138,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
         {
             foreach (EntityEntry e in entries)
             {
-                if (_model.ForType(e.Metadata.ClrType) is not { } t)
+                if (model.ForType(e.Metadata.ClrType) is not { } t)
                     continue;
                 string? instance = (string?)(e.State == EntityState.Deleted ? e.Property(SyncColumns.InstanceId).OriginalValue : e.Property(SyncColumns.InstanceId).CurrentValue);
                 if (!SyncColumns.IsRemote(instance))
@@ -160,7 +161,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
                                                               && deleted.Contains((fk.ParentTable, PkText(pid))));
                         changes.Add(new Change(t, instance!, pk, cascaded ? null : OutboxKind.Delete, []));
                         // Archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6).
-                        if (_model.ChildrenOf(t.Name).Any())
+                        if (model.ChildrenOf(t.Name).Any())
                         {
                             if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
                             {
@@ -171,7 +172,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
                             if (ctx.Database.CurrentTransaction is null)
                                 own = ctx.Database.BeginTransaction();
                             var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
-                            if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), tx, _model, instance!, t, pk))
+                            if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), tx, model, instance!, t, pk))
                             {
                                 moves.Add((t, instance!, pk));
                                 e.State = EntityState.Unchanged;
@@ -190,16 +191,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
                 ctx.Database.CloseConnection();
             throw;
         }
-        if (changes.Count == 0)
-            return null;
-        Pending p = _pending.GetOrCreateValue(ctx);
-        p.Changes.Clear();
-        p.Changes.AddRange(changes);
-        p.ArchiveMoves.Clear();
-        p.ArchiveMoves.AddRange(moves);
-        p.OwnTransaction = own;
-        p.OpenedConnection = opened;
-        return p;
+        return changes.Count == 0 ? null : new Pending(changes, moves, opened, own);
     }
 
     private static string PropertyOf(IEntityType et, string column, StoreObjectIdentifier store) =>
@@ -216,7 +208,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
         {
             foreach ((SyncTable t, string inst, string pk) in p.ArchiveMoves)
             {
-                if (ArchiveGuard.DeleteOrArchive(conn, tx, _model, inst, t, pk))
+                if (ArchiveGuard.DeleteOrArchive(conn, tx, model, inst, t, pk))
                     Routed?.Invoke(inst, $"{t.Name} {Short(pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
             }
 
@@ -231,7 +223,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
             if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or null))
             {
                 foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
-                    ClientStore.DropOrphanEntries(conn, tx, _model, inst);
+                    ClientStore.DropOrphanEntries(conn, tx, model, inst);
             }
 
             p.OwnTransaction?.Commit();
