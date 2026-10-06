@@ -19,7 +19,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
     private readonly SyncModel _model;
     private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
 
-    private sealed record Change(SyncTable Table, string Instance, string Pk, OutboxKind Kind, List<string> Columns);
+    private sealed record Change(SyncTable Table, string Instance, string Pk, OutboxKind? Kind, List<string> Columns);
 
     private sealed class Pending
     {
@@ -148,7 +148,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
                         // Only the parent goes to the outbox; the owner cascades by its own schema (8.7).
                         bool cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
                                                               && deleted.Contains((fk.ParentTable, PkText(pid))));
-                        changes.Add(new Change(t, instance!, pk, cascaded ? (OutboxKind)0 : OutboxKind.Delete, []));
+                        changes.Add(new Change(t, instance!, pk, cascaded ? null : OutboxKind.Delete, []));
                         // Archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6).
                         if (_model.ChildrenOf(t.Name).Any())
                         {
@@ -210,12 +210,15 @@ public sealed class WriteRouter : SaveChangesInterceptor
                     Routed?.Invoke(inst, $"{t.Name} {Short(pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
             }
 
-            foreach (Change ch in p.Changes.Where(x => x.Kind != 0))
+            foreach (Change ch in p.Changes)
             {
-                string what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, ch.Kind, ch.Columns, OutboxClass.Interactive);
-                Routed?.Invoke(ch.Instance, $"черга: {ch.Table.Name} {Short(ch.Pk)} → {what}");
+                if (ch.Kind is { } kind)
+                {
+                    string what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, kind, ch.Columns, OutboxClass.Interactive);
+                    Routed?.Invoke(ch.Instance, $"черга: {ch.Table.Name} {Short(ch.Pk)} → {what}");
+                }
             }
-            if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or 0))
+            if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or null))
             {
                 foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
                     DropOrphanEntries(conn, tx, _model, inst);
