@@ -274,7 +274,8 @@ internal sealed class ApplyHandler(OwnerStore store)
                 }
             }
         }
-        List<(string Tbl, string Pk)> toDelete = items.Where(x => !why.ContainsKey(x)).OrderBy(x => Model.Tables.ToList().FindIndex(t => t.Name == x.Tbl) * -1).ToList();
+        Dictionary<string, int> rank = Model.Tables.Select((t, i) => (t.Name, i)).ToDictionary(x => x.Name, x => x.i, StringComparer.Ordinal);
+        List<(string Tbl, string Pk)> toDelete = items.Where(x => !why.ContainsKey(x)).OrderByDescending(x => rank[x.Tbl]).ToList();
         int deleted = 0;
         foreach ((string tbl, string pk) in toDelete)
             deleted += c.Exec($"DELETE FROM {Q(tbl)} WHERE Id = @id AND SyncVersion <= @v", tx, ("@id", pk), ("@v", a.ExpectedVersion));
