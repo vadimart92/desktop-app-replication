@@ -110,7 +110,7 @@ public sealed class SyncAgent : IAsyncDisposable
         store.EnsureInstance(address, name);
         // Children may arrive before parents during catch-up (7).
         _conn = store.Open(foreignKeys: false);
-        _instance = store.InstanceOf(_conn, address);
+        _instance = ClientStore.InstanceOf(_conn, address);
         _cursors = _instance is null ? NewCursors() : store.LoadCursors(_conn, _instance);
     }
 
@@ -492,7 +492,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     break;
             }
             foreach ((string t, CursorState k) in next)
-                _store.SaveCursor(_conn, tx, _instance!, t, k);
+                ClientStore.SaveCursor(_conn, tx, _instance!, t, k);
             // A confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1).
             foreach ((string t, CursorState k) in next)
             {
@@ -845,7 +845,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 {
                     if (_instance is not null)
                         _conn.Exec($"DELETE FROM {Q(t.Name)} WHERE InstanceId = @i", tx, ("@i", _instance));
-                    _store.SaveCursor(_conn, tx, sr.InstanceId, t.Name, new CursorState(0));
+                    ClientStore.SaveCursor(_conn, tx, sr.InstanceId, t.Name, new CursorState(0));
                 }
                 _conn.Exec("UPDATE _sync_instances SET instance = @i WHERE address = @a", tx, ("@i", sr.InstanceId), ("@a", Address));
                 tx.Commit();

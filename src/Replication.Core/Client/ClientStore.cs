@@ -43,7 +43,7 @@ public sealed class ClientStore
     private const string EntryColumns = "id, instance, seq, tbl, pk, kind, cls, columns, predicate, expected_version, sent";
 
     /// <summary>Columns that identify a row for a person reading a note.</summary>
-    public static readonly string[] LabelColumns = ["Name", "Title", "Text"];
+    private static readonly string[] s_labelColumns = ["Name", "Title", "Text"];
 
     public ClientStore(string dbPath, SyncModel model)
     {
@@ -134,7 +134,7 @@ public sealed class ClientStore
         c.Exec("INSERT INTO _sync_instances(address, name) VALUES (@a, @n) ON CONFLICT(address) DO UPDATE SET name = @n", null, ("@a", address), ("@n", name));
     }
 
-    public string? InstanceOf(SqliteConnection c, string address, SqliteTransaction? tx = null) =>
+    public static string? InstanceOf(SqliteConnection c, string address, SqliteTransaction? tx = null) =>
         c.Scalar<string>("SELECT instance FROM _sync_instances WHERE address = @a", tx, ("@a", address));
 
     // Cursors.
@@ -155,7 +155,7 @@ public sealed class ClientStore
         return result;
     }
 
-    public void SaveCursor(SqliteConnection c, SqliteTransaction tx, string instance, string table, CursorState k)
+    public static void SaveCursor(SqliteConnection c, SqliteTransaction tx, string instance, string table, CursorState k)
     {
         c.Exec("INSERT INTO _sync_cursors(instance, tbl, cursor) VALUES (@i, @t, @c) ON CONFLICT(instance, tbl) DO UPDATE SET cursor = @c",
             tx, ("@i", instance), ("@t", table), ("@c", k.Cursor));
@@ -288,7 +288,7 @@ public sealed class ClientStore
 
     public static string Label(SqliteConnection c, SqliteTransaction? tx, SyncTable t, string pk)
     {
-        string? col = LabelColumns.FirstOrDefault(t.HasColumn);
+        string? col = s_labelColumns.FirstOrDefault(t.HasColumn);
         if (col is not null && c.Scalar<string>($"SELECT {Q(col)} FROM {Q(t.Name)} WHERE Id = @id", tx, ("@id", pk)) is { } name)
             return $"«{name}»";
         return Short(pk);

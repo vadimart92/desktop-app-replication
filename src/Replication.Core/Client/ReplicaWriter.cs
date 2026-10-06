@@ -193,7 +193,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             using SqliteTransaction tx = c.BeginTransaction();
             string newInst = c.Scalar<string>("SELECT instance_id FROM snap._sync_meta", tx)!;
             long v = c.Scalar<long>("SELECT version FROM snap._sync_meta", tx);
-            string oldInst = store.InstanceOf(c, address, tx) ?? newInst;
+            string oldInst = ClientStore.InstanceOf(c, address, tx) ?? newInst;
             var w = new ReplicaWriter(store.Model, newInst);
             List<OutboxEntry> entries = ClientStore.Entries(c, tx, oldInst, pendingOnly: true);
             c.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND sent = 2", tx, ("@i", oldInst));
@@ -264,7 +264,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             }
             c.Exec("DELETE FROM _sync_ranges WHERE instance = @new", tx, ("@new", newInst));
             foreach (SyncTable t in store.Model.Tables)
-                store.SaveCursor(c, tx, newInst, t.Name, new CursorState(v));
+                ClientStore.SaveCursor(c, tx, newInst, t.Name, new CursorState(v));
             c.Exec("UPDATE _sync_instances SET instance = @new, snapshot_version = @v WHERE address = @a", tx, ("@new", newInst), ("@v", v), ("@a", address));
             tx.Commit();
             return (newInst, carried, w.Notes);
