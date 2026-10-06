@@ -622,7 +622,7 @@ public sealed class SyncAgent : IAsyncDisposable
             if (_instance is null)
                 return (null, []);
             using SqliteTransaction tx = _conn.BeginTransaction();
-            List<OutboxEntry> all = ClientStore.Entries(_conn, tx, _instance, "sent IN (0, 1)")
+            List<OutboxEntry> all = ClientStore.Entries(_conn, tx, _instance, pendingOnly: true)
                 .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();
             if (all.Count == 0)
                 return (null, []);

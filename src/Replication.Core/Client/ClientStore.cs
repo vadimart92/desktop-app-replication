@@ -189,10 +189,10 @@ public sealed class ClientStore
         return r.Read() ? ReadEntry(r) : null;
     }
 
-    public static List<OutboxEntry> Entries(SqliteConnection c, SqliteTransaction? tx, string? instance = null, string where = "1")
+    public static List<OutboxEntry> Entries(SqliteConnection c, SqliteTransaction? tx, string? instance = null, bool pendingOnly = false)
     {
         var list = new List<OutboxEntry>();
-        using SqliteCommand cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE (@i IS NULL OR instance = @i) AND ({where}) ORDER BY id", tx, ("@i", instance));
+        using SqliteCommand cmd = c.Cmd($"SELECT {EntryColumns} FROM _sync_outbox WHERE (@i IS NULL OR instance = @i){(pendingOnly ? " AND sent IN (0, 1)" : "")} ORDER BY id", tx, ("@i", instance));
         using SqliteDataReader r = cmd.ExecuteReader();
         while (r.Read())
             list.Add(ReadEntry(r));
