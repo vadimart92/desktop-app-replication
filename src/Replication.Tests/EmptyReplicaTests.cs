@@ -55,7 +55,7 @@ public class EmptyReplicaTests
         await lab.SettleAsync();
 
         lock (seen)
-            Assert.Contains("Log", seen);
+            Assert.Superset(lab.C2.Replication.Model.Tables.Select(t => t.Name).ToHashSet(), seen);
         Assert.Empty(Inspect.Diff(lab.Owner, lab.C2));
     }
 }
