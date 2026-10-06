@@ -50,7 +50,7 @@ public sealed class ClientNode : IAsyncDisposable
 
     public string Instance => Agent.InstanceId ?? throw new InvalidOperationException($"{Label}: репліки ще нема");
 
-    public SampleDbContext Db() => SampleDbContext.Open(DbPath, Replication.Router);
+    public SampleDbContext Db() => SampleDbContext.Open(DbPath, Replication.Interceptors());
 
     private void Say(string text) => Log.Write(Label, "користувач: " + text);
 

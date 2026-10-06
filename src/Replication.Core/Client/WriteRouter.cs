@@ -14,6 +14,11 @@ namespace Replication.Client;
 /// EF interceptor for the client's DbContext (8.1): an edit of a row with <c>InstanceId = X</c> is written to
 /// the replica and, in the same transaction, to the outbox of X. Rows of <c>local</c> and archives are not touched.
 /// </summary>
+/// <remarks>
+/// Register it after every other SaveChanges interceptor (<see cref="ClientReplication.Interceptors"/>). EF tells no
+/// interceptor when one throws in SavingChanges, so an interceptor after the router that rejects the save would leave
+/// the router's write transaction, and with it the write lock on the client database, open until the next save on that context.
+/// </remarks>
 public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 {
     private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
@@ -78,7 +83,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         return Task.CompletedTask;
     }
 
-    /// <summary>EF reports a concurrency failure here, not in SaveChangesFailed; an interceptor after the router that suppresses it finds the save rolled back (8.1).</summary>
+    /// <summary>EF reports a concurrency failure here, not in SaveChangesFailed (8.1); one an earlier interceptor suppressed is no failure.</summary>
     public override InterceptionResult ThrowingConcurrencyException(ConcurrencyExceptionEventData eventData, InterceptionResult result)
     {
         if (!result.IsSuppressed && eventData.Context is { } ctx)
@@ -102,8 +107,8 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
     }
 
     /// <summary>
-    /// EF reports a failure inside SavingChanges (an interceptor after the router, a cancelled BEGIN) to no interceptor:
-    /// what such a save left behind is dropped before the next save collects its changes (8.1).
+    /// EF reports a failure inside SavingChanges (a cancelled BEGIN, an interceptor wrongly registered after the router)
+    /// to no interceptor: what such a save left behind is dropped before the next save collects its changes (8.1).
     /// </summary>
     private Pending? AbortLeftoverAndCollect(DbContext ctx)
     {

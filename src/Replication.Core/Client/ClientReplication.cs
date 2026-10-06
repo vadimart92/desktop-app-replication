@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Replication.Model;
 
 namespace Replication.Client;
@@ -13,8 +14,8 @@ namespace Replication.Client;
 /// var replication = new ClientReplication("client.db", model);
 /// // After EnsureCreated / migrations.
 /// replication.Install();
-/// // Edits of remote rows go to the outbox.
-/// options.AddInterceptors(replication.Router);
+/// // Edits of remote rows go to the outbox; the router comes after the app's own interceptors.
+/// options.AddInterceptors(replication.Interceptors(validation));
 /// SyncAgent agent = replication.Connect("http://10.0.0.5:5005", "Склад");
 /// agent.LinkEnabled = true;
 /// </code>
@@ -43,7 +44,7 @@ public sealed class ClientReplication : IAsyncDisposable
 
     public ClientStore Store { get; }
 
-    /// <summary>Add to the client DbContext options: <c>options.AddInterceptors(replication.Router)</c>.</summary>
+    /// <summary>Add to the client DbContext options after every other SaveChanges interceptor, see <see cref="Interceptors"/>.</summary>
     public WriteRouter Router { get; }
 
     public SyncModel Model => Store.Model;
@@ -58,6 +59,12 @@ public sealed class ClientReplication : IAsyncDisposable
                 return [.. _agents];
         }
     }
+
+    /// <summary>
+    /// The application's interceptors followed by the router, for <c>options.AddInterceptors(...)</c>: an interceptor
+    /// that rejects a save must run before the router begins its write transaction (8.1).
+    /// </summary>
+    public IInterceptor[] Interceptors(params IInterceptor[] app) => [.. app, Router];
 
     public void Install() => Store.Install();
 

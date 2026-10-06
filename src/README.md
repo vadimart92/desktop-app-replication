@@ -78,10 +78,12 @@ dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
    ```csharp
    var replication = new ClientReplication("client.db", SyncModel.From(db));
    replication.Install();
-   options.AddInterceptors(replication.Router);       // у DbContextOptions клієнта
+   options.AddInterceptors(replication.Interceptors(validation)); // у DbContextOptions клієнта, роутер останнім
    var agent = replication.Connect("http://10.0.0.5:5005", "Склад");
    agent.LinkEnabled = true;
    ```
+
+   `replication.Interceptors(...)` ставить роутер після власних перехоплювачів застосунку (тут `validation`). EF не повідомляє жодному перехоплювачу, що наступний за ним кинув виняток у `SavingChanges`, тож перехоплювач після роутера, який відхилив збереження, лишив би транзакцію роутера, а з нею блокування запису клієнтської БД, до наступного збереження на цьому контексті.
 
    Нові записи отримують інстанс через `db.Items.Add(item).SetInstance(agent.InstanceId!)`. Читання це звичайні запити з фільтром `EF.Property<string>(x, "InstanceId")`. Масове видалення за умовою: `agent.DeleteWhereAsync("Item", new Predicate("Status", "архів"))`, перенесення в архів: `agent.ArchiveAsync(...)`.
 

@@ -72,7 +72,7 @@ public sealed class WriteRouterTests
         await using ClientDb client = ClientDb.Create();
         (_, Guid itemId) = client.SeedRemote();
         using var cts = new CancellationTokenSource();
-        await using SampleDbContext db = client.Db(new CancelOnSaving(cts));
+        await using SampleDbContext db = client.DbRouterFirst(new CancelOnSaving(cts));
         Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
         item.Price = 1;
 
@@ -101,17 +101,43 @@ public sealed class WriteRouterTests
     }
 
     [Theory]
+    [InlineData(FailingChange.EditItem, false)]
+    [InlineData(FailingChange.EditItem, true)]
+    [InlineData(FailingChange.DeleteCategory, false)]
+    [InlineData(FailingChange.DeleteCategory, true)]
+    public async Task Save_rejected_by_the_applications_interceptor_holds_no_lock(FailingChange change, bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (Guid categoryId, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        if (change == FailingChange.DeleteCategory)
+            db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == categoryId, TestContext.Current.CancellationToken));
+        else
+            (await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken)).Price = 1;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
+
+        // The context stays open, as a form that shows the error, and the agent can still write.
+        AssertReleased(client, db);
+        await SaveAsync(db, async);
+        OutboxEntry entry = Assert.Single(client.Replication.Store.Entries());
+        Assert.Equal(change == FailingChange.DeleteCategory ? ("Category", Wire.PkText(categoryId), OutboxKind.Delete) : ("Item", Wire.PkText(itemId), OutboxKind.Patch),
+            (entry.Table, entry.Pk, entry.Kind));
+        AssertReleased(client, db);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Save_rejected_by_a_later_interceptor_leaves_nothing_to_the_next_save(bool async)
     {
         await using ClientDb client = ClientDb.Create();
         (_, Guid itemId) = client.SeedRemote();
-        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        await using SampleDbContext db = client.DbRouterFirst(new RejectFirstSave());
         Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
         item.Price = 1;
 
-        // EF reports a failure inside SavingChanges to no interceptor: the router's transaction outlives the save.
+        // An interceptor wrongly registered after the router: EF reports its failure to no interceptor, and the router's transaction outlives the save.
         await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
 
         await AssertNextSaveQueuesNothingAsync(client, db);
@@ -125,7 +151,7 @@ public sealed class WriteRouterTests
     {
         await using ClientDb client = ClientDb.Create();
         (_, Guid itemId) = client.SeedRemote();
-        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        await using SampleDbContext db = client.DbRouterFirst(new RejectFirstSave());
         Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
         item.Price = 1;
 
@@ -146,7 +172,7 @@ public sealed class WriteRouterTests
     {
         await using ClientDb client = ClientDb.Create();
         (Guid office, Guid catalog) = client.SeedArchivedCatalog();
-        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        await using SampleDbContext db = client.DbRouterFirst(new RejectFirstSave());
         db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
@@ -185,7 +211,7 @@ public sealed class WriteRouterTests
         (Guid office, Guid catalog) = client.SeedArchivedCatalog();
         (_, Guid itemId) = client.SeedRemote();
         using var cts = new CancellationTokenSource();
-        await using SampleDbContext db = client.Db(new CancelOnSaving(cts));
+        await using SampleDbContext db = client.DbRouterFirst(new CancelOnSaving(cts));
         db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken));
         // EF looks at the token only when it has a statement to run.
         (await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken)).Price = 1;
@@ -316,6 +342,7 @@ public sealed class WriteRouterTests
         }
     }
 
+    /// <summary>Cancels the save once the router has begun; it throws nothing itself, so it may follow the router.</summary>
     private sealed class CancelOnSaving(CancellationTokenSource cts) : SaveChangesInterceptor
     {
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
@@ -325,7 +352,7 @@ public sealed class WriteRouterTests
         }
     }
 
-    /// <summary>An application's validation after the router: it turns down the first save.</summary>
+    /// <summary>An application's validation: it turns down the first save.</summary>
     private sealed class RejectFirstSave : SaveChangesInterceptor
     {
         private bool _rejected;
@@ -372,7 +399,11 @@ internal sealed class ClientDb : IAsyncDisposable
         return new ClientDb(path, replication);
     }
 
-    public SampleDbContext Db(params IInterceptor[] after) => SampleDbContext.Open(DbPath, [Replication.Router, .. after]);
+    /// <summary>A context with the application's interceptors before the router, as the router asks (8.1).</summary>
+    public SampleDbContext Db(params IInterceptor[] app) => SampleDbContext.Open(DbPath, Replication.Interceptors(app));
+
+    /// <summary>A context with interceptors after the router: they run once the router has begun its write transaction.</summary>
+    public SampleDbContext DbRouterFirst(params IInterceptor[] after) => SampleDbContext.Open(DbPath, [Replication.Router, .. after]);
 
     /// <summary>A remote category with one item.</summary>
     public (Guid Category, Guid Item) SeedRemote()

@@ -234,7 +234,7 @@ internal sealed class GraphPair : IAsyncDisposable
         owner.SaveChanges();
     }
 
-    public GraphDbContext ClientDb() => GraphDbContext.Open(Client.Store.DbPath, Client.Router);
+    public GraphDbContext ClientDb() => GraphDbContext.Open(Client.Store.DbPath, Client.Interceptors());
 
     public GraphDbContext OwnerDb() => GraphDbContext.Open(Owner.Store.DbPath);
 
