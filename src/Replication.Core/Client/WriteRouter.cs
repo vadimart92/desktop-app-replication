@@ -67,20 +67,49 @@ public sealed class WriteRouter : SaveChangesInterceptor
 
     public override void SaveChangesFailed(DbContextErrorEventData eventData)
     {
-        if (eventData.Context is { } ctx && _pending.TryGetValue(ctx, out Pending? p))
-        {
-            p.OwnTransaction?.Rollback();
-            p.OwnTransaction?.Dispose();
-            if (p.OpenedConnection)
-                ctx.Database.CloseConnection();
-            _pending.Remove(ctx);
-        }
+        if (eventData.Context is { } ctx)
+            Abort(ctx);
     }
 
     public override Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken ct = default)
     {
         SaveChangesFailed(eventData);
         return Task.CompletedTask;
+    }
+
+    /// <summary>EF reports a concurrency failure here, not in SaveChangesFailed; an interceptor after the router that suppresses it finds the save rolled back (8.1).</summary>
+    public override InterceptionResult ThrowingConcurrencyException(ConcurrencyExceptionEventData eventData, InterceptionResult result)
+    {
+        if (!result.IsSuppressed && eventData.Context is { } ctx)
+            Abort(ctx);
+        return result;
+    }
+
+    public override ValueTask<InterceptionResult> ThrowingConcurrencyExceptionAsync(ConcurrencyExceptionEventData eventData, InterceptionResult result, CancellationToken ct = default) =>
+        ValueTask.FromResult(ThrowingConcurrencyException(eventData, result));
+
+    public override void SaveChangesCanceled(DbContextEventData eventData)
+    {
+        if (eventData.Context is { } ctx)
+            Abort(ctx);
+    }
+
+    public override Task SaveChangesCanceledAsync(DbContextEventData eventData, CancellationToken ct = default)
+    {
+        SaveChangesCanceled(eventData);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Ends a save that did not complete: rolls back the router's own transaction and forgets its changes. Safe to call twice.</summary>
+    private void Abort(DbContext ctx)
+    {
+        if (!_pending.TryGetValue(ctx, out Pending? p))
+            return;
+        _pending.Remove(ctx);
+        p.OwnTransaction?.Rollback();
+        p.OwnTransaction?.Dispose();
+        if (p.OpenedConnection)
+            ctx.Database.CloseConnection();
     }
 
     private Pending? Collect(DbContext ctx)
