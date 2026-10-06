@@ -57,6 +57,12 @@ public sealed class OwnerNode : IAsyncDisposable
 
     private void Say(string text, SyncLogLevel level = SyncLogLevel.Info) => Log.Write("owner", "автоматика: " + text, level);
 
+    private T Pick<T>(IReadOnlyList<T> list) => list[_rnd.Next(list.Count)];
+
+    private long RandomPrice(int steps = 99) => 10 + _rnd.Next(steps) * 10;
+
+    private LogEntry NextLogEntry() => new() { Text = $"Автоматика: перерахунок залишків #{++_logN}" };
+
     private async Task SeedAsync()
     {
         await using SampleDbContext db = Db();
@@ -73,7 +79,7 @@ public sealed class OwnerNode : IAsyncDisposable
         }
 
         for (int i = 0; i < 3; i++)
-            db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
+            db.Log.Add(NextLogEntry());
         await db.SaveChangesAsync();
         Say($"початкові дані: 3 категорії, 9 товарів, 3 записи журналу; голова {Head()}");
     }
@@ -94,7 +100,7 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         await using SampleDbContext db = Db();
         Item it = await ItemAsync(db, name);
-        it.Price = price ?? 10 + _rnd.Next(99) * 10;
+        it.Price = price ?? RandomPrice();
         await db.SaveChangesAsync();
         Say($"«{name}».Price = {it.Price}");
     }
@@ -122,8 +128,8 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         await using SampleDbContext db = Db();
         List<Category> cats = await db.Categories.ToListAsync();
-        Category cat = category is null ? cats[_rnd.Next(cats.Count)] : cats.First(c => c.Name == category);
-        var it = new Item { Name = name ?? s_autoNames[_rnd.Next(s_autoNames.Length)], Price = 10 + _rnd.Next(60) * 10, Status = status, CategoryId = cat.Id };
+        Category cat = category is null ? Pick(cats) : cats.First(c => c.Name == category);
+        var it = new Item { Name = name ?? Pick(s_autoNames), Price = RandomPrice(60), Status = status, CategoryId = cat.Id };
         db.Items.Add(it);
         await db.SaveChangesAsync();
         Say($"створено «{it.Name}» ({status}, {cat.Name})");
@@ -154,7 +160,7 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         await using SampleDbContext db = Db();
         for (int i = 0; i < n; i++)
-            db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
+            db.Log.Add(NextLogEntry());
         await db.SaveChangesAsync();
         Say($"+{n} у журнал");
     }
@@ -167,19 +173,19 @@ public sealed class OwnerNode : IAsyncDisposable
         List<Category> cats = await db.Categories.ToListAsync();
         for (int i = 0; i < 5; i++)
         {
-            Item it = items[_rnd.Next(items.Count)];
+            Item it = Pick(items);
             if (_rnd.Next(2) == 0)
-                it.Price = 10 + _rnd.Next(99) * 10;
+                it.Price = RandomPrice();
             else
-                it.Status = s_statuses[_rnd.Next(3)];
+                it.Status = Pick(s_statuses);
             await db.SaveChangesAsync();
         }
         for (int i = 0; i < 2; i++)
-            db.Items.Add(new Item { Name = s_autoNames[_rnd.Next(s_autoNames.Length)], Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
+            db.Items.Add(new Item { Name = Pick(s_autoNames), Price = 100, Status = "новий", CategoryId = Pick(cats).Id });
         await db.SaveChangesAsync();
         for (int i = 0; i < 10; i++)
         {
-            db.Log.Add(new LogEntry { Text = $"Автоматика: перерахунок залишків #{++_logN}" });
+            db.Log.Add(NextLogEntry());
             await db.SaveChangesAsync();
         }
         Say($"пакет із 17 змін (5 правок, 2 нові товари, 10 записів журналу), голова {Head()}");
@@ -194,9 +200,9 @@ public sealed class OwnerNode : IAsyncDisposable
         for (int i = 0; i < perRound; i++)
         {
             if (i % 2 == 0)
-                db.Items.Add(new Item { Name = $"{s_autoNames[_rnd.Next(s_autoNames.Length)]} {++_logN}", Price = 100, Status = "новий", CategoryId = cats[_rnd.Next(cats.Count)].Id });
+                db.Items.Add(new Item { Name = $"{Pick(s_autoNames)} {++_logN}", Price = 100, Status = "новий", CategoryId = Pick(cats).Id });
             else
-                items[_rnd.Next(items.Count)].Price = 10 + _rnd.Next(99) * 10;
+                Pick(items).Price = RandomPrice();
             await db.SaveChangesAsync();
         }
     }
@@ -204,9 +210,10 @@ public sealed class OwnerNode : IAsyncDisposable
     public Task<OwnerStore.PurgeResult> PurgeAsync()
     {
         OwnerStore.PurgeResult r = Store.Purge();
+        object floor = r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor;
         Log.Write("owner", r.Tombstones > 0
-            ? $"очищення: видалено {r.Tombstones} tombstones (floor = MIN(acked_version) = {(r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor)}), purged_version = {r.PurgedVersion}"
-            : $"очищення: нічого видаляти, floor = {(r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor)}");
+            ? $"очищення: видалено {r.Tombstones} tombstones (floor = MIN(acked_version) = {floor}), purged_version = {r.PurgedVersion}"
+            : $"очищення: нічого видаляти, floor = {floor}");
         return Task.FromResult(r);
     }
 
