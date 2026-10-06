@@ -450,10 +450,7 @@ internal sealed class ClientDb : IAsyncDisposable
     public string? InstanceOf(string table, Guid id)
     {
         using SqliteConnection c = Replication.Store.Open();
-        using SqliteCommand cmd = c.CreateCommand();
-        cmd.CommandText = $"SELECT InstanceId FROM {Wire.Q(table)} WHERE Id = @id";
-        cmd.Parameters.AddWithValue("@id", Wire.PkText(id));
-        return cmd.ExecuteScalar() as string;
+        return TestDb.Scalar(c, $"SELECT InstanceId FROM {Wire.Q(table)} WHERE Id = @id", ("@id", Wire.PkText(id))) as string;
     }
 
     public int Sql(string sql, params (string Name, object Value)[] args)
