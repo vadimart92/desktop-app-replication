@@ -10,5 +10,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Sample.Lab\Sample.Lab.csproj" />
+    <ProjectReference Include="..\Sample.App\Sample.App.csproj" />
   </ItemGroup>
 </Project>

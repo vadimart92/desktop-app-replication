@@ -71,6 +71,19 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
         }
     }
 
+    private void Run(Action action)
+    {
+        try
+        {
+            Error = null;
+            action();
+        }
+        catch (Exception e)
+        {
+            Error = e.Message;
+        }
+    }
+
     [RelayCommand]
     private Task NewItem() => Run(() => Owner.NewItemAsync());
 
@@ -96,11 +109,11 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
     private Task Purge() => Run(Owner.PurgeAsync);
 
     [RelayCommand]
-    private void PlusDay() => Owner.AdvanceClock(TimeSpan.FromDays(1));
+    private void PlusDay() => Run(() => Owner.AdvanceClock(TimeSpan.FromDays(1)));
 
     [RelayCommand]
-    private void Plus31Days() => Owner.AdvanceClock(TimeSpan.FromDays(31));
+    private void Plus31Days() => Run(() => Owner.AdvanceClock(TimeSpan.FromDays(31)));
 
     [RelayCommand]
-    private void Vacuum() => Owner.Store.IncrementalVacuum(64);
+    private void Vacuum() => Run(() => Owner.Store.IncrementalVacuum(64));
 }
