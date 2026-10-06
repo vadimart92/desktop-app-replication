@@ -88,73 +88,103 @@ internal sealed class ApplyHandler(OwnerStore store)
         foreach (Protocol.Action a in fresh.Where(a => a.Kind == ActionKind.PredicateDelete && !results.ContainsKey(a.Seq)))
             results[a.Seq] = PredicateDelete(c, tx, a, cid);
 
-        // Explicit FK check by the EF model, counting creates in the same batch; a rejected parent rejects its children.
-        for (bool changed = true; changed;)
+        // Explicit FK check by the EF model: the parent exists and this batch does not delete it, or this batch creates it.
+        bool ParentMissing(Protocol.Action a)
         {
-            changed = false;
-            foreach (Protocol.Action a in fresh.Where(a => a.Kind is ActionKind.Create or ActionKind.Patch && !results.ContainsKey(a.Seq)))
+            SyncTable t = Model[a.Tbl];
+            for (int i = 0; i < a.Columns.Count; i++)
             {
-                SyncTable t = Model[a.Tbl];
-                for (int i = 0; i < a.Columns.Count; i++)
+                SyncForeignKey? fk = t.ForeignKeys.FirstOrDefault(f => f.Column == a.Columns[i]);
+                if (fk is null || FromValue(a.Values[i]) is not string pid)
+                    continue;
+                SyncTable parent = Model[fk.ParentTable];
+                bool exists = OwnerReader.Row(c, tx, parent, pid) is not null && !deletes.Contains((parent.Name, pid));
+                bool inBatch = creates.TryGetValue((parent.Name, pid), out Protocol.Action? pc)
+                    && (!results.TryGetValue(pc.Seq, out ActionResult? pr) || pr.Status == ResultStatus.Applied);
+                if (!exists && !inBatch)
+                    return true;
+            }
+            return false;
+        }
+
+        // A create rejected in a pass takes its in-batch children with it (6.5): the pass rolls back to here and runs again.
+        c.Exec("SAVEPOINT batch", tx);
+        for (bool rerun = true; rerun;)
+        {
+            // Counting creates in the same batch; a rejected parent rejects its children.
+            for (bool changed = true; changed;)
+            {
+                changed = false;
+                foreach (Protocol.Action a in fresh.Where(a => a.Kind is ActionKind.Create or ActionKind.Patch && !results.ContainsKey(a.Seq)))
                 {
-                    SyncForeignKey? fk = t.ForeignKeys.FirstOrDefault(f => f.Column == a.Columns[i]);
-                    if (fk is null || FromValue(a.Values[i]) is not string pid)
-                        continue;
-                    SyncTable parent = Model[fk.ParentTable];
-                    bool exists = OwnerReader.Row(c, tx, parent, pid) is not null && !deletes.Contains((parent.Name, pid));
-                    bool inBatch = creates.TryGetValue((parent.Name, pid), out Protocol.Action? pc) && !results.ContainsKey(pc.Seq);
-                    if (!exists && !inBatch)
+                    if (ParentMissing(a))
                     {
                         Res(a, ResultStatus.Rejected, Reasons.ParentDeleted);
                         changed = true;
-                        break;
                     }
                 }
             }
-        }
 
-        foreach (Protocol.Action a in fresh.Where(a => !results.ContainsKey(a.Seq)))
-        {
-            SyncTable t = Model[a.Tbl];
-            string pk = PkText(a.Pk);
-            c.Exec("SAVEPOINT act", tx);
-            try
+            List<Protocol.Action> pass = fresh.Where(a => !results.ContainsKey(a.Seq)).ToList();
+            foreach (Protocol.Action a in pass)
             {
-                ActionResult res = Res(a, ResultStatus.Applied);
-                switch (a.Kind)
+                SyncTable t = Model[a.Tbl];
+                string pk = PkText(a.Pk);
+                c.Exec("SAVEPOINT act", tx);
+                try
                 {
-                    case ActionKind.Create:
-                        // A new row always carries this client's origin.
-                        Upsert(c, tx, t, pk, a, cid);
-                        break;
-                    case ActionKind.Patch:
+                    ActionResult res = Res(a, ResultStatus.Applied);
+                    switch (a.Kind)
                     {
-                        // SyncOrigin = client only if it already had the previous state of the row (5.2, "no echo").
-                        OwnerItem? prev = OwnerReader.Row(c, tx, t, pk);
-                        string? origin = prev is null || prev.Version <= CursorOf(t.Name) ? cid : null;
-                        Patch(c, tx, t, pk, a, origin);
-                        if (origin is null)
-                            res.Reason = "echo";
-                        break;
+                        case ActionKind.Create:
+                            // A new row always carries this client's origin.
+                            Upsert(c, tx, t, pk, a, cid);
+                            break;
+                        case ActionKind.Patch:
+                        {
+                            // SyncOrigin = client only if it already had the previous state of the row (5.2, "no echo").
+                            OwnerItem? prev = OwnerReader.Row(c, tx, t, pk);
+                            string? origin = prev is null || prev.Version <= CursorOf(t.Name) ? cid : null;
+                            Patch(c, tx, t, pk, a, origin);
+                            if (origin is null)
+                                res.Reason = "echo";
+                            break;
+                        }
+                        case ActionKind.Delete:
+                            c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id", tx, ("@id", pk));
+                            c.Exec("UPDATE _sync_tombstones SET origin = @c WHERE tbl = @t AND pk = @p", tx, ("@c", cid), ("@t", t.Name), ("@p", pk));
+                            if (OwnerReader.Tombstone(c, tx, t, pk) is { } tomb)
+                                (res.HasVersion, res.Version) = (true, tomb.Version);
+                            break;
                     }
-                    case ActionKind.Delete:
-                        c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id", tx, ("@id", pk));
-                        c.Exec("UPDATE _sync_tombstones SET origin = @c WHERE tbl = @t AND pk = @p", tx, ("@c", cid), ("@t", t.Name), ("@p", pk));
-                        if (OwnerReader.Tombstone(c, tx, t, pk) is { } tomb)
-                            (res.HasVersion, res.Version) = (true, tomb.Version);
-                        break;
+                    if (a.Kind is ActionKind.Create or ActionKind.Patch && OwnerReader.Row(c, tx, t, pk) is { } row && row.Origin == cid)
+                        (res.HasVersion, res.Version) = (true, row.Version);
+                    c.Exec("RELEASE act", tx);
                 }
-                if (a.Kind is ActionKind.Create or ActionKind.Patch && OwnerReader.Row(c, tx, t, pk) is { } row && row.Origin == cid)
-                    (res.HasVersion, res.Version) = (true, row.Version);
-                c.Exec("RELEASE act", tx);
+                catch (SqliteException e) when (e.SqliteErrorCode == 19)
+                {
+                    // SQLITE_CONSTRAINT: a unique index on a business column (9).
+                    c.Exec("ROLLBACK TO act; RELEASE act;", tx);
+                    Res(a, ResultStatus.Rejected, Reasons.Unique);
+                }
             }
-            catch (SqliteException e) when (e.SqliteErrorCode == 19)
+
+            // A pass with no rejection applied every in-batch parent the pre-check counted on.
+            List<Protocol.Action> orphans = pass.Any(a => results[a.Seq].Status == ResultStatus.Rejected)
+                ? pass.Where(a => a.Kind is ActionKind.Create or ActionKind.Patch && results[a.Seq].Status == ResultStatus.Applied && ParentMissing(a)).ToList()
+                : [];
+            rerun = orphans.Count > 0;
+            if (rerun)
             {
-                // SQLITE_CONSTRAINT: a unique index on a business column (9).
-                c.Exec("ROLLBACK TO act; RELEASE act;", tx);
-                Res(a, ResultStatus.Rejected, Reasons.Unique);
+                // The rejections stay, so the next pass only rejects more and the loop ends.
+                c.Exec("ROLLBACK TO batch", tx);
+                foreach (Protocol.Action a in pass.Where(a => results[a.Seq].Status == ResultStatus.Applied))
+                    results.Remove(a.Seq);
+                foreach (Protocol.Action a in orphans)
+                    Res(a, ResultStatus.Rejected, Reasons.ParentDeleted);
             }
         }
+        c.Exec("RELEASE batch", tx);
 
         long upTo = Math.Max(applied, actions.Count > 0 ? actions.Max(a => a.Seq) : 0);
         c.Exec("UPDATE _sync_clients SET applied_seq = @s, last_seen = @n WHERE client_id = @c", tx, ("@s", upTo), ("@n", now), ("@c", cid));
