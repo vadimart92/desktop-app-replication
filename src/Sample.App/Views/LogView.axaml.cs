@@ -23,7 +23,13 @@ public partial class LogView : UserControl
 
     private void ScrollToEnd()
     {
-        if (_feed is { Lines.Count: > 0 } f)
-            Dispatcher.UIThread.Post(() => List.ScrollIntoView(f.Lines[^1]), DispatcherPriority.Background);
+        if (_feed is not { } f)
+            return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            // Feed.Clear() can run between the Add that posted this job and the job itself.
+            if (f.Lines.Count > 0)
+                List.ScrollIntoView(f.Lines[^1]);
+        }, DispatcherPriority.Background);
     }
 }
