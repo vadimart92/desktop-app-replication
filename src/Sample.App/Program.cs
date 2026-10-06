@@ -35,7 +35,7 @@ public static class Program
     {
         var log = new SyncLog();
         log.Written += e => Console.WriteLine($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        await using OwnerNode owner = await OwnerNode.StartAsync(o.Db ?? "owner.db", log, o.Port, o.ListenAnywhere);
+        await using OwnerNode owner = await OwnerNode.StartAsync(o.DbPath, log, o.Port, o.ListenAnywhere);
         Console.WriteLine($"Власник працює: {owner.Address} (БД {owner.DbPath}). Ctrl+C для зупинки.");
         var done = new TaskCompletionSource();
         Console.CancelKeyPress += (_, e) =>
@@ -62,8 +62,11 @@ public sealed class StartOptions
     public bool ListenAnywhere { get; private set; }
     public int Port { get; private set; } = 5005;
     public string? Db { get; private set; }
-    public string? Connect { get; private set; }
-    public string? Name { get; private set; }
+    public string Connect { get; private set; } = "http://127.0.0.1:5005";
+    public string Name { get; private set; } = "Клієнт";
+
+    /// <summary><c>--db</c>, or owner.db / client.db by mode.</summary>
+    public string DbPath => Db ?? (Mode == AppMode.Client ? "client.db" : "owner.db");
 
     public static StartOptions Parse(string[] args)
     {
@@ -99,8 +102,6 @@ public sealed class StartOptions
                     break;
             }
         }
-        if (o.Mode == AppMode.Client && o.Connect is null)
-            o.Connect = "http://127.0.0.1:5005";
         return o;
     }
 }

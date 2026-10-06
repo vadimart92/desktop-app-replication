@@ -213,7 +213,7 @@ public sealed partial class OwnerWindowViewModel : ObservableObject
     {
         try
         {
-            OwnerNode node = await Task.Run(() => OwnerNode.StartAsync(o.Db ?? "owner.db", log, o.Port, o.ListenAnywhere));
+            OwnerNode node = await Task.Run(() => OwnerNode.StartAsync(o.DbPath, log, o.Port, o.ListenAnywhere));
             Owner = new OwnerPanelViewModel(node);
             State = $"gRPC-сервер на порту {node.Host.Port}, БД {node.DbPath}";
             var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, (_, _) => Owner.Refresh());
@@ -241,7 +241,7 @@ public sealed partial class ClientWindowViewModel : ObservableObject
         Feed.Attach(log);
         try
         {
-            ClientNode node = ClientNode.Create(o.Name ?? "Клієнт", o.Db ?? "client.db", o.Connect!, log);
+            ClientNode node = ClientNode.Create(o.Name, o.DbPath, o.Connect, log);
             node.Link = true;
             Client = new ClientPanelViewModel(node);
             State = $"підключення до {o.Connect}, БД {node.DbPath}";
