@@ -29,13 +29,13 @@ internal static class ApplyBatchBuilder
 
         var batch = new List<OutboxEntry>();
         var actions = new Dictionary<long, Protocol.Action?>();
-        var visiting = new HashSet<long>();
+        var visited = new HashSet<long>();
         int budget = applyBudget();
         int size = 0;
 
         void Add(OutboxEntry e)
         {
-            if (actions.ContainsKey(e.Id) || !visiting.Add(e.Id))
+            if (!visited.Add(e.Id))
                 return;
             if (model.TryGet(e.Table, out SyncTable? t) && e.Kind is OutboxKind.Create or OutboxKind.Patch && e.Pk is not null)
             {
