@@ -6,7 +6,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Design 6.4, 14: the cursors move only with the transaction that applied the batch.</summary>
-public class CursorCommitTests
+public sealed class CursorCommitTests
 {
     [Fact]
     public async Task Batch_whose_cursor_save_fails_arrives_again()

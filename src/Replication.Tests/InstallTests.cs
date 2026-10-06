@@ -8,7 +8,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Enabling sync on a database that already has rows (design 15.2).</summary>
-public class InstallTests
+public sealed class InstallTests
 {
     private static List<(long Version, long Base, long Mask)> Stamps(OwnerStore store, SyncTable t)
     {

@@ -5,7 +5,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Design 11.2, step 6: rows the owner kept wait for an archive retry; the user may archive them meanwhile.</summary>
-public class ArchiveRetryTests
+public sealed class ArchiveRetryTests
 {
     /// <summary>The race with the retry pass cannot be forced, so each width runs in a lab of its own.</summary>
     [Theory]

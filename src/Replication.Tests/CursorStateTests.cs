@@ -3,7 +3,7 @@ using Xunit;
 
 namespace Replication.Tests;
 
-public class CursorStateTests
+public sealed class CursorStateTests
 {
     [Fact]
     public void Ranges_merge_and_lift_the_cursor()

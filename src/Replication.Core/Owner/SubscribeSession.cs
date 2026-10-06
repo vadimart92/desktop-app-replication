@@ -271,7 +271,7 @@ internal sealed class SubscribeSession
     }
 
     private (ChangeMessage Msg, string Log) CatchupBatch(SqliteConnection conn, SqliteTransaction tx, SyncTable t, CursorState k,
-        List<(long Lo, long Hi)> gaps, List<(long Lo, long Hi)> nonEmpty, long head)
+        IReadOnlyList<(long Lo, long Hi)> gaps, List<(long Lo, long Hi)> nonEmpty, long head)
     {
         // The highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message.
         int n = Opt.CatchupBatchRows;

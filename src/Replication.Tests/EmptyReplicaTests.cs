@@ -8,7 +8,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Design 6.2, 6.3: a replica the owner can no longer catch up is replaced by an empty one that fills from the stream, and subscribers hear about it.</summary>
-public class EmptyReplicaTests
+public sealed class EmptyReplicaTests
 {
     [Fact]
     public async Task Empty_replica_fills_from_the_stream_after_tombstones_were_purged()

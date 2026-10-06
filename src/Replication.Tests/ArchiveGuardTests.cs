@@ -6,7 +6,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Design 11.6 over an FK cycle: the archive check and the move to the archive visit each row once.</summary>
-public class ArchiveGuardTests
+public sealed class ArchiveGuardTests
 {
     [Fact]
     public async Task Bulk_delete_of_a_row_pointing_to_itself_deletes_it()

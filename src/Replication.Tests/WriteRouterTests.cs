@@ -15,7 +15,7 @@ namespace Replication.Tests;
 /// Design 8.1: the outbox is written in the save's transaction, and the router's own transaction ends with the save;
 /// 11.6: the archive check before a parent delete runs in that transaction.
 /// </summary>
-public class WriteRouterTests
+public sealed class WriteRouterTests
 {
     public enum FailingChange
     {

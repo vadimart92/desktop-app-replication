@@ -4,7 +4,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Snapshot files on the owner: kept a few hours, then removed (design 6.3).</summary>
-public class SnapshotStoreTests
+public sealed class SnapshotStoreTests
 {
     [Fact]
     public async Task New_snapshot_removes_old_files_left_by_an_earlier_run()

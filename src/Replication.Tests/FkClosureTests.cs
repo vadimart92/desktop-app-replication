@@ -10,7 +10,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Design 8.4: a create goes in the same or an earlier batch than the rows that point to it, FK cycles included.</summary>
-public class FkClosureTests
+public sealed class FkClosureTests
 {
     [Fact]
     public async Task Row_created_pointing_to_itself_is_sent()
@@ -98,7 +98,7 @@ public class FkClosureTests
     }
 }
 
-public class Node
+public sealed class Node
 {
     public Guid Id { get; set; } = Guid.CreateVersion7();
     public string Name { get; set; } = "";
@@ -106,7 +106,7 @@ public class Node
     public Node? Parent { get; set; }
 }
 
-public class Dept
+public sealed class Dept
 {
     public Guid Id { get; set; } = Guid.CreateVersion7();
     public string Name { get; set; } = "";
@@ -114,7 +114,7 @@ public class Dept
     public Emp? Manager { get; set; }
 }
 
-public class Emp
+public sealed class Emp
 {
     public Guid Id { get; set; } = Guid.CreateVersion7();
     public string Name { get; set; } = "";
@@ -123,7 +123,7 @@ public class Emp
 }
 
 /// <summary>A model with FK cycles: a tree and two tables that point to each other.</summary>
-public class GraphDbContext(DbContextOptions<GraphDbContext> options) : DbContext(options)
+public sealed class GraphDbContext(DbContextOptions<GraphDbContext> options) : DbContext(options)
 {
     public DbSet<Node> Nodes => Set<Node>();
     public DbSet<Dept> Depts => Set<Dept>();

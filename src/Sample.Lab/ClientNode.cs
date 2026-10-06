@@ -123,6 +123,15 @@ public sealed class ClientNode : IAsyncDisposable
         Say($"«{name}»: Price = {price}, Status = {status}");
     }
 
+    public async Task RenameCategoryAsync(Guid id, string name)
+    {
+        await using SampleDbContext db = Db();
+        Category c = await Mine<Category>(db).FirstAsync(x => x.Id == id);
+        c.Name = name;
+        await db.SaveChangesAsync();
+        Say($"категорія «{name}»");
+    }
+
     public async Task DeleteAsync(string table, Guid id)
     {
         await using SampleDbContext db = Db();

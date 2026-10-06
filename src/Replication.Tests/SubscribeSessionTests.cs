@@ -9,7 +9,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>The owner's Subscribe stream: a fault in either loop ends the call with an error, so the client reconnects (14).</summary>
-public class SubscribeSessionTests
+public sealed class SubscribeSessionTests
 {
     [Fact]
     public async Task Main_loop_fault_ends_the_stream_and_the_client_reconnects()

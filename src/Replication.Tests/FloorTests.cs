@@ -7,7 +7,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>The per-table floor that holds SyncBase back: MIN(cursor) of the clients seen within the activity window (design 5.2).</summary>
-public class FloorTests
+public sealed class FloorTests
 {
     /// <summary>Floors and client cursors read in one transaction, so an Ack cannot land between them.</summary>
     private static (Dictionary<string, long> Floors, List<(string Tbl, long Cursor)> Cursors) Read(Lab lab)

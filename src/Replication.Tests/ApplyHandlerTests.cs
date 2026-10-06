@@ -8,7 +8,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Design 6.5: Apply on the owner, through the real gRPC path.</summary>
-public class ApplyHandlerTests(ITestOutputHelper output)
+public sealed class ApplyHandlerTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task Children_of_a_create_rejected_as_unique_are_rejected_in_the_same_batch()

@@ -5,7 +5,7 @@ using Xunit;
 namespace Replication.Tests;
 
 /// <summary>Tombstone cleanup and the activity window on the owner (design 5.2, 10.2).</summary>
-public class PurgeTests
+public sealed class PurgeTests
 {
     [Fact]
     public async Task Purge_takes_every_tombstone_in_batches_and_reports_the_count()
