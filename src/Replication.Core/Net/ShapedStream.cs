@@ -49,8 +49,6 @@ internal sealed class ShapedStream : Stream
     private DateTimeOffset _downFreeAt = DateTimeOffset.MinValue;
     private Chunk? _current;
     private int _currentOffset;
-    private readonly Task _upPump;
-    private readonly Task _downPump;
 
     private sealed record Chunk(byte[] Data, DateTimeOffset DeliverAt);
 
@@ -59,8 +57,8 @@ internal sealed class ShapedStream : Stream
         _inner = inner;
         _meter = meter;
         _profile = profile;
-        _upPump = Task.Run(UpPumpAsync);
-        _downPump = Task.Run(DownPumpAsync);
+        _ = Task.Run(UpPumpAsync);
+        _ = Task.Run(DownPumpAsync);
     }
 
     private static DateTimeOffset Schedule(ref DateTimeOffset freeAt, int length, long bps, TimeSpan latency)
@@ -188,13 +186,5 @@ internal sealed class ShapedStream : Stream
             _inner.Dispose();
         }
         base.Dispose(disposing);
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        _cts.Cancel();
-        _up.Writer.TryComplete();
-        await _inner.DisposeAsync();
-        await base.DisposeAsync();
     }
 }
