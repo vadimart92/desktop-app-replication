@@ -19,6 +19,7 @@ public sealed partial class LabViewModel : ObservableObject
     private readonly DispatcherTimer _timer;
     private Sample.Lab.Lab? _lab;
     private ScenarioRunner? _runner;
+    private Scenario? _started;
 
     [ObservableProperty]
     private Scenario _selectedScenario;
@@ -70,6 +71,7 @@ public sealed partial class LabViewModel : ObservableObject
     {
         if (Busy)
             return;
+        _started = scenario;
         Busy = true;
         Verdict = "";
         State = "запускаю власника і двох клієнтів…";
@@ -78,8 +80,11 @@ public sealed partial class LabViewModel : ObservableObject
             Owner = null;
             Client1 = null;
             Client2 = null;
-            if (_lab is not null)
-                await _lab.DisposeAsync();
+            Sample.Lab.Lab? old = _lab;
+            _lab = null;
+            _runner = null;
+            if (old is not null)
+                await old.DisposeAsync();
             Feed.Clear();
             var log = new SyncLog();
             Feed.Attach(log);
@@ -104,16 +109,21 @@ public sealed partial class LabViewModel : ObservableObject
             Busy = false;
             UpdateSteps();
         }
-        // The scenario was switched while the previous one was starting.
-        if (_runner?.Scenario != SelectedScenario)
-            await StartScenarioAsync(SelectedScenario);
+        await FollowSelectionAsync();
     }
+
+    /// <summary>The scenario was switched while busy (starting, a step, a check): start the selected one now.</summary>
+    private Task FollowSelectionAsync() => SelectedScenario != _started ? StartScenarioAsync(SelectedScenario) : Task.CompletedTask;
 
     private void UpdateSteps()
     {
-        if (_runner is null)
-            return;
         Steps.Clear();
+        if (_runner is null)
+        {
+            Done = false;
+            NextTitle = "";
+            return;
+        }
         for (int i = 0; i < _runner.Scenario.Steps.Count; i++)
             Steps.Add(new StepView(i + 1, _runner.Scenario.Steps[i].Title, _runner.Scenario.Steps[i].Explain, i < _runner.Step));
         Done = _runner.Done;
@@ -125,12 +135,12 @@ public sealed partial class LabViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStep))]
     private async Task NextStep()
     {
-        if (_runner is null)
+        if (_runner is not { } runner)
             return;
         Busy = true;
         try
         {
-            await Task.Run(_runner.NextAsync);
+            await Task.Run(runner.NextAsync);
         }
         catch (Exception e)
         {
@@ -141,6 +151,7 @@ public sealed partial class LabViewModel : ObservableObject
             Busy = false;
             UpdateSteps();
         }
+        await FollowSelectionAsync();
     }
 
     private bool NotBusy() => !Busy;
@@ -152,13 +163,13 @@ public sealed partial class LabViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(NotBusy))]
     private async Task Verify()
     {
-        if (_runner is null)
+        if (_runner is not { } runner)
             return;
         Busy = true;
         Verdict = "чекаю, поки все доїде…";
         try
         {
-            List<string> problems = await Task.Run(() => _runner.VerifyAsync(TimeSpan.FromSeconds(60)));
+            List<string> problems = await Task.Run(() => runner.VerifyAsync(TimeSpan.FromSeconds(60)));
             Verdict = problems.Count == 0 ? "✓ репліки дорівнюють власнику, результат як у дизайні" : "✕ " + string.Join("; ", problems);
         }
         catch (Exception e)
@@ -169,6 +180,7 @@ public sealed partial class LabViewModel : ObservableObject
         {
             Busy = false;
         }
+        await FollowSelectionAsync();
     }
 
     private void Refresh()
