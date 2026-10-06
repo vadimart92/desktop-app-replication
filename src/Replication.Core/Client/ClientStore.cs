@@ -19,14 +19,18 @@ public enum OutboxClass
     Bulk = 2
 }
 
+/// <summary>The <c>sent</c> column of the outbox: waiting, sent (in flight), or a delete confirmed and held until the cursor passes its tombstone (8.3, 9.1).</summary>
+public enum OutboxSendState
+{
+    Waiting = 0,
+    InFlight = 1,
+    DeleteConfirmed = 2
+}
+
 /// <summary>A row of <c>_sync_outbox</c>: what was done and with which columns, never the values (5.4).</summary>
 public sealed record OutboxEntry(
     long Id, string Instance, long? Seq, string Table, string? Pk, OutboxKind Kind, OutboxClass Class,
-    IReadOnlyList<string> Columns, string? Predicate, long? ExpectedVersion, int Sent)
-{
-    /// <summary>0 = waiting, 1 = sent (in flight), 2 = delete confirmed, held until the cursor passes its tombstone (8.3, 9.1).</summary>
-    public int Sent { get; init; } = Sent;
-}
+    IReadOnlyList<string> Columns, string? Predicate, long? ExpectedVersion, OutboxSendState Sent);
 
 public sealed record ClientNote(long Id, string Instance, DateTimeOffset At, string Text, bool Info);
 
@@ -176,7 +180,7 @@ public sealed class ClientStore
         r.GetInt64(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetInt64(2), r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4),
         (OutboxKind)r.GetInt64(5), (OutboxClass)r.GetInt64(6),
         r.IsDBNull(7) || r.GetString(7).Length == 0 ? [] : r.GetString(7).Split(','),
-        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetInt64(9), (int)r.GetInt64(10));
+        r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetInt64(9), (OutboxSendState)r.GetInt64(10));
 
     public static OutboxEntry? FindEntry(SqliteConnection c, SqliteTransaction? tx, string instance, string table, string pk)
     {
@@ -228,7 +232,7 @@ public sealed class ClientStore
             Insert(c, tx, instance, table, pk, kind, cls, cols);
             return $"{kind}";
         }
-        if (e.Sent == 2 || e.Kind is OutboxKind.Delete)
+        if (e.Sent is OutboxSendState.DeleteConfirmed || e.Kind is OutboxKind.Delete)
         {
             // The row is gone locally.
             return "вже видалено";
@@ -243,7 +247,7 @@ public sealed class ClientStore
                 nk = OutboxKind.Create;
                 break;
             case OutboxKind.Create when kind == OutboxKind.Delete:
-                if (e.Sent == 0)
+                if (e.Sent == OutboxSendState.Waiting)
                 {
                     Remove(c, tx, e.Id);
                     return "створення і видалення схлопнулись: власник нічого не дізнається";
@@ -260,7 +264,7 @@ public sealed class ClientStore
             default:
                 return "без змін";
         }
-        if (e.Sent == 1)
+        if (e.Sent == OutboxSendState.InFlight)
         {
             Remove(c, tx, e.Id);
             Insert(c, tx, instance, table, pk, nk, newCls, nc);

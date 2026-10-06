@@ -203,7 +203,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             long v = c.Scalar<long>("SELECT version FROM snap._sync_meta", tx);
             string oldInst = store.InstanceOf(c, address, tx) ?? newInst;
             var w = new ReplicaWriter(store.Model, newInst);
-            List<OutboxEntry> entries = ClientStore.Entries(c, tx, oldInst).Where(e => e.Sent != 2).ToList();
+            List<OutboxEntry> entries = ClientStore.Entries(c, tx, oldInst).Where(e => e.Sent != OutboxSendState.DeleteConfirmed).ToList();
             c.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND sent = 2", tx, ("@i", oldInst));
 
             foreach (SyncTable t in store.Model.Tables)

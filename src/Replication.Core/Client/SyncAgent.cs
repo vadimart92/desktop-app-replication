@@ -643,7 +643,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     {
                         // A create this row points to must go in the same or an earlier batch (8.4).
                         string? pid = _conn.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", _instance));
-                        if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == 0) is { } pe)
+                        if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == OutboxSendState.Waiting) is { } pe)
                             Add(pe);
                     }
                 }
@@ -670,7 +670,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 _conn.Exec("UPDATE _sync_outbox SET seq = @s, sent = 1 WHERE id = @id", tx, ("@s", seq), ("@id", e.Id));
                 if (actions[e.Id] is { } a)
                     a.Seq = seq;
-                sent.Add(e with { Seq = seq, Sent = 1 });
+                sent.Add(e with { Seq = seq, Sent = OutboxSendState.InFlight });
             }
             _conn.Exec("UPDATE _sync_instances SET next_seq = @n WHERE address = @a", tx, ("@n", next), ("@a", Address));
             tx.Commit();

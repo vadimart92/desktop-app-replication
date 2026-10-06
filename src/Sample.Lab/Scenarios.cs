@@ -176,7 +176,7 @@ public static class Scenarios
                     async l =>
                     {
                         await l.C1.SetPriceAsync("Стрейч-плівка", 333);
-                        l.When(() => l.C1.Replication.Store.Entries(l.C1.Instance).Any(e => e.Sent == 1),
+                        l.When(() => l.C1.Replication.Store.Entries(l.C1.Instance).Any(e => e.Sent == OutboxSendState.InFlight),
                             () => l.C1.RenameAsync("Стрейч-плівка", "Стрейч-плівка 500 мм"));
                     }),
             ],
@@ -386,7 +386,7 @@ public static class Scenarios
                     async l =>
                     {
                         await l.C1.ArchiveAsync(("Category", "Архів"), ("Item", "Каталог 2019"));
-                        l.When(() => l.C1.Replication.Store.Entries(l.C1.Instance).Any(e => e.Kind == OutboxKind.Archive && e.Sent == 1),
+                        l.When(() => l.C1.Replication.Store.Entries(l.C1.Instance).Any(e => e.Kind == OutboxKind.Archive && e.Sent == OutboxSendState.InFlight),
                             () => l.Owner.SetPriceAsync("Факс", 320));
                     }),
                 new ScenarioStep("Подивитись на результат", "Tombstones прибрали записи з репліки Клієнта 2. У Клієнта 1 вони лишились рядками з InstanceId = X:archive: це тепер єдина копія. Власник повертає звільнені сторінки на диск через PRAGMA incremental_vacuum.",

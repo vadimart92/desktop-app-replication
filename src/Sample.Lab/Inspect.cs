@@ -50,7 +50,7 @@ public static class Inspect
             if (r.InstanceId != inst)
                 return r with { Mark = "архів" };
             OutboxEntry? e = entries.FirstOrDefault(x => x.Table == table && x.Pk == r.Id);
-            return e is null ? r : r with { Mark = e.Sent == 1 ? $"в дорозі ({e.Kind})" : $"черга ({e.Kind})" };
+            return e is null ? r : r with { Mark = e.Sent == OutboxSendState.InFlight ? $"в дорозі ({e.Kind})" : $"черга ({e.Kind})" };
         })];
     }
 

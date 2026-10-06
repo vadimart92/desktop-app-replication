@@ -178,7 +178,7 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     private static string Describe(OutboxEntry e)
     {
-        string state = e.Sent switch { 1 => "в дорозі", 2 => $"підтверджено, чекає курсор ≥ {e.ExpectedVersion}", _ => "чекає" };
+        string state = e.Sent switch { OutboxSendState.InFlight => "в дорозі", OutboxSendState.DeleteConfirmed => $"підтверджено, чекає курсор ≥ {e.ExpectedVersion}", _ => "чекає" };
         string what = e.Kind switch
         {
             OutboxKind.Archive => $"архів {ArchiveCount(e)} записів, SyncVersion ≤ {e.ExpectedVersion}",
