@@ -56,7 +56,6 @@ internal sealed class SubscribeSession
         if (!await HandshakeAsync(conn, start))
             return;
 
-        _store.MarkSubscribed(_clientId, true);
         _store.Committed += _wake.Set;
         Task reader = Task.Run(ReadLoopAsync);
         try
@@ -89,24 +88,48 @@ internal sealed class SubscribeSession
             return false;
         }
 
-        long head = _store.Head(conn);
-        long purged = _store.Purged(conn);
         Dictionary<string, CursorState> cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
-        long minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out CursorState? c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
-        // A table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
-        // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2).
-        (string Name, CursorState K) behind = Model.Tables
-            .Select(t => (t.Name, K: cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0)))
-            .FirstOrDefault(x => !(x.K.Cursor == 0 && x.K.Ranges.Count == 0) && x.K.Cursor < purged);
+        long head;
         string? reason = null;
-        if (string.IsNullOrEmpty(start.InstanceId))
-            reason = "репліки нема";
-        else if (start.InstanceId != _store.InstanceId)
-            reason = "інший instance_id";
-        else if (behind.Name is not null)
-            reason = $"курсор {behind.Name} {behind.K.Cursor} < purged_version {purged}";
-        else if (minC > head)
-            reason = $"курсор {minC} > version {head}";
+        // Checked and registered in one write transaction, as is every purge batch (10.2): either a batch ran first and
+        // the check sees its purged_version, or every later batch sees this client subscribed with its acked_version.
+        using (SqliteTransaction tx = conn.BeginTransaction())
+        {
+            head = _store.Head(conn, tx);
+            long purged = _store.Purged(conn, tx);
+            long minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out CursorState? c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
+            // A table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
+            // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2).
+            (string Name, CursorState K) behind = Model.Tables
+                .Select(t => (t.Name, K: cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0)))
+                .FirstOrDefault(x => !(x.K.Cursor == 0 && x.K.Ranges.Count == 0) && x.K.Cursor < purged);
+            if (string.IsNullOrEmpty(start.InstanceId))
+                reason = "репліки нема";
+            else if (start.InstanceId != _store.InstanceId)
+                reason = "інший instance_id";
+            else if (behind.Name is not null)
+                reason = $"курсор {behind.Name} {behind.K.Cursor} < purged_version {purged}";
+            else if (minC > head)
+                reason = $"курсор {minC} > version {head}";
+            if (reason is null)
+            {
+                foreach (SyncTable t in Model.Tables)
+                    _mirror[t.Name] = cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0);
+                _open = [.. start.OpenTables];
+                _store.SaveCursors(conn, tx, _clientId, _mirror.ToDictionary(x => x.Key, x => x.Value.Cursor));
+                _store.MarkSubscribed(_clientId, true);
+                try
+                {
+                    tx.Commit();
+                }
+                catch
+                {
+                    _store.MarkSubscribed(_clientId, false);
+                    throw;
+                }
+            }
+        }
+
         if (reason is not null)
         {
             long size = _store.FileSizeBytes(conn);
@@ -118,14 +141,6 @@ internal sealed class SubscribeSession
             return false;
         }
 
-        foreach (SyncTable t in Model.Tables)
-            _mirror[t.Name] = cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0);
-        _open = [.. start.OpenTables];
-        using (SqliteTransaction tx = conn.BeginTransaction())
-        {
-            _store.SaveCursors(conn, tx, _clientId, _mirror.ToDictionary(x => x.Key, x => x.Value.Cursor));
-            tx.Commit();
-        }
         Log($"Start прийнято, голова {head}; курсори {string.Join(", ", _mirror.Select(x => $"{x.Key}={x.Value}"))}", SyncLogLevel.Ok);
         return true;
     }

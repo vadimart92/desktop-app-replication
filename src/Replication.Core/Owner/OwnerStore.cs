@@ -286,14 +286,21 @@ public sealed class OwnerStore
             tx.Commit();
         }
 
-        long floor = c.Scalar<long?>("SELECT MIN(acked_version) FROM _sync_clients") ?? NoFloor;
+        long floor;
         int total = 0;
         while (true)
         {
-            // Short transactions of ~1000 rows so the application's writer is not held.
+            // Short transactions of ~1000 rows so the application's writer is not held. Both bounds are read inside the
+            // batch's write transaction, which serializes with the handshake (6.2): a client registered since the
+            // previous batch already counts.
             using SqliteTransaction tx = c.BeginTransaction();
+            floor = c.Scalar<long?>("SELECT MIN(acked_version) FROM _sync_clients", tx) ?? NoFloor;
+            long guard = SubscribedFloor(c, tx);
             var batch = new List<(string Tbl, string Pk, long V)>();
-            using (SqliteCommand cmd = c.Cmd("SELECT tbl, pk, version FROM _sync_tombstones WHERE version <= @f OR deleted_at < @cut LIMIT 1000", tx, ("@f", floor), ("@cut", cutoff)))
+            using (SqliteCommand cmd = c.Cmd("""
+                SELECT tbl, pk, version FROM _sync_tombstones
+                WHERE version <= @f OR (deleted_at < @cut AND version <= @g) LIMIT 1000
+                """, tx, ("@f", floor), ("@cut", cutoff), ("@g", guard)))
             using (SqliteDataReader r = cmd.ExecuteReader())
             {
                 while (r.Read())
@@ -311,6 +318,22 @@ public sealed class OwnerStore
         if (total > 0)
             NotifyCommitted();
         return new PurgeResult(total, clients, Purged(c), floor);
+    }
+
+    /// <summary>
+    /// MIN(acked_version) of the clients with an open stream. Such a client may still be catching up on tombstones above
+    /// it (its bottom gap goes last), so the age rule leaves them alone until it acknowledges them (10.2, rule 2).
+    /// </summary>
+    private long SubscribedFloor(SqliteConnection c, SqliteTransaction tx)
+    {
+        long min = NoFloor;
+        foreach ((string id, int n) in _subscribed)
+        {
+            if (n > 0 && c.Scalar<long?>("SELECT acked_version FROM _sync_clients WHERE client_id = @c", tx, ("@c", id)) is long acked)
+                min = Math.Min(min, acked);
+        }
+
+        return min;
     }
 
     /// <summary>Returns free pages to the file system in small steps (11.5).</summary>
