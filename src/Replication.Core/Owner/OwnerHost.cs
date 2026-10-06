@@ -1,8 +1,7 @@
 using System.IO.Compression;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -64,8 +63,7 @@ public sealed class OwnerHost : IAsyncDisposable
         WebApplication app = builder.Build();
         app.MapGrpcService<SyncGrpcService>();
         await app.StartAsync();
-        string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
-        int actualPort = new Uri(address.Replace("[::]", "localhost").Replace("+", "localhost").Replace("*", "localhost")).Port;
+        int actualPort = BindingAddress.Parse(app.Urls.First()).Port;
         store.Options.Log.Write("owner", $"gRPC-сервер слухає порт {actualPort}, instance_id {store.InstanceId}", SyncLogLevel.Ok);
         return new OwnerHost(app, store, actualPort);
     }
