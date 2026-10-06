@@ -11,14 +11,6 @@ namespace Replication.Owner;
 /// </summary>
 internal sealed class ApplyHandler(OwnerStore store)
 {
-    public static class Reasons
-    {
-        public const string Deleted = "deleted";
-        public const string ParentDeleted = "parent deleted";
-        public const string Unique = "unique";
-        public const string AlreadyApplied = "already applied";
-    }
-
     private enum Kept
     {
         Gone,
@@ -66,15 +58,15 @@ internal sealed class ApplyHandler(OwnerStore store)
             if (!Model.TryGet(a.Tbl, out SyncTable? t))
             {
                 if (a.Kind is not ActionKind.Archive)
-                    Res(a, ResultStatus.Rejected, "unknown table");
+                    Res(a, ResultStatus.Rejected, ApplyReasons.UnknownTable);
                 else if (a.Seq <= applied)
-                    Res(a, ResultStatus.Skipped, Reasons.AlreadyApplied);
+                    Res(a, ResultStatus.Skipped, ApplyReasons.AlreadyApplied);
                 continue;
             }
             if (a.Seq <= applied)
             {
                 // A retry after a lost reply: the version is returned only while it is still this client's (6.5).
-                ActionResult res = Res(a, ResultStatus.Skipped, Reasons.AlreadyApplied);
+                ActionResult res = Res(a, ResultStatus.Skipped, ApplyReasons.AlreadyApplied);
                 if (a.Pk.Length > 0 && a.Kind is ActionKind.Create or ActionKind.Patch && OwnerReader.Row(c, tx, t, PkText(a.Pk)) is { } row && row.Origin == cid)
                     (res.HasVersion, res.Version) = (true, row.Version);
                 else if (a.Kind == ActionKind.Delete && OwnerReader.Tombstone(c, tx, t, PkText(a.Pk)) is { } tomb)
@@ -85,11 +77,11 @@ internal sealed class ApplyHandler(OwnerStore store)
             if (a.Kind == ActionKind.Create && OwnerReader.Tombstone(c, tx, t, pk!) is not null)
             {
                 // Delete wins over a create retry (9.1).
-                Res(a, ResultStatus.Rejected, Reasons.Deleted);
+                Res(a, ResultStatus.Rejected, ApplyReasons.Deleted);
             }
             else if (a.Kind == ActionKind.Patch && OwnerReader.Row(c, tx, t, pk!) is null && !creates.ContainsKey((a.Tbl, pk!)))
             {
-                Res(a, ResultStatus.Ignored, Reasons.Deleted);
+                Res(a, ResultStatus.Ignored, ApplyReasons.Deleted);
             }
         }
 
@@ -129,7 +121,7 @@ internal sealed class ApplyHandler(OwnerStore store)
                 {
                     if (ParentMissing(a))
                     {
-                        Res(a, ResultStatus.Rejected, Reasons.ParentDeleted);
+                        Res(a, ResultStatus.Rejected, ApplyReasons.ParentDeleted);
                         changed = true;
                     }
                 }
@@ -157,7 +149,7 @@ internal sealed class ApplyHandler(OwnerStore store)
                             string? origin = prev is null || prev.Version <= CursorOf(t.Name) ? cid : null;
                             Patch(c, tx, t, pk, a, origin);
                             if (origin is null)
-                                res.Reason = "echo";
+                                res.Reason = ApplyReasons.Echo;
                             break;
                         }
                         case ActionKind.Delete:
@@ -175,7 +167,7 @@ internal sealed class ApplyHandler(OwnerStore store)
                 {
                     // SQLITE_CONSTRAINT: a unique index on a business column (9).
                     c.Exec("ROLLBACK TO act; RELEASE act;", tx);
-                    Res(a, ResultStatus.Rejected, Reasons.Unique);
+                    Res(a, ResultStatus.Rejected, ApplyReasons.Unique);
                 }
             }
 
@@ -191,7 +183,7 @@ internal sealed class ApplyHandler(OwnerStore store)
                 foreach (Protocol.Action a in pass.Where(a => results[a.Seq].Status == ResultStatus.Applied))
                     results.Remove(a.Seq);
                 foreach (Protocol.Action a in orphans)
-                    Res(a, ResultStatus.Rejected, Reasons.ParentDeleted);
+                    Res(a, ResultStatus.Rejected, ApplyReasons.ParentDeleted);
             }
         }
         c.Exec("RELEASE batch", tx);
@@ -305,7 +297,7 @@ internal sealed class ApplyHandler(OwnerStore store)
         {
             Condition cond = a.Predicate[i];
             if (!t.HasColumn(cond.Column))
-                return new ActionResult { Seq = a.Seq, Status = ResultStatus.Rejected, Reason = "unknown column" };
+                return new ActionResult { Seq = a.Seq, Status = ResultStatus.Rejected, Reason = ApplyReasons.UnknownColumn };
             where.Add($"{Q(cond.Column)} IS @p{i}");
             args.Add(($"@p{i}", FromValue(cond.Value)));
         }

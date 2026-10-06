@@ -653,14 +653,14 @@ public sealed class SyncAgent : IAsyncDisposable
 
                 switch (r.Status)
                 {
-                    case ResultStatus.Rejected when r.Reason == "unique":
+                    case ResultStatus.Rejected when r.Reason == ApplyReasons.Unique:
                         w.Note(_conn, tx, $"не збережено {LabelOf()}: на інстансі вже є запис з таким значенням");
                         break;
                     case ResultStatus.Rejected when t is not null && e.Pk is not null:
                     {
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
-                        w.Note(_conn, tx, $"не збережено: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({(r.Reason == "parent deleted" ? "батьківський запис видалено" : "запис видалено на інстансі")})");
+                        w.Note(_conn, tx, $"не збережено: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({(r.Reason == ApplyReasons.ParentDeleted ? "батьківський запис видалено" : "запис видалено на інстансі")})");
                         break;
                     }
                     case ResultStatus.Ignored when t is not null && e.Pk is not null:
