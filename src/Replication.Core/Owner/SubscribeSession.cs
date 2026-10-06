@@ -221,7 +221,7 @@ internal sealed class SubscribeSession
         lock (_lock)
             open = _open;
         // Open tables first, together with the tables they reference by FK (6.4).
-        bool First(SyncTable t) => open.Contains(t.Name) || open.Any(o => Model.TryGet(o, out SyncTable? ot) && ot.ForeignKeys.Any(f => f.ParentTable == t.Name));
+        bool First(SyncTable t) => open.Contains(t.Name) || Model.ChildrenOf(t.Name).Any(c => open.Contains(c.Child.Name));
         return Model.Tables.OrderBy(t => First(t) ? 0 : 1);
     }
 
@@ -315,7 +315,7 @@ internal sealed class SubscribeSession
                 batch.Rows.Add(OwnerReader.ToWire(t, it, cur0));
         }
         batch.Remaining = Remaining(conn, tx, head);
-        string log = $"Batch {t.Name}: {Describe(batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
+        string log = $"Batch {t.Name}: {Describe(t, batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
             + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
             + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {batch.Remaining}";
         return (new ChangeMessage { Batch = batch }, log);
@@ -369,7 +369,7 @@ internal sealed class SubscribeSession
                         batch.Rows.Add(OwnerReader.ToWire(t, it, _mirror[t.Name].Cursor));
                 }
                 messages.Add(new ChangeMessage { Batch = batch });
-                logs.Add($"{t.Name} {Describe(batch)}");
+                logs.Add($"{t.Name} {Describe(t, batch)}");
             }
             if (own.Count > 0)
                 logs.Add($"пропущено як власні зміни: {string.Join(", ", own.Select(x => $"{x.Table.Name} v{x.Item.Version}"))}");
@@ -436,14 +436,11 @@ internal sealed class SubscribeSession
         await _out.WriteAsync(m, ct);
     }
 
-    private static string Describe(Batch b)
+    private static string Describe(SyncTable table, Batch b)
     {
-        IEnumerable<string> parts = b.Rows.Select(r => r.Full ? $"v{r.Version} повний" : $"v{r.Version} [{Mask(b, r.Mask)}]")
+        IEnumerable<string> parts = b.Rows.Select(r => r.Full ? $"v{r.Version} повний" : $"v{r.Version} [{string.Join(", ", table.ColumnsOf(r.Mask))}]")
             .Concat(b.Tombstones.Select(t => $"v{t.Version} ✕"));
         string s = string.Join(", ", parts);
         return s.Length == 0 ? "рядків нема" : s;
     }
-
-    private static string Mask(Batch b, long mask) =>
-        string.Join(", ", b.Columns.Where((_, i) => (mask & (1L << i)) != 0));
 }
