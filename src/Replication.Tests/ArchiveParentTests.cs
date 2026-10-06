@@ -21,7 +21,7 @@ public class ArchiveParentTests
     private static void AssertArchiveIntact(Sample.Lab.Lab lab, string category = "Офіс")
     {
         Assert.True(Sample.Lab.Inspect.ClientHas(lab.C1, "Каталог 2019", archive: true));
-        Assert.Contains(Sample.Lab.Inspect.ClientRows(lab.C1, "Category"), r => r.Label == category && r.Mark == "архів");
+        Assert.Contains(Sample.Lab.Inspect.ClientRows(lab.C1, "Category"), r => r.Label == category && r.IsArchived);
         // The owner cascaded the live children.
         Assert.False(Sample.Lab.Inspect.OwnerHas(lab.Owner, "Степлер"));
         foreach (ClientNode c in lab.Clients)
@@ -70,7 +70,7 @@ public class ArchiveParentTests
         await lab.Owner.DeleteCategoryAsync("Офіс");
         await lab.C1.RenameCategoryAsync(Guid.Parse(office), "Офіс 2");
         await Lab.WaitAsync(() => lab.C1.Agent.GetStatus().Pending == 0, TimeSpan.FromSeconds(30), "Клієнт 1 не отримав ApplyReply");
-        Assert.Contains(Inspect.ClientRows(lab.C1, "Category"), r => r.Id == office && r.Mark == "архів");
+        Assert.Contains(Inspect.ClientRows(lab.C1, "Category"), r => r.Id == office && r.IsArchived);
 
         // A reconnect drops the held send; catch-up brings the tombstones, which find nothing left to delete.
         faults.DelayStream(lab.C1.Replication.ClientId, TimeSpan.Zero, TimeSpan.Zero);

@@ -7,7 +7,13 @@ namespace Sample.Lab;
 /// <summary>A row as the lab panels show it.</summary>
 public sealed record RowView(
     string Table, string Id, string Label, long? Price, string? Status, string? Category, long Version,
-    long Base, string Mask, string? Origin, string? InstanceId, string Mark);
+    long Base, string Mask, string? Origin, string? InstanceId, string Mark)
+{
+    /// <summary><see cref="Mark"/> of a row in the instance's archive (design 11.1).</summary>
+    public const string ArchiveMark = "архів";
+
+    public bool IsArchived => Mark == ArchiveMark;
+}
 
 public sealed record TombstoneView(string Table, string Pk, long Version, long DeletedAt, string? Origin);
 
@@ -48,7 +54,7 @@ public static class Inspect
         return [.. rows.Select(r =>
         {
             if (r.InstanceId != inst)
-                return r with { Mark = "архів" };
+                return r with { Mark = RowView.ArchiveMark };
             OutboxEntry? e = entries.FirstOrDefault(x => x.Table == table && x.Pk == r.Id);
             return e is null ? r : r with { Mark = e.Sent == OutboxSendState.InFlight ? $"в дорозі ({e.Kind})" : $"черга ({e.Kind})" };
         })];

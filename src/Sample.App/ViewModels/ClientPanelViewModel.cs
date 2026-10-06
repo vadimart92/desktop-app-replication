@@ -121,7 +121,7 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     partial void OnSelectedItemChanged(RowView? value)
     {
-        if (value is null || value.Mark == "архів")
+        if (value is null || value.IsArchived)
             return;
         EditName = value.Label;
         EditPrice = value.Price?.ToString() ?? "";
@@ -190,6 +190,9 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     private static int ArchiveCount(OutboxEntry e) => e.Predicate?.Split("],[").Length ?? 0;
 
+    /// <summary>The id of a row of the instance itself; archived rows are read-only.</summary>
+    private static Guid? LiveId(RowView? r) => r is { IsArchived: false } ? Guid.Parse(r.Id) : null;
+
     private async Task Run(Func<Task> action)
     {
         try
@@ -205,15 +208,15 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private Task Save() => Run(() => SelectedItem is { Mark: not "архів" } r && long.TryParse(EditPrice, out long p)
+    private Task Save() => Run(() => SelectedItem is { IsArchived: false } r && long.TryParse(EditPrice, out long p)
         ? Node.UpdateItemAsync(Guid.Parse(r.Id), EditName, p, EditStatus)
         : Task.CompletedTask);
 
     [RelayCommand]
-    private Task Delete() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.DeleteAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
+    private Task Delete() => Run(() => LiveId(SelectedItem) is { } id ? Node.DeleteAsync("Item", id) : Task.CompletedTask);
 
     [RelayCommand]
-    private Task Archive() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
+    private Task Archive() => Run(() => LiveId(SelectedItem) is { } id ? Node.ArchiveByIdAsync("Item", id) : Task.CompletedTask);
 
     [RelayCommand]
     private Task AddItem() => Run(Node.AddItemAsync);
@@ -222,10 +225,10 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     private Task AddCategory() => Run(() => Node.CreateCategoryAsync($"Категорія {Categories.Count + 1}"));
 
     [RelayCommand]
-    private Task DeleteCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.DeleteAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
+    private Task DeleteCategory() => Run(() => LiveId(SelectedCategory) is { } id ? Node.DeleteAsync("Category", id) : Task.CompletedTask);
 
     [RelayCommand]
-    private Task ArchiveCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
+    private Task ArchiveCategory() => Run(() => LiveId(SelectedCategory) is { } id ? Node.ArchiveByIdAsync("Category", id) : Task.CompletedTask);
 
     [RelayCommand]
     private Task DeleteArchived() => Run(() => Node.DeleteWhereStatusAsync("архів"));
