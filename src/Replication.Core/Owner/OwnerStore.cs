@@ -187,14 +187,16 @@ public sealed class OwnerStore
     public long Now(SqliteConnection c, SqliteTransaction? tx = null) =>
         DateTimeOffset.UtcNow.ToUnixTimeSeconds() + c.Scalar<long>("SELECT clock_offset FROM _sync_meta", tx);
 
-    /// <summary>Moves the owner clock forward (the demo's "+31 days"). Triggers use the same offset for <c>deleted_at</c>.</summary>
+    /// <summary>
+    /// Moves the owner clock forward (the demo's "+31 days"). Triggers use the same offset for <c>deleted_at</c>.
+    /// Only clients with an open stream are seen at the new time; the others age by the jump (5.2, 10.2).
+    /// </summary>
     public void AdvanceClock(TimeSpan by)
     {
         using SqliteConnection c = Open();
-        c.Exec("UPDATE _sync_meta SET clock_offset = clock_offset + @s", null, ("@s", (long)by.TotalSeconds));
-        foreach (string id in _subscribed.Keys)
-            c.Exec("UPDATE _sync_clients SET last_seen = @n WHERE client_id = @c", null, ("@n", Now(c)), ("@c", id));
         using SqliteTransaction tx = c.BeginTransaction();
+        c.Exec("UPDATE _sync_meta SET clock_offset = clock_offset + @s", tx, ("@s", (long)by.TotalSeconds));
+        TouchSubscribed(c, tx);
         RecomputeFloor(c, tx);
         tx.Commit();
     }
@@ -213,7 +215,7 @@ public sealed class OwnerStore
 
     public bool IsSubscribed(string clientId) => _subscribed.TryGetValue(clientId, out int n) && n > 0;
 
-    internal void SaveCursors(SqliteConnection c, SqliteTransaction tx, string clientId, IReadOnlyDictionary<string, long> cursors, bool touchFloor = true)
+    internal void SaveCursors(SqliteConnection c, SqliteTransaction tx, string clientId, IReadOnlyDictionary<string, long> cursors)
     {
         long now = Now(c, tx);
         long min = cursors.Count > 0 ? cursors.Values.Min() : 0;
@@ -227,12 +229,19 @@ public sealed class OwnerStore
                 tx, ("@c", clientId), ("@t", tbl), ("@v", cur));
         }
 
-        if (touchFloor)
-            RecomputeFloor(c, tx);
+        RecomputeFloor(c, tx);
     }
 
-    internal void Touch(SqliteConnection c, SqliteTransaction? tx, string clientId) =>
-        c.Exec("UPDATE _sync_clients SET last_seen = @n WHERE client_id = @c", tx, ("@n", Now(c, tx)), ("@c", clientId));
+    /// <summary>A client with an open Subscribe stream is seen now (5.2).</summary>
+    private void TouchSubscribed(SqliteConnection c, SqliteTransaction tx)
+    {
+        long now = Now(c, tx);
+        foreach ((string id, int n) in _subscribed)
+        {
+            if (n > 0)
+                c.Exec("UPDATE _sync_clients SET last_seen = @n WHERE client_id = @c", tx, ("@n", now), ("@c", id));
+        }
+    }
 
     /// <summary>floor = MIN(cursor) of active clients per table; with no active client the base moves on every update (5.2).</summary>
     internal void RecomputeFloor(SqliteConnection c, SqliteTransaction tx)
@@ -253,8 +262,7 @@ public sealed class OwnerStore
     {
         using SqliteConnection c = Open();
         using SqliteTransaction tx = c.BeginTransaction();
-        foreach (string id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
-            Touch(c, tx, id);
+        TouchSubscribed(c, tx);
         RecomputeFloor(c, tx);
         tx.Commit();
     }
@@ -271,8 +279,7 @@ public sealed class OwnerStore
         int clients;
         using (SqliteTransaction tx = c.BeginTransaction())
         {
-            foreach (string id in _subscribed.Where(x => x.Value > 0).Select(x => x.Key))
-                Touch(c, tx, id);
+            TouchSubscribed(c, tx);
             c.Exec("DELETE FROM _sync_client_cursors WHERE client_id IN (SELECT client_id FROM _sync_clients WHERE last_seen < @cut)", tx, ("@cut", cutoff));
             clients = c.Exec("DELETE FROM _sync_clients WHERE last_seen < @cut", tx, ("@cut", cutoff));
             RecomputeFloor(c, tx);
