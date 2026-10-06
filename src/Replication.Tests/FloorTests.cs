@@ -9,14 +9,6 @@ namespace Replication.Tests;
 /// <summary>The per-table floor that holds SyncBase back: MIN(cursor) of the clients seen within the activity window (design 5.2).</summary>
 public class FloorTests
 {
-    private static void OwnerSql(Lab lab, string sql)
-    {
-        using SqliteConnection c = lab.Owner.Store.Open();
-        using SqliteCommand cmd = c.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
-    }
-
     /// <summary>Floors and client cursors read in one transaction, so an Ack cannot land between them.</summary>
     private static (Dictionary<string, long> Floors, List<(string Tbl, long Cursor)> Cursors) Read(Lab lab)
     {
@@ -53,7 +45,7 @@ public class FloorTests
         lab.C2.Link = false;
         await Lab.WaitAsync(() => lab.Clients.All(n => !store.IsSubscribed(n.Replication.ClientId)), TimeSpan.FromSeconds(10), "сесії клієнтів не закрились");
         // A table that is no longer replicated keeps its row as it was.
-        OwnerSql(lab, "INSERT INTO _sync_floor(tbl, floor) VALUES ('Retired', 5)");
+        OwnerSql.Exec(lab, "INSERT INTO _sync_floor(tbl, floor) VALUES ('Retired', 5)");
 
         store.RecomputeFloor();
 
