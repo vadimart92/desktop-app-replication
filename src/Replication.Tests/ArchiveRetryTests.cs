@@ -7,8 +7,13 @@ namespace Replication.Tests;
 /// <summary>Design 11.2, step 6: rows the owner kept wait for an archive retry; the user may archive them meanwhile.</summary>
 public class ArchiveRetryTests
 {
-    [Fact]
-    public async Task User_archive_during_an_archive_retry_converges()
+    /// <summary>The race with the retry pass cannot be forced, so each width runs in a lab of its own.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(16)]
+    public async Task User_archive_during_an_archive_retry_converges(int clicks)
     {
         var log = new SyncLog();
         var c1 = new List<string>();
@@ -29,7 +34,7 @@ public class ArchiveRetryTests
 
         // The leftover parent is back in the replica, so the user can select it again, from several clicks at once.
         Guid parent = Guid.Parse(Inspect.ClientRows(lab.C1, "Category").Single(r => r.Label == "Архів").Id);
-        await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => lab.C1.Agent.ArchiveAsync([("Category", parent)]), TestContext.Current.CancellationToken)));
+        await Task.WhenAll(Enumerable.Range(0, clicks).Select(_ => Task.Run(() => lab.C1.Agent.ArchiveAsync([("Category", parent)]), TestContext.Current.CancellationToken)));
         await lab.SettleAsync(TimeSpan.FromSeconds(60));
 
         Assert.Equal(AgentState.Online, lab.C1.Agent.GetStatus().State);
