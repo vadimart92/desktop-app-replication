@@ -628,12 +628,13 @@ public sealed class SyncAgent : IAsyncDisposable
 
             var batch = new List<OutboxEntry>();
             var actions = new Dictionary<long, Protocol.Action>();
+            var visiting = new HashSet<long>();
             int budget = ApplyBudget();
             int size = 0;
 
             void Add(OutboxEntry e)
             {
-                if (actions.ContainsKey(e.Id))
+                if (actions.ContainsKey(e.Id) || !visiting.Add(e.Id))
                     return;
                 if (_store.Model.TryGet(e.Table, out SyncTable? t) && e.Kind is OutboxKind.Create or OutboxKind.Patch && e.Pk is not null)
                 {
