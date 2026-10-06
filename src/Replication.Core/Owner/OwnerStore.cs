@@ -122,25 +122,22 @@ public sealed class OwnerStore
         WriteVersionFile(c);
     }
 
-    /// <summary>The first start after enabling sync gives every existing row a unique version (15.2).</summary>
+    /// <summary>
+    /// The first start after enabling sync gives every existing row a unique version, one pass per table (15.2).
+    /// The update trigger does not fire: SyncVersion changes.
+    /// </summary>
     private void StampUnversioned(SqliteConnection c, SqliteTransaction tx)
     {
         foreach (SyncTable t in Model.Tables)
         {
-            var ids = new List<string>();
-            using (SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(t.Name)} WHERE {SyncColumns.Version} = 0", tx))
-            using (SqliteDataReader r = cmd.ExecuteReader())
-            {
-                while (r.Read())
-                    ids.Add(r.GetString(0));
-            }
-
-            foreach (string id in ids)
-            {
-                c.Exec("UPDATE _sync_meta SET version = version + 1", tx);
-                c.Exec($"UPDATE {Q(t.Name)} SET SyncVersion = (SELECT version FROM _sync_meta), SyncBase = 0, SyncMask = @m WHERE Id = @id",
-                    tx, ("@m", t.FullMask), ("@id", id));
-            }
+            string table = Q(t.Name);
+            int n = c.Exec($"""
+                UPDATE {table} SET SyncVersion = (SELECT version FROM _sync_meta) + s.rn, SyncBase = 0, SyncMask = @m
+                FROM (SELECT Id, ROW_NUMBER() OVER () AS rn FROM {table} WHERE {SyncColumns.Version} = 0) AS s
+                WHERE {table}.Id = s.Id
+                """, tx, ("@m", t.FullMask));
+            if (n > 0)
+                c.Exec("UPDATE _sync_meta SET version = version + @n", tx, ("@n", (long)n));
         }
     }
 
