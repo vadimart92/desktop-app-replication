@@ -49,6 +49,15 @@ public class ArchiveParentTests
     }
 
     [Fact]
+    public async Task Bulk_delete_moves_the_parent_to_the_archive()
+    {
+        await using Lab lab = await ArchivedCatalogAsync();
+        await lab.C1.Agent.DeleteWhereAsync("Category", new Predicate("Name", "Офіс"));
+        await lab.SettleAsync();
+        AssertArchiveIntact(lab);
+    }
+
+    [Fact]
     public async Task Ignored_reply_moves_the_parent_to_the_archive()
     {
         await using Lab lab = await ArchivedCatalogAsync();

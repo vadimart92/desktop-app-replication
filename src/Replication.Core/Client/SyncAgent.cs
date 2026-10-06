@@ -950,7 +950,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             if (_instance is null)
                 return 0;
-            // FK on: the local cascade removes children the same way the owner will (8.7).
+            // FK on: the local cascade removes children the same way the owner will (8.7); a parent of archived rows goes to the archive (11.6).
             using SqliteConnection c = _store.Open();
             using SqliteTransaction tx = c.BeginTransaction();
             (string where, (string, object?)[] args) = predicate.ToSql(t);
@@ -972,7 +972,7 @@ public sealed class SyncAgent : IAsyncDisposable
             {
                 foreach (string id in ids)
                 {
-                    c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
+                    ArchiveGuard.DeleteOrArchive(c, tx, _store.Model, _instance, t, id);
                     ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
                 }
                 Log($"масове видалення: репліка «{table}» неповна (є відрізки над курсором), у чергу пішли ключі: {count}");
@@ -982,7 +982,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 // Rows with their own actions in the outbox go by key, the rest as one predicate.
                 List<string> own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
                 foreach (string id in ids)
-                    c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", id), ("@i", _instance));
+                    ArchiveGuard.DeleteOrArchive(c, tx, _store.Model, _instance, t, id);
                 foreach (string id in own)
                     ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
                 ClientStore.Insert(c, tx, _instance, table, null, OutboxKind.PredicateDelete, OutboxClass.Bulk, predicate: predicate.Serialize(), expectedVersion: k.Cursor);
