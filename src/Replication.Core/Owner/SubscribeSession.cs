@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Grpc.Core;
 using Microsoft.Data.Sqlite;
 using Replication.Model;
@@ -180,7 +181,8 @@ internal sealed class SubscribeSession
     private async Task MainLoopAsync(SqliteConnection conn, CancellationToken ct)
     {
         long dataVersion = conn.Scalar<long>("PRAGMA data_version");
-        DateTimeOffset lastOnline = DateTimeOffset.MinValue;
+        // A monotonic stamp: a wall clock set back would stall online delivery for the size of the step.
+        long? lastOnline = null;
         while (!ct.IsCancellationRequested)
         {
             if (!_needFull.IsEmpty)
@@ -205,11 +207,11 @@ internal sealed class SubscribeSession
             if (!woke && dv == dataVersion)
                 continue;
             dataVersion = dv;
-            TimeSpan wait = lastOnline + Opt.OnlineInterval - DateTimeOffset.UtcNow;
+            TimeSpan wait = lastOnline is long at ? Opt.OnlineInterval - Stopwatch.GetElapsedTime(at) : TimeSpan.Zero;
             if (wait > TimeSpan.Zero)
                 await Task.Delay(wait, ct);
             if (await OnlineStepAsync(conn, ct))
-                lastOnline = DateTimeOffset.UtcNow;
+                lastOnline = Stopwatch.GetTimestamp();
         }
     }
 
