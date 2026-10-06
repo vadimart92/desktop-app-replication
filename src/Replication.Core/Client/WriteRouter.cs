@@ -32,7 +32,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
-        if (eventData.Context is { } ctx && Start(ctx) is { } p)
+        if (eventData.Context is { } ctx && AbortLeftoverAndCollect(ctx) is { } p)
         {
             if (p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
                 p = p with { OwnTransaction = ctx.Database.BeginTransaction() };
@@ -43,23 +43,13 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
     {
-        if (eventData.Context is { } ctx && Start(ctx) is { } p)
+        if (eventData.Context is { } ctx && AbortLeftoverAndCollect(ctx) is { } p)
         {
             if (p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
                 p = p with { OwnTransaction = await ctx.Database.BeginTransactionAsync(ct) };
             _pending.AddOrUpdate(ctx, p);
         }
         return result;
-    }
-
-    /// <summary>
-    /// EF reports a failure inside SavingChanges (an interceptor after the router, a cancelled BEGIN) to no interceptor:
-    /// what such a save left behind is dropped before the next save collects its changes (8.1).
-    /// </summary>
-    private Pending? Start(DbContext ctx)
-    {
-        Abort(ctx);
-        return Collect(ctx);
     }
 
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
@@ -109,6 +99,16 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
     {
         SaveChangesCanceled(eventData);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// EF reports a failure inside SavingChanges (an interceptor after the router, a cancelled BEGIN) to no interceptor:
+    /// what such a save left behind is dropped before the next save collects its changes (8.1).
+    /// </summary>
+    private Pending? AbortLeftoverAndCollect(DbContext ctx)
+    {
+        Abort(ctx);
+        return Collect(ctx);
     }
 
     /// <summary>Ends a save that did not complete: rolls back the router's own transaction and forgets its changes. Safe to call twice.</summary>
