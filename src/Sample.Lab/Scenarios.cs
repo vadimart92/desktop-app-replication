@@ -417,7 +417,8 @@ public static class Scenarios
                     {
                         l.C2.Link = false;
                         await l.Owner.SetPriceAsync("Степлер", 140);
-                        await Task.Delay(1500);
+                        long head = l.Owner.Head();
+                        await Lab.WaitAsync(() => !l.C1.Link || l.C1.Agent.CursorOf("Item").Cursor >= head, TimeSpan.FromSeconds(15), "Клієнт 1 не отримав нову ціну «Степлера»");
                         await l.Owner.SetStatusAsync("Степлер", "архів");
                     }),
                 new ScenarioStep("Минає доба: Клієнт 2 випадає з вікна активності", "Клієнт 2 не був на зв'язку довше за вікно активності (24 год), тому floor рахується тільки за курсором Клієнта 1.",
