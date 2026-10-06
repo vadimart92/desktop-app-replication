@@ -162,11 +162,7 @@ internal sealed class SubscribeSession
                     break;
                 case SubscribeMessage.BodyOneofCase.Ack:
                     using (SqliteConnection c = _store.Open())
-                    using (SqliteTransaction tx = c.BeginTransaction())
-                    {
-                        _store.SaveCursors(c, tx, _clientId, m.Ack.Cursors.ToDictionary(x => x.Tbl, x => x.Cursor));
-                        tx.Commit();
-                    }
+                        _store.SaveCursors(c, _clientId, m.Ack.Cursors.ToDictionary(x => x.Tbl, x => x.Cursor));
                     foreach (RowRef r in m.Ack.NeedFull)
                         _needFull.Enqueue(r);
                     if (m.Ack.NeedFull.Count > 0)

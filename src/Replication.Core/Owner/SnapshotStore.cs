@@ -52,11 +52,7 @@ internal sealed class SnapshotStore(OwnerStore store)
             }
 
             using (SqliteConnection c = store.Open())
-            using (SqliteTransaction tx = c.BeginTransaction())
-            {
-                store.SaveCursors(c, tx, clientId, store.Model.Tables.ToDictionary(t => t.Name, _ => v));
-                tx.Commit();
-            }
+                store.SaveCursors(c, clientId, store.Model.Tables.ToDictionary(t => t.Name, _ => v));
 
             byte[] hash;
             await using (FileStream f = File.OpenRead(path))

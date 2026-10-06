@@ -215,6 +215,13 @@ public sealed class OwnerStore
 
     public bool IsSubscribed(string clientId) => _subscribed.TryGetValue(clientId, out int n) && n > 0;
 
+    internal void SaveCursors(SqliteConnection c, string clientId, IReadOnlyDictionary<string, long> cursors)
+    {
+        using SqliteTransaction tx = c.BeginTransaction();
+        SaveCursors(c, tx, clientId, cursors);
+        tx.Commit();
+    }
+
     internal void SaveCursors(SqliteConnection c, SqliteTransaction tx, string clientId, IReadOnlyDictionary<string, long> cursors)
     {
         long now = Now(c, tx);
