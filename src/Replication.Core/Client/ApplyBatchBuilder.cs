@@ -11,7 +11,6 @@ namespace Replication.Client;
 /// </summary>
 internal static class ApplyBatchBuilder
 {
-    /// <param name="applyBudget">Read only when the outbox has something to send.</param>
     public static (ApplyRequest? Request, Dictionary<long, OutboxEntry> Sent) Build(
         SqliteConnection c, SyncModel model, string clientId, string address, string instance, Func<int> applyBudget)
     {
