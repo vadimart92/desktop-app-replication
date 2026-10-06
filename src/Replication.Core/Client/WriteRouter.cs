@@ -116,17 +116,24 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         return Collect(ctx);
     }
 
-    /// <summary>Ends a save that did not complete: rolls back the router's own transaction and forgets its changes. Safe to call twice.</summary>
+    /// <summary>
+    /// Ends a save that did not complete: rolls back the router's own transaction and forgets its changes. Safe to call twice.
+    /// A leftover transaction the app rolled back, or a pooled context's reset disposed, is no longer the router's to end.
+    /// </summary>
     private void Abort(DbContext ctx)
     {
         if (!_pending.TryGetValue(ctx, out Pending? p))
             return;
         _pending.Remove(ctx);
         RestoreDeletes(p.ArchiveMoves);
-        p.OwnTransaction?.Rollback();
-        p.OwnTransaction?.Dispose();
-        if (p.OpenedConnection)
-            ctx.Database.CloseConnection();
+        if (p.OwnTransaction is { } own && ctx.Database.CurrentTransaction == own)
+        {
+            own.Rollback();
+            own.Dispose();
+            // The router opens the connection only together with its own transaction.
+            if (p.OpenedConnection)
+                ctx.Database.CloseConnection();
+        }
     }
 
     /// <summary>A delete kept from EF for an archive move goes back to EF, so a retry of the save collects it again (11.6).</summary>

@@ -147,6 +147,24 @@ public sealed class WriteRouterTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Next_save_succeeds_after_the_app_rolled_back_what_a_rejected_save_left(bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (_, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.DbRouterFirst(new RejectFirstSave());
+        (await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken)).Price = 1;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
+
+        // The app releases the lock the router's transaction still holds.
+        db.Database.RollbackTransaction();
+
+        await AssertNextSaveQueuesNothingAsync(client, db);
+        AssertReleased(client, db);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Save_retried_after_a_later_interceptor_rejected_it_commits_the_edit(bool async)
     {
         await using ClientDb client = ClientDb.Create();
