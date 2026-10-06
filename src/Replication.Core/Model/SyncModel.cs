@@ -17,12 +17,14 @@ public static class SyncColumns
     /// <summary><c>InstanceId</c> of the client's own data (5.4).</summary>
     public const string LocalInstance = "local";
 
+    private const string ArchiveSuffix = ":archive";
+
     internal static readonly HashSet<string> s_all = [Version, Base, Mask, Origin, InstanceId];
 
-    public static string ArchiveOf(string instanceId) => instanceId + ":archive";
+    public static string ArchiveOf(string instanceId) => instanceId + ArchiveSuffix;
 
     public static bool IsRemote(string? instanceId) =>
-        !string.IsNullOrEmpty(instanceId) && instanceId != LocalInstance && !instanceId.EndsWith(":archive", StringComparison.Ordinal);
+        !string.IsNullOrEmpty(instanceId) && instanceId != LocalInstance && !instanceId.EndsWith(ArchiveSuffix, StringComparison.Ordinal);
 }
 
 public sealed record SyncForeignKey(string Column, string ParentTable, bool Cascade);
