@@ -147,6 +147,63 @@ public class WriteRouterTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Parent_delete_retried_after_a_later_interceptor_rejected_it_moves_the_parent_to_the_archive(bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (Guid office, Guid catalog) = client.SeedArchivedCatalog();
+        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
+        await SaveAsync(db, async);
+
+        AssertParentArchived(client, office, catalog);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Parent_delete_retried_after_a_concurrency_failure_moves_the_parent_to_the_archive(bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (Guid office, Guid catalog) = client.SeedArchivedCatalog();
+        (_, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.Db();
+        db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken));
+        Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
+        // An edit in the same save finds its row removed by the agent meanwhile.
+        client.Sql("DELETE FROM Item WHERE Id = @id", ("@id", Wire.PkText(itemId)));
+        item.Price = 1;
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => SaveAsync(db, async));
+        // The user drops the edit of the vanished row and saves again.
+        db.Entry(item).State = EntityState.Detached;
+        await SaveAsync(db, async);
+
+        AssertParentArchived(client, office, catalog);
+    }
+
+    [Fact]
+    public async Task Parent_delete_retried_after_a_cancelled_save_moves_the_parent_to_the_archive()
+    {
+        await using ClientDb client = ClientDb.Create();
+        (Guid office, Guid catalog) = client.SeedArchivedCatalog();
+        (_, Guid itemId) = client.SeedRemote();
+        using var cts = new CancellationTokenSource();
+        await using SampleDbContext db = client.Db(new CancelOnSaving(cts));
+        db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken));
+        // EF looks at the token only when it has a statement to run.
+        (await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken)).Price = 1;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => db.SaveChangesAsync(cts.Token));
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        AssertParentArchived(client, office, catalog);
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -213,6 +270,22 @@ public class WriteRouterTests
         Assert.Equal(ClientDb.Archive, client.InstanceOf("Item", catalog));
         Assert.Equal(ClientDb.Archive, client.InstanceOf("Category", office));
         Assert.Null(client.InstanceOf("Item", stapler));
+    }
+
+    private static async Task SaveAsync(SampleDbContext db, bool async)
+    {
+        if (async)
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        else
+            db.SaveChanges();
+    }
+
+    /// <summary>The retried save carried out the parent delete: the parent went to the archive and its delete to the outbox (11.6).</summary>
+    private static void AssertParentArchived(ClientDb client, Guid category, Guid archived)
+    {
+        Assert.Equal(ClientDb.Archive, client.InstanceOf("Category", category));
+        Assert.Equal(ClientDb.Archive, client.InstanceOf("Item", archived));
+        Assert.Contains(client.Replication.Store.Entries(), e => (e.Table, e.Pk, e.Kind) == ("Category", Wire.PkText(category), OutboxKind.Delete));
     }
 
     private static void AssertReleased(ClientDb client, SampleDbContext db)
@@ -315,6 +388,13 @@ internal sealed class ClientDb : IAsyncDisposable
     {
         Guid category = Seed(new Category { Name = "Офіс" });
         return (category, Seed(new Item { Name = "Степлер", Price = 100, CategoryId = category }));
+    }
+
+    /// <summary>A remote category that an archived item points to.</summary>
+    public (Guid Category, Guid Item) SeedArchivedCatalog()
+    {
+        Guid category = Seed(new Category { Name = "Офіс" });
+        return (category, Seed(new Item { Name = "Каталог 2019", CategoryId = category }, Archive));
     }
 
     /// <summary>Writes a row past the router, as the agent writes the replica.</summary>
