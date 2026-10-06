@@ -461,51 +461,55 @@ public sealed class SyncAgent : IAsyncDisposable
         try
         {
             w = new ReplicaWriter(_store.Model, _instance!);
-            using SqliteTransaction tx = _conn.BeginTransaction();
+            // The cursors change on a copy that is published only after the commit (6.4, 14).
+            Dictionary<string, CursorState> next;
             lock (_cursorsLock)
+                next = _cursors.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal);
+            using SqliteTransaction tx = _conn.BeginTransaction();
+            foreach (RangeExtra x in m.Extra)
+                next[x.Tbl].AddRange(x.Lo, x.Hi);
+            switch (m.BodyCase)
             {
-                foreach (RangeExtra x in m.Extra)
-                    _cursors[x.Tbl].AddRange(x.Lo, x.Hi);
-                switch (m.BodyCase)
-                {
-                    case ChangeMessage.BodyOneofCase.Batch:
-                        Batch b = m.Batch;
-                        int n = w.ApplyBatch(_conn, tx, b);
-                        if (_cursors.TryGetValue(b.Tbl, out CursorState? k))
-                        {
-                            foreach (RangeExtra c in b.Covers)
-                                k.AddRange(c.Lo, c.Hi);
-                        }
+                case ChangeMessage.BodyOneofCase.Batch:
+                    Batch b = m.Batch;
+                    int n = w.ApplyBatch(_conn, tx, b);
+                    if (next.TryGetValue(b.Tbl, out CursorState? k))
+                    {
+                        foreach (RangeExtra c in b.Covers)
+                            k.AddRange(c.Lo, c.Hi);
+                    }
 
-                        if (!b.Online && b.Covers.Count > 0)
-                            TrackRemaining(b.Remaining);
-                        text = $"← Batch {b.Tbl}{(b.Online ? " онлайн" : "")}: застосовано {n} з {b.Rows.Count + b.Tombstones.Count}"
-                               + (b.Covers.Count > 0 ? $", курсор {_cursors[b.Tbl]}" : "");
-                        break;
-                    case ChangeMessage.BodyOneofCase.TableSynced:
-                        _cursors[m.TableSynced.Tbl].Reset(m.TableSynced.Version);
-                        text = $"← TableSynced {m.TableSynced.Tbl}, курсор = {m.TableSynced.Version}";
-                        break;
-                    case ChangeMessage.BodyOneofCase.Head:
-                        foreach (CursorState kc in _cursors.Values)
-                            kc.LiftTo(m.Head.Version);
-                        break;
-                    case ChangeMessage.BodyOneofCase.Progress:
-                        TrackRemaining(m.Progress.Remaining);
-                        if (m.Progress.Done)
-                            text = "усі таблиці досинхронізовано, репліка цілісна";
-                        break;
-                }
-                foreach ((string t, CursorState k) in _cursors)
-                    _store.SaveCursor(_conn, tx, _instance!, t, k);
-                // A confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1).
-                foreach ((string t, CursorState k) in _cursors)
-                {
-                    _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND sent = 2 AND expected_version <= @c", tx,
-                        ("@i", _instance), ("@t", t), ("@c", k.Cursor));
-                }
+                    if (!b.Online && b.Covers.Count > 0)
+                        TrackRemaining(b.Remaining);
+                    text = $"← Batch {b.Tbl}{(b.Online ? " онлайн" : "")}: застосовано {n} з {b.Rows.Count + b.Tombstones.Count}"
+                           + (b.Covers.Count > 0 ? $", курсор {next[b.Tbl]}" : "");
+                    break;
+                case ChangeMessage.BodyOneofCase.TableSynced:
+                    next[m.TableSynced.Tbl].Reset(m.TableSynced.Version);
+                    text = $"← TableSynced {m.TableSynced.Tbl}, курсор = {m.TableSynced.Version}";
+                    break;
+                case ChangeMessage.BodyOneofCase.Head:
+                    foreach (CursorState kc in next.Values)
+                        kc.LiftTo(m.Head.Version);
+                    break;
+                case ChangeMessage.BodyOneofCase.Progress:
+                    TrackRemaining(m.Progress.Remaining);
+                    if (m.Progress.Done)
+                        text = "усі таблиці досинхронізовано, репліка цілісна";
+                    break;
             }
+            foreach ((string t, CursorState k) in next)
+                _store.SaveCursor(_conn, tx, _instance!, t, k);
+            // A confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1).
+            foreach ((string t, CursorState k) in next)
+            {
+                _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND sent = 2 AND expected_version <= @c", tx,
+                    ("@i", _instance), ("@t", t), ("@c", k.Cursor));
+            }
+
             tx.Commit();
+            lock (_cursorsLock)
+                _cursors = next;
             lock (_needFull)
                 _needFull.AddRange(w.NeedFull);
             _ackDirty = true;

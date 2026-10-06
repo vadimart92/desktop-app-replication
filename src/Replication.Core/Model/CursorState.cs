@@ -23,7 +23,13 @@ public sealed class CursorState
     /// <summary>Received ranges above the cursor, ascending, not touching each other or the cursor.</summary>
     public List<(long Lo, long Hi)> Ranges { get; } = [];
 
-    public CursorState Clone() => new CursorState(Cursor, Ranges);
+    /// <summary>A copy in O(ranges): they are already merged, so they are not added one by one.</summary>
+    public CursorState Clone()
+    {
+        var k = new CursorState(Cursor);
+        k.Ranges.AddRange(Ranges);
+        return k;
+    }
 
     /// <summary>Adds (lo, hi] and merges: ranges that touch merge, a range that reaches the cursor lifts it.</summary>
     public void AddRange(long lo, long hi)
