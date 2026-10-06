@@ -56,24 +56,27 @@ internal sealed class SubscribeSession
         if (!await HandshakeAsync(conn, start))
             return;
 
+        // Whichever loop stops first ends the session, so a fault reaches the client as an error status and it reconnects (14).
+        using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
         _store.Committed += _wake.Set;
-        Task reader = Task.Run(ReadLoopAsync);
+        Task reader = Task.Run(() => ReadLoopAsync(stop.Token));
+        Task main = MainLoopAsync(conn, stop.Token);
         try
         {
-            await MainLoopAsync(conn);
+            Task first = await Task.WhenAny(reader, main);
+            // A reader that ran out means the client half-closed its side: streaming goes on.
+            if (first == reader && reader.IsCompletedSuccessfully)
+                await main;
+            else
+                await first;
         }
         finally
         {
+            stop.Cancel();
             _store.Committed -= _wake.Set;
             _store.MarkSubscribed(_clientId, false);
-            try
-            {
-                await reader;
-            }
-            catch
-            {
-                // Stream closed.
-            }
+            // The other loop ends on the cancellation; awaiting it this way observes its exception.
+            await Task.WhenAll(reader, main).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
     }
 
@@ -84,7 +87,7 @@ internal sealed class SubscribeSession
         if (start.SchemaVersion != Opt.SchemaVersion)
         {
             Log($"Start: схема клієнта {start.SchemaVersion}, власника {Opt.SchemaVersion} → SchemaMismatch, потік закрито", SyncLogLevel.Warn);
-            await SendAsync(new ChangeMessage { SchemaMismatch = new SchemaMismatch { OwnerSchemaVersion = Opt.SchemaVersion } });
+            await SendAsync(new ChangeMessage { SchemaMismatch = new SchemaMismatch { OwnerSchemaVersion = Opt.SchemaVersion } }, _ct);
             return false;
         }
 
@@ -137,7 +140,7 @@ internal sealed class SubscribeSession
             await SendAsync(new ChangeMessage
             {
                 SnapshotRequired = new SnapshotRequired { Reason = reason, SizeBytes = size, InstanceId = _store.InstanceId },
-            });
+            }, _ct);
             return false;
         }
 
@@ -147,9 +150,9 @@ internal sealed class SubscribeSession
 
     // Client messages.
 
-    private async Task ReadLoopAsync()
+    private async Task ReadLoopAsync(CancellationToken ct)
     {
-        while (await _in.MoveNext(_ct))
+        while (await _in.MoveNext(ct))
         {
             SubscribeMessage m = _in.Current;
             switch (m.BodyCase)
@@ -174,38 +177,38 @@ internal sealed class SubscribeSession
 
     // Main loop.
 
-    private async Task MainLoopAsync(SqliteConnection conn)
+    private async Task MainLoopAsync(SqliteConnection conn, CancellationToken ct)
     {
         long dataVersion = conn.Scalar<long>("PRAGMA data_version");
         DateTimeOffset lastOnline = DateTimeOffset.MinValue;
-        while (!_ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested)
         {
             if (!_needFull.IsEmpty)
             {
-                await SendNeedFullAsync(conn);
+                await SendNeedFullAsync(conn, ct);
                 continue;
             }
             if (!_online)
             {
-                if (await CatchupStepAsync(conn))
+                if (await CatchupStepAsync(conn, ct))
                     continue;
                 _online = true;
                 _sentUpTo = _catchupHead;
-                await SendAsync(new ChangeMessage { Progress = new Progress { Done = true, OwnerTimeUnix = _store.Now(conn) } });
+                await SendAsync(new ChangeMessage { Progress = new Progress { Done = true, OwnerTimeUnix = _store.Now(conn) } }, ct);
                 Log($"досинхронізацію завершено, онлайн від v{_sentUpTo}", SyncLogLevel.Ok);
                 continue;
             }
 
             // Online: poll PRAGMA data_version (triggers cannot notify the process), or wake on our own commits.
-            bool woke = await _wake.WaitAsync(Opt.PollInterval, _ct);
+            bool woke = await _wake.WaitAsync(Opt.PollInterval, ct);
             long dv = conn.Scalar<long>("PRAGMA data_version");
             if (!woke && dv == dataVersion)
                 continue;
             dataVersion = dv;
             TimeSpan wait = lastOnline + Opt.OnlineInterval - DateTimeOffset.UtcNow;
             if (wait > TimeSpan.Zero)
-                await Task.Delay(wait, _ct);
-            if (await OnlineStepAsync(conn))
+                await Task.Delay(wait, ct);
+            if (await OnlineStepAsync(conn, ct))
                 lastOnline = DateTimeOffset.UtcNow;
         }
     }
@@ -221,7 +224,7 @@ internal sealed class SubscribeSession
     }
 
     /// <summary>One step of catch-up: one Batch or TableSynced. Returns false when nothing is left.</summary>
-    private async Task<bool> CatchupStepAsync(SqliteConnection conn)
+    private async Task<bool> CatchupStepAsync(SqliteConnection conn, CancellationToken ct)
     {
         ChangeMessage? msg = null;
         string? log = null;
@@ -306,7 +309,7 @@ internal sealed class SubscribeSession
         if (msg is null)
             return false;
         Log(log!);
-        await SendAsync(msg);
+        await SendAsync(msg, ct);
         return true;
     }
 
@@ -323,7 +326,7 @@ internal sealed class SubscribeSession
     }
 
     /// <summary>Online: everything after the last sent version, oldest first, then Head(V) (6.4).</summary>
-    private async Task<bool> OnlineStepAsync(SqliteConnection conn)
+    private async Task<bool> OnlineStepAsync(SqliteConnection conn, CancellationToken ct)
     {
         var messages = new List<ChangeMessage>();
         var logs = new List<string>();
@@ -367,7 +370,7 @@ internal sealed class SubscribeSession
         messages.Add(new ChangeMessage { Head = new Head { Version = upTo } });
         Log($"онлайн: {(logs.Count > 0 ? string.Join("; ", logs) : "нових рядків нема")}; Head({upTo})");
         foreach (ChangeMessage m in messages)
-            await SendAsync(m);
+            await SendAsync(m, ct);
         foreach (CursorState k in _mirror.Values)
         {
             k.AddRange(_sentUpTo, upTo);
@@ -381,7 +384,7 @@ internal sealed class SubscribeSession
     /// NeedFull from Ack: the full row; if the row is gone, its tombstone even when the tombstone is this client's own;
     /// if neither exists, nothing (9.1).
     /// </summary>
-    private async Task SendNeedFullAsync(SqliteConnection conn)
+    private async Task SendNeedFullAsync(SqliteConnection conn, CancellationToken ct)
     {
         var refs = new List<RowRef>();
         while (_needFull.TryDequeue(out RowRef? r))
@@ -409,10 +412,10 @@ internal sealed class SubscribeSession
             }
         }
         foreach (ChangeMessage m in messages)
-            await SendAsync(m);
+            await SendAsync(m, ct);
     }
 
-    private async Task SendAsync(ChangeMessage m)
+    private async Task SendAsync(ChangeMessage m, CancellationToken ct)
     {
         if (_extra.Count > 0 && m.BodyCase is not (ChangeMessage.BodyOneofCase.SnapshotRequired or ChangeMessage.BodyOneofCase.SchemaMismatch))
         {
@@ -421,8 +424,8 @@ internal sealed class SubscribeSession
         }
         TimeSpan delay = Opt.Faults.StreamDelay(_clientId);
         if (delay > TimeSpan.Zero)
-            await Task.Delay(delay, _ct);
-        await _out.WriteAsync(m, _ct);
+            await Task.Delay(delay, ct);
+        await _out.WriteAsync(m, ct);
     }
 
     private static string Describe(Batch b)
