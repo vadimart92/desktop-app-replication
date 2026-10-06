@@ -33,8 +33,7 @@ public class EmptyReplicaTests
         await lab.SyncNowAsync(lab.C1);
         await lab.SyncNowAsync(lab.C2);
         await lab.SettleAsync();
-        lab.C2.Link = false;
-        await Lab.WaitAsync(() => lab.C2.Agent.GetStatus().State == AgentState.Offline, TimeSpan.FromSeconds(30), "Клієнт 2 не вийшов з мережі");
+        await lab.GoOfflineAsync(lab.C2);
 
         // The journal empties on the owner, and its tombstones are forgotten while Клієнт 2 is away: no batch will ever touch it.
         await using (SampleDbContext db = lab.Owner.Db())

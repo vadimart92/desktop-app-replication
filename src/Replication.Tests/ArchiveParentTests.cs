@@ -72,8 +72,7 @@ public class ArchiveParentTests
 
         // A reconnect drops the held send; catch-up brings the tombstones, which find nothing left to delete.
         faults.DelayStream(lab.C1.Replication.ClientId, TimeSpan.Zero, TimeSpan.Zero);
-        lab.C1.Link = false;
-        await Lab.WaitAsync(() => lab.C1.Agent.GetStatus().State == AgentState.Offline, TimeSpan.FromSeconds(30), "Клієнт 1 не вийшов з мережі");
+        await lab.GoOfflineAsync(lab.C1);
         await lab.SyncNowAsync(lab.C1);
         await lab.SettleAsync();
         AssertArchiveIntact(lab, "Офіс 2");

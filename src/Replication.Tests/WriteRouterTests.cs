@@ -360,9 +360,7 @@ internal sealed class ClientDb : IAsyncDisposable
 
     public static ClientDb Create()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "replication-tests", Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(dir);
-        string path = Path.Combine(dir, "client.db");
+        string path = Path.Combine(TestDb.NewDir(), "client.db");
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(path))
         {
@@ -412,11 +410,7 @@ internal sealed class ClientDb : IAsyncDisposable
     public int Sql(string sql, params (string Name, object Value)[] args)
     {
         using SqliteConnection c = Replication.Store.Open();
-        using SqliteCommand cmd = c.CreateCommand();
-        cmd.CommandText = sql;
-        foreach ((string name, object value) in args)
-            cmd.Parameters.AddWithValue(name, value);
-        return cmd.ExecuteNonQuery();
+        return TestDb.Exec(c, sql, args);
     }
 
     public ValueTask DisposeAsync() => Replication.DisposeAsync();

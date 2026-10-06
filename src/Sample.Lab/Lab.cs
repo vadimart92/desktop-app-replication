@@ -59,6 +59,13 @@ public sealed class Lab : IAsyncDisposable
         await WaitAsync(() => c.Agent.GetStatus().State == AgentState.Online, timeout ?? TimeSpan.FromSeconds(30), $"{c.Label} не вийшов онлайн");
     }
 
+    /// <summary>Turns the link off and waits until the client is offline.</summary>
+    public async Task GoOfflineAsync(ClientNode c, TimeSpan? timeout = null)
+    {
+        c.Link = false;
+        await WaitAsync(() => c.Agent.GetStatus().State == AgentState.Offline, timeout ?? TimeSpan.FromSeconds(30), $"{c.Label} не вийшов з мережі");
+    }
+
     public static async Task WaitAsync(Func<bool> condition, TimeSpan timeout, string what)
     {
         DateTimeOffset until = DateTimeOffset.UtcNow + timeout;

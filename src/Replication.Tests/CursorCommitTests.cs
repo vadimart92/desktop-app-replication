@@ -16,7 +16,7 @@ public class CursorCommitTests
         await lab.SettleAsync();
         using SqliteConnection c = lab.C1.Replication.Store.Open();
         // The rows of the next batch are written, then saving the cursors fails and the transaction rolls back.
-        Exec(c, """
+        TestDb.Exec(c, """
             CREATE TABLE _test_fault(armed INTEGER NOT NULL);
             INSERT INTO _test_fault VALUES (1);
             CREATE TRIGGER _test_fault_ins BEFORE INSERT ON _sync_cursors
@@ -28,7 +28,7 @@ public class CursorCommitTests
         await lab.Owner.AddLogAsync(5);
         await lab.Owner.NewItemAsync("Ліхтарик", category: "Склад");
         await Lab.WaitAsync(() => lab.C1.Agent.GetStatus().LastError?.Contains("injected", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(30), "збереження курсорів не впало");
-        Exec(c, "UPDATE _test_fault SET armed = 0");
+        TestDb.Exec(c, "UPDATE _test_fault SET armed = 0");
         await lab.SettleAsync();
 
         Assert.Empty(Inspect.Diff(lab.Owner, lab.C1));
@@ -46,12 +46,5 @@ public class CursorCommitTests
         copy.AddRange(10, 20);
         Assert.Equal("10 + (20,30]", published.ToString());
         Assert.Equal("30 + (40,50]", copy.ToString());
-    }
-
-    private static void Exec(SqliteConnection c, string sql)
-    {
-        using SqliteCommand cmd = c.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
     }
 }

@@ -194,8 +194,7 @@ internal sealed class GraphPair : IAsyncDisposable
 
     public static async Task<GraphPair> StartAsync(Action<GraphDbContext>? seedOwner = null)
     {
-        string dir = Path.Combine(Path.GetTempPath(), "replication-tests", Guid.NewGuid().ToString("N")[..12]);
-        Directory.CreateDirectory(dir);
+        string dir = TestDb.NewDir();
         var log = new SyncLog();
         string ownerPath = Path.Combine(dir, "owner.db");
         SyncModel model;
