@@ -22,7 +22,7 @@ internal sealed class SyncGrpcService(OwnerStore store, SnapshotStore snapshots)
 
     public override async Task Snapshot(SnapshotRequest request, IServerStreamWriter<SnapshotChunk> responseStream, ServerCallContext context)
     {
-        SnapshotStore.Snap snap = (request.SnapshotId.Length > 0 ? snapshots.Find(request.SnapshotId) : null) ?? await snapshots.CreateAsync(request.ClientId);
+        SnapshotStore.Snap snap = (request.SnapshotId.Length > 0 ? snapshots.Find(request.SnapshotId) : null) ?? await snapshots.CreateAsync(request.ClientId, context.CancellationToken);
         long offset = snap.Id == request.SnapshotId ? request.Offset : 0;
         if (offset > 0)
             store.Options.Log.Write("owner", $"знімок {snap.Id}: продовження з {offset / 1024} КБ");
