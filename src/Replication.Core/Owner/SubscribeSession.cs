@@ -246,7 +246,7 @@ internal sealed class SubscribeSession
         foreach (SyncTable t in PriorityTables())
         {
             CursorState k = _mirror[t.Name];
-            List<(long Lo, long Hi)> gaps = k.Gaps(head);
+            IReadOnlyList<(long Lo, long Hi)> gaps = k.Gaps(head);
             List<(long Lo, long Hi)> nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
             if (nonEmpty.Count == 0)
             {

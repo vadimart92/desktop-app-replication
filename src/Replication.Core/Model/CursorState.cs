@@ -8,6 +8,8 @@ namespace Replication.Model;
 /// </summary>
 public sealed class CursorState
 {
+    private readonly List<(long Lo, long Hi)> _ranges = [];
+
     public CursorState(long cursor, IEnumerable<(long Lo, long Hi)>? ranges = null)
     {
         Cursor = cursor;
@@ -21,13 +23,13 @@ public sealed class CursorState
     public long Cursor { get; private set; }
 
     /// <summary>Received ranges above the cursor, ascending, not touching each other or the cursor.</summary>
-    public List<(long Lo, long Hi)> Ranges { get; } = [];
+    public IReadOnlyList<(long Lo, long Hi)> Ranges => _ranges;
 
     /// <summary>A copy in O(ranges): they are already merged, so they are not added one by one.</summary>
     public CursorState Clone()
     {
         var k = new CursorState(Cursor);
-        k.Ranges.AddRange(Ranges);
+        k._ranges.AddRange(_ranges);
         return k;
     }
 
@@ -36,43 +38,43 @@ public sealed class CursorState
     {
         if (hi <= lo || hi <= Cursor)
             return;
-        List<(long Lo, long Hi)> all = Ranges.Append((Lo: Math.Max(lo, Cursor), Hi: hi)).OrderBy(r => r.Lo).ToList();
-        Ranges.Clear();
+        List<(long Lo, long Hi)> all = _ranges.Append((Lo: Math.Max(lo, Cursor), Hi: hi)).OrderBy(r => r.Lo).ToList();
+        _ranges.Clear();
         foreach ((long Lo, long Hi) r in all)
         {
-            if (Ranges.Count > 0 && r.Lo <= Ranges[^1].Hi)
-                Ranges[^1] = (Ranges[^1].Lo, Math.Max(Ranges[^1].Hi, r.Hi));
+            if (_ranges.Count > 0 && r.Lo <= _ranges[^1].Hi)
+                _ranges[^1] = (_ranges[^1].Lo, Math.Max(_ranges[^1].Hi, r.Hi));
             else
-                Ranges.Add(r);
+                _ranges.Add(r);
         }
-        while (Ranges.Count > 0 && Ranges[0].Lo <= Cursor)
+        while (_ranges.Count > 0 && _ranges[0].Lo <= Cursor)
         {
-            Cursor = Math.Max(Cursor, Ranges[0].Hi);
-            Ranges.RemoveAt(0);
+            Cursor = Math.Max(Cursor, _ranges[0].Hi);
+            _ranges.RemoveAt(0);
         }
     }
 
     /// <summary>Head(V) in the online phase lifts the cursor of a table that has no open ranges (6.4).</summary>
     public void LiftTo(long v)
     {
-        if (Ranges.Count == 0 && v > Cursor)
+        if (_ranges.Count == 0 && v > Cursor)
             Cursor = v;
     }
 
     public void Reset(long cursor)
     {
         Cursor = cursor;
-        Ranges.Clear();
+        _ranges.Clear();
     }
 
     /// <summary>Not yet received ranges between the cursor, the received ranges and the head H, highest first.</summary>
-    public List<(long Lo, long Hi)> Gaps(long head)
+    public IReadOnlyList<(long Lo, long Hi)> Gaps(long head)
     {
         var gaps = new List<(long, long)>();
         long top = head;
-        for (int i = Ranges.Count - 1; i >= 0; i--)
+        for (int i = _ranges.Count - 1; i >= 0; i--)
         {
-            (long lo, long hi) = Ranges[i];
+            (long lo, long hi) = _ranges[i];
             if (top > hi)
                 gaps.Add((hi, top));
             top = Math.Min(top, lo);
@@ -88,7 +90,7 @@ public sealed class CursorState
         if (!withRanges)
             return tc;
         long prev = Cursor;
-        foreach ((long lo, long hi) in Ranges)
+        foreach ((long lo, long hi) in _ranges)
         {
             // Compact: differences between neighbouring bounds, varint (6.4, "how many ranges accumulate").
             tc.RangeDeltas.Add(lo - prev);
@@ -113,5 +115,5 @@ public sealed class CursorState
     }
 
     public override string ToString() =>
-        Ranges.Count == 0 ? Cursor.ToString() : $"{Cursor} + {string.Join(" ", Ranges.Select(r => $"({r.Lo},{r.Hi}]"))}";
+        _ranges.Count == 0 ? Cursor.ToString() : $"{Cursor} + {string.Join(" ", _ranges.Select(r => $"({r.Lo},{r.Hi}]"))}";
 }
