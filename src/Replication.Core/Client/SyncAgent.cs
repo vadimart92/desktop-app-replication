@@ -691,8 +691,8 @@ public sealed class SyncAgent : IAsyncDisposable
                                 if (cur < r.Version)
                                     _conn.Exec("UPDATE _sync_outbox SET sent = 2, expected_version = @v WHERE id = @id", tx, ("@v", r.Version), ("@id", e.Id));
                                 break;
-                            case OutboxKind.PredicateDelete when r.Changed.Count > 0:
-                                w.Note(_conn, tx, $"не видалено {r.Changed.Count}: змінено або створено на інстансі після того, як ви бачили дані; вони лишаються і приїдуть потоком");
+                            case OutboxKind.PredicateDelete when KeptAfterBulkDelete(tx, r) is > 0 and int kept:
+                                w.Note(_conn, tx, $"не видалено {kept}: змінено або створено на інстансі після того, як ви бачили дані; вони лишаються і приїдуть потоком");
                                 break;
                             case OutboxKind.Archive when r.Changed.Count + r.Children.Count > 0:
                                 ArchiveLeftovers(tx, w, r, e, logs);
@@ -721,6 +721,10 @@ public sealed class SyncAgent : IAsyncDisposable
             DataChanged?.Invoke(w.TouchedTables);
         StatusChanged?.Invoke();
     }
+
+    /// <summary>Rows the owner kept from a bulk delete; a row that also went by key is gone all the same (8.6, 11.6).</summary>
+    private int KeptAfterBulkDelete(SqliteTransaction tx, ActionResult r) =>
+        r.Changed.Count(x => ClientStore.FindEntry(_conn, tx, _instance!, x.Tbl, PkText(x.Pk)) is not { Kind: OutboxKind.Delete });
 
     private static string RejectedWhy(string reason) => reason switch
     {
@@ -872,7 +876,8 @@ public sealed class SyncAgent : IAsyncDisposable
 
     /// <summary>
     /// Deletes the rows matching <paramref name="predicate"/> locally and queues one predicate action with the version V the
-    /// replica is complete up to. If the replica has ranges above the cursor, the keys go instead.
+    /// replica is complete up to. If the replica has ranges above the cursor, the keys go instead. Rows with their own
+    /// outbox actions and rows moved to the archive (11.6) go by key as well.
     /// </summary>
     public async Task<int> DeleteWhereAsync(string table, Predicate predicate)
     {
@@ -907,12 +912,20 @@ public sealed class SyncAgent : IAsyncDisposable
             {
                 // Rows with their own actions in the outbox go by key, the rest as one predicate.
                 List<string> own = ids.Where(id => ClientStore.FindEntry(c, tx, _instance, table, id) is not null).ToList();
+                var archived = new List<string>();
                 foreach (string id in ids)
-                    ArchiveGuard.DeleteOrArchive(c, tx, _store.Model, _instance, t, id);
-                foreach (string id in own)
+                {
+                    // A row moved to the archive misses the stream's updates, so the owner must not keep it: its delete goes by key, as a local one (11.6).
+                    if (ArchiveGuard.DeleteOrArchive(c, tx, _store.Model, _instance, t, id) && !own.Contains(id))
+                        archived.Add(id);
+                }
+
+                foreach (string id in own.Concat(archived))
                     ClientStore.Put(c, tx, _instance, table, id, OutboxKind.Delete, null, OutboxClass.Bulk);
                 ClientStore.Insert(c, tx, _instance, table, null, OutboxKind.PredicateDelete, OutboxClass.Bulk, predicate: predicate.Serialize(), expectedVersion: k.Cursor);
-                Log($"масове видалення {count} записів: у черзі одна дія {predicate} і SyncVersion ≤ {k.Cursor}{(own.Count > 0 ? $", ключами ще {own.Count} (мають свої дії в черзі)" : "")}");
+                Log($"масове видалення {count} записів: у черзі одна дія {predicate} і SyncVersion ≤ {k.Cursor}"
+                    + (own.Count > 0 ? $", ключами ще {own.Count} (мають свої дії в черзі)" : "")
+                    + (archived.Count > 0 ? $", ключами ще {archived.Count} (перенесені в архів, бо на них посилаються архівні записи)" : ""));
             }
             ClientStore.DropOrphanEntries(c, tx, _store.Model, _instance);
             tx.Commit();

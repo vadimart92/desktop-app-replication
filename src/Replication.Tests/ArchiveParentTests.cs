@@ -59,6 +59,21 @@ public sealed class ArchiveParentTests
     }
 
     [Fact]
+    public async Task Bulk_delete_moves_the_parent_to_the_archive_although_the_owner_changed_it_after_V()
+    {
+        await using Lab lab = await Lab.StartAsync();
+        await ArchiveCatalogAsync(lab);
+        // Offline, so the automation's change is newer than the version V the predicate carries (8.6).
+        await lab.GoOfflineAsync(lab.C1);
+        OwnerSql.Exec(lab, "UPDATE \"Category\" SET \"ModifiedOn\" = '2030-01-01 00:00:00' WHERE \"Name\" = 'Офіс'");
+        await lab.C1.Agent.DeleteWhereAsync("Category", new Predicate("Name", "Офіс"));
+        await lab.SyncNowAsync(lab.C1);
+        await lab.SettleAsync();
+        AssertArchiveIntact(lab);
+        Assert.DoesNotContain(lab.C1.Replication.Store.Notes(), n => n.Text.StartsWith("не видалено", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Ignored_reply_moves_the_parent_to_the_archive()
     {
         await using Lab lab = await Lab.StartAsync();
