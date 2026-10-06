@@ -97,7 +97,9 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private sealed record Download(string Id, string Path, long Total);
 
-    private sealed record ArchiveRetry(string Table, string Pk, string Why, long Version, int Tries);
+    private enum ArchiveLeftover { Changed, Children }
+
+    private sealed record ArchiveRetry(string Table, string Pk, ArchiveLeftover Why, long Version, int Tries);
 
     public SyncAgent(ClientStore store, string address, string name, AgentOptions? options = null, SyncLog? log = null, string? label = null)
     {
@@ -997,7 +999,7 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         string archive = SyncColumns.ArchiveOf(_instance!);
         var names = new List<string>();
-        foreach ((string why, Google.Protobuf.Collections.RepeatedField<RowRef> list) in new[] { ("changed", r.Changed), ("children", r.Children) })
+        foreach ((ArchiveLeftover why, Google.Protobuf.Collections.RepeatedField<RowRef> list) in new[] { (ArchiveLeftover.Changed, r.Changed), (ArchiveLeftover.Children, r.Children) })
         {
             foreach (RowRef x in list)
             {
@@ -1005,7 +1007,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 long v = _conn.Scalar<long>($"SELECT SyncVersion FROM {Q(x.Tbl)} WHERE Id = @id", tx, ("@id", pk));
                 _conn.Exec($"UPDATE {Q(x.Tbl)} SET InstanceId = @i WHERE Id = @id AND InstanceId = @a", tx, ("@i", _instance), ("@id", pk), ("@a", archive));
                 names.Add(ClientStore.Label(_conn, tx, _store.Model[x.Tbl], pk));
-                if (why == "changed")
+                if (why == ArchiveLeftover.Changed)
                     w.NeedFull.Add(x);
                 _archiveRetry.Add(new ArchiveRetry(x.Tbl, pk, why, v, _archiveTries.GetValueOrDefault(pk) + 1));
                 w.TouchedTables.Add(x.Tbl);
@@ -1036,7 +1038,7 @@ public sealed class SyncAgent : IAsyncDisposable
     /// <summary>Removes and returns the first retry that is ready; one that keeps failing gets a note instead. Called under the gate.</summary>
     private ArchiveRetry? TakeReadyArchiveRetry()
     {
-        foreach (string pass in new[] { "changed", "children" })
+        foreach (ArchiveLeftover pass in new[] { ArchiveLeftover.Changed, ArchiveLeftover.Children })
         {
             foreach (ArchiveRetry rt in _archiveRetry.Where(x => x.Why == pass).ToList())
             {
@@ -1046,7 +1048,7 @@ public sealed class SyncAgent : IAsyncDisposable
                     _archiveRetry.Remove(rt);
                     continue;
                 }
-                bool ok = pass == "changed"
+                bool ok = pass == ArchiveLeftover.Changed
                     ? v > rt.Version
                     : !_archiveRetry.Any(o => o != rt && IsChild(o, rt));
                 if (!ok)
