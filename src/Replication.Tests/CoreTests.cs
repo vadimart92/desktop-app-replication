@@ -1,6 +1,4 @@
 using Replication.Model;
-using Replication.Owner;
-using Sample.Lab;
 using Xunit;
 
 namespace Replication.Tests;
@@ -40,24 +38,5 @@ public class CursorStateTests
         b.LiftTo(20);
         Assert.Equal(20, a.Cursor);
         Assert.Equal(5, b.Cursor);
-    }
-}
-
-public class EmptyReplicaTests
-{
-    [Fact]
-    public async Task Empty_replica_fills_from_the_stream_after_tombstones_were_purged()
-    {
-        await using Lab lab = await Sample.Lab.Lab.StartAsync(configureOwner: o => o.CatchupBatchRows = 4);
-        await lab.Owner.DeleteItemAsync("Скотч");
-        await lab.Owner.DeleteItemAsync("Маркери");
-        // No clients yet: every tombstone goes, purged_version > 0.
-        OwnerStore.PurgeResult purged = await lab.Owner.PurgeAsync();
-        Assert.True(purged.PurgedVersion > 0);
-
-        lab.C2.Agent.Options.SnapshotMode = Replication.Client.SnapshotMode.EmptyReplica;
-        await lab.SyncNowAsync(lab.C2);
-        await lab.SettleAsync();
-        Assert.Empty(Sample.Lab.Inspect.Diff(lab.Owner, lab.C2));
     }
 }

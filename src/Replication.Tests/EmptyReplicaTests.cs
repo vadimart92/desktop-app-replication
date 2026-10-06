@@ -7,9 +7,25 @@ using Xunit;
 
 namespace Replication.Tests;
 
-/// <summary>Design 6.2, 6.3: a replica the owner can no longer catch up is replaced, and subscribers hear about it.</summary>
-public class SnapshotFlowTests
+/// <summary>Design 6.2, 6.3: a replica the owner can no longer catch up is replaced by an empty one that fills from the stream, and subscribers hear about it.</summary>
+public class EmptyReplicaTests
 {
+    [Fact]
+    public async Task Empty_replica_fills_from_the_stream_after_tombstones_were_purged()
+    {
+        await using Lab lab = await Lab.StartAsync(configureOwner: o => o.CatchupBatchRows = 4);
+        await lab.Owner.DeleteItemAsync("Скотч");
+        await lab.Owner.DeleteItemAsync("Маркери");
+        // No clients yet: every tombstone goes, purged_version > 0.
+        OwnerStore.PurgeResult purged = await lab.Owner.PurgeAsync();
+        Assert.True(purged.PurgedVersion > 0);
+
+        lab.C2.Agent.Options.SnapshotMode = SnapshotMode.EmptyReplica;
+        await lab.SyncNowAsync(lab.C2);
+        await lab.SettleAsync();
+        Assert.Empty(Inspect.Diff(lab.Owner, lab.C2));
+    }
+
     [Fact]
     public async Task Empty_replica_over_an_existing_one_reports_every_table_changed()
     {
