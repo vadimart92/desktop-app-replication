@@ -76,6 +76,7 @@ public sealed class SyncAgent : IAsyncDisposable
     private readonly List<RowRef> _needFull = [];
     private readonly List<ArchiveRetry> _archiveRetry = [];
     private readonly List<(DateTimeOffset At, long Remaining)> _lag = [];
+    private readonly object _cursorsLock = new();
     private Dictionary<string, CursorState> _cursors;
     private CancellationTokenSource? _sessionCts;
     private Func<SubscribeMessage, Task>? _write;
@@ -129,7 +130,7 @@ public sealed class SyncAgent : IAsyncDisposable
 
     public CursorState CursorOf(string table)
     {
-        lock (_cursors)
+        lock (_cursorsLock)
             return _cursors[table].Clone();
     }
 
@@ -137,7 +138,7 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         get
         {
-            lock (_cursors)
+            lock (_cursorsLock)
                 return _cursors.Values.Min(k => k.Cursor);
         }
     }
@@ -220,7 +221,7 @@ public sealed class SyncAgent : IAsyncDisposable
             inflight = (int)c.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent = 1", null, ("@i", _instance));
         }
         Dictionary<string, string> cursors;
-        lock (_cursors)
+        lock (_cursorsLock)
             cursors = _cursors.ToDictionary(x => x.Key, x => x.Value.ToString());
         return new AgentStatus(_state, _link, _instance, _remaining, _lagWarning, _link && _state is AgentState.Catchup or AgentState.Online ? null : _offlineSince,
             pending, deletes, inflight, _snapshotProgress, _lastError, cursors);
@@ -346,7 +347,10 @@ public sealed class SyncAgent : IAsyncDisposable
             }
 
             Start start = BuildStart();
-            Log($"→ Start: схема {start.SchemaVersion}, {(start.InstanceId.Length > 0 ? $"instance_id {start.InstanceId}, " + string.Join(", ", _cursors.Select(x => $"{x.Key}={x.Value}")) : "репліки нема")}");
+            string cursors;
+            lock (_cursorsLock)
+                cursors = string.Join(", ", _cursors.Select(x => $"{x.Key}={x.Value}"));
+            Log($"→ Start: схема {start.SchemaVersion}, {(start.InstanceId.Length > 0 ? $"instance_id {start.InstanceId}, " + cursors : "репліки нема")}");
             await Write(new SubscribeMessage { Start = start });
             if (!await call.ResponseStream.MoveNext(ct))
                 throw new IOException("власник закрив потік");
@@ -398,7 +402,7 @@ public sealed class SyncAgent : IAsyncDisposable
         var s = new Start { ClientId = _store.ClientId, SchemaVersion = Options.SchemaVersion, InstanceId = _instance ?? "" };
         if (_instance is not null)
         {
-            lock (_cursors)
+            lock (_cursorsLock)
             {
                 foreach ((string t, CursorState k) in _cursors)
                     s.Cursors.Add(k.ToWire(t));
@@ -434,7 +438,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 continue;
             _ackDirty = false;
             var ack = new Ack();
-            lock (_cursors)
+            lock (_cursorsLock)
             {
                 foreach ((string t, CursorState k) in _cursors)
                     ack.Cursors.Add(k.ToWire(t, withRanges: false));
@@ -458,7 +462,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             w = new ReplicaWriter(_store.Model, _instance!);
             using SqliteTransaction tx = _conn.BeginTransaction();
-            lock (_cursors)
+            lock (_cursorsLock)
             {
                 foreach (RangeExtra x in m.Extra)
                     _cursors[x.Tbl].AddRange(x.Lo, x.Hi);
@@ -772,7 +776,7 @@ public sealed class SyncAgent : IAsyncDisposable
                                 break;
                             case OutboxKind.Delete when r.HasVersion:
                                 long cur;
-                                lock (_cursors)
+                                lock (_cursorsLock)
                                     cur = _cursors[e.Table].Cursor;
                                 if (cur < r.Version)
                                     _conn.Exec("UPDATE _sync_outbox SET sent = 2, expected_version = @v WHERE id = @id", tx, ("@v", r.Version), ("@id", e.Id));
@@ -848,7 +852,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 _conn.Exec("UPDATE _sync_instances SET instance = @i WHERE address = @a", tx, ("@i", sr.InstanceId), ("@a", Address));
                 tx.Commit();
                 _instance = sr.InstanceId;
-                lock (_cursors)
+                lock (_cursorsLock)
                     _cursors = NewCursors();
             }
             finally
@@ -865,9 +869,14 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             (string inst, int carried, List<string> notes) = ReplicaWriter.InstallSnapshot(_store, Address, path);
             _instance = inst;
-            lock (_cursors)
+            long cursor;
+            lock (_cursorsLock)
+            {
                 _cursors = _store.LoadCursors(_conn, inst);
-            Log($"знімок перевірено і влито однією транзакцією: рядки InstanceId = {inst} замінено, курсори = {_cursors.Values.First().Cursor}{(carried > 0 ? $", у нову репліку перенесено {carried} дій зі значеннями" : "")}", SyncLogLevel.Ok);
+                cursor = _cursors.Values.First().Cursor;
+            }
+
+            Log($"знімок перевірено і влито однією транзакцією: рядки InstanceId = {inst} замінено, курсори = {cursor}{(carried > 0 ? $", у нову репліку перенесено {carried} дій зі значеннями" : "")}", SyncLogLevel.Ok);
             foreach (string n in notes)
                 Log(n, SyncLogLevel.Bad);
         }
@@ -967,7 +976,7 @@ public sealed class SyncAgent : IAsyncDisposable
             if (count == 0)
                 return 0;
             CursorState k;
-            lock (_cursors)
+            lock (_cursorsLock)
                 k = _cursors[table].Clone();
             if (k.Ranges.Count > 0)
             {
@@ -1060,7 +1069,7 @@ public sealed class SyncAgent : IAsyncDisposable
             foreach ((string table, string pk) in set)
                 _conn.Exec($"UPDATE {Q(table)} SET InstanceId = @a WHERE Id = @id AND InstanceId = @i", tx, ("@a", archive), ("@id", pk), ("@i", _instance));
             long v;
-            lock (_cursors)
+            lock (_cursorsLock)
                 v = _cursors.Values.Min(k => k.Cursor);
             ClientStore.Insert(_conn, tx, _instance, set[0].Table, null, OutboxKind.Archive, OutboxClass.Bulk, predicate: ArchiveSet.Serialize(set), expectedVersion: v);
             tx.Commit();
