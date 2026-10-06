@@ -13,9 +13,8 @@ public sealed class OwnerPanelViewModelTests
         string dir = Path.Combine(Path.GetTempPath(), "replication-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         await using OwnerNode owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), new SyncLog());
-        using (var c = new SqliteConnection($"Data Source={owner.DbPath}"))
+        using (SqliteConnection c = owner.Store.Open())
         {
-            c.Open();
             using SqliteCommand cmd = c.CreateCommand();
             cmd.CommandText = "CREATE TRIGGER clock_fails BEFORE UPDATE OF clock_offset ON _sync_meta BEGIN SELECT RAISE(ABORT, 'clock is broken'); END";
             cmd.ExecuteNonQuery();
