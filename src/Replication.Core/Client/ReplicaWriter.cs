@@ -144,14 +144,17 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         return false;
     }
 
-    /// <summary>Deletes a row of this instance with its children and their outbox entries; returns their labels.</summary>
+    /// <summary>
+    /// Deletes a row of this instance with its children and their outbox entries; returns their labels. A row that
+    /// archived rows point to goes to the archive instead (11.6).
+    /// </summary>
     public void RemoveWithChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone)
     {
         if (c.Scalar<string>($"SELECT InstanceId FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @inst", tx, ("@id", pk), ("@inst", Instance)) is null)
             return;
         gone.Add(ClientStore.Label(c, tx, t, pk));
         RemoveChildren(c, tx, t, pk, gone);
-        c.Exec($"DELETE FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @inst", tx, ("@id", pk), ("@inst", Instance));
+        ArchiveGuard.DeleteOrArchive(c, tx, model, Instance, t, pk);
         if (ClientStore.FindEntry(c, tx, Instance, t.Name, pk) is { } e)
             ClientStore.Remove(c, tx, e.Id);
         TouchedTables.Add(t.Name);
