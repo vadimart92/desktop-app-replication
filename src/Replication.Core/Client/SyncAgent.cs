@@ -1122,14 +1122,28 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         if (_archiveRetry.Count == 0)
             return;
-        List<ArchiveRetry> ready = [];
+        ArchiveRetry? next;
+        await _gate.WaitAsync();
+        try
+        {
+            next = TakeReadyArchiveRetry();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+        if (next is not null)
+            await ArchiveCoreAsync([(next.Table, next.Pk)], next.Tries);
+    }
+
+    /// <summary>Removes and returns the first retry that is ready; one that keeps failing gets a note instead. Called under the gate.</summary>
+    private ArchiveRetry? TakeReadyArchiveRetry()
+    {
         foreach (string pass in new[] { "changed", "children" })
         {
             foreach (ArchiveRetry rt in _archiveRetry.Where(x => x.Why == pass).ToList())
             {
-                long? v;
-                using (SqliteConnection c = _store.Open())
-                    v = c.Scalar<long?>($"SELECT SyncVersion FROM {Q(rt.Table)} WHERE Id = @id AND InstanceId = @i", null, ("@id", rt.Pk), ("@i", _instance));
+                long? v = _conn.Scalar<long?>($"SELECT SyncVersion FROM {Q(rt.Table)} WHERE Id = @id AND InstanceId = @i", null, ("@id", rt.Pk), ("@i", _instance));
                 if (v is null)
                 {
                     _archiveRetry.Remove(rt);
@@ -1143,14 +1157,13 @@ public sealed class SyncAgent : IAsyncDisposable
                 _archiveRetry.Remove(rt);
                 if (rt.Tries >= 3)
                 {
-                    using SqliteConnection c = _store.Open();
-                    ClientStore.Note(c, null, _instance!, $"{ClientStore.Label(c, null, _store.Model[rt.Table], rt.Pk)} лишився на власнику: автоматика постійно його змінює");
+                    ClientStore.Note(_conn, null, _instance!, $"{ClientStore.Label(_conn, null, _store.Model[rt.Table], rt.Pk)} лишився на власнику: автоматика постійно його змінює");
                     continue;
                 }
-                await ArchiveCoreAsync([(rt.Table, rt.Pk)], rt.Tries);
-                return;
+                return rt;
             }
         }
+        return null;
     }
 
     private bool IsChild(ArchiveRetry child, ArchiveRetry parent) =>
