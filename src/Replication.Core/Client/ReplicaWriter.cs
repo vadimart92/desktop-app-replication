@@ -164,15 +164,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
     {
         foreach ((SyncTable child, SyncForeignKey fk) in model.ChildrenOf(t.Name))
         {
-            var ids = new List<string>();
-            using (SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @inst", tx, ("@p", pk), ("@inst", Instance)))
-            using (SqliteDataReader r = cmd.ExecuteReader())
-            {
-                while (r.Read())
-                    ids.Add(r.GetString(0));
-            }
-
-            foreach (string id in ids)
+            foreach (string id in ClientStore.ChildIds(c, tx, Instance, child, fk, pk))
                 RemoveWithChildren(c, tx, child, id, gone);
         }
     }

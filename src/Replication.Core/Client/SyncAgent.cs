@@ -1051,15 +1051,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3).
                 foreach ((SyncTable child, SyncForeignKey fk) in _store.Model.ChildrenOf(table))
                 {
-                    var ids = new List<string>();
-                    using (SqliteCommand cmd = _conn.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", _instance)))
-                    using (SqliteDataReader r = cmd.ExecuteReader())
-                    {
-                        while (r.Read())
-                            ids.Add(r.GetString(0));
-                    }
-
-                    foreach (string id in ids)
+                    foreach (string id in ClientStore.ChildIds(_conn, tx, _instance, child, fk, pk))
                         Add(child.Name, id);
                 }
             }

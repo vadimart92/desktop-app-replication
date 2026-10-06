@@ -18,7 +18,7 @@ internal static class ArchiveGuard
         {
             if (c.Scalar<long>($"SELECT EXISTS(SELECT 1 FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @a)", tx, ("@p", pk), ("@a", archive)) != 0)
                 return true;
-            foreach (string id in LiveChildren(c, tx, instance, child, fk, pk))
+            foreach (string id in ClientStore.ChildIds(c, tx, instance, child, fk, pk))
             {
                 if (HasArchiveBelow(c, tx, model, instance, child, id))
                     return true;
@@ -41,22 +41,12 @@ internal static class ArchiveGuard
         }
         foreach ((SyncTable child, SyncForeignKey fk) in model.ChildrenOf(t.Name))
         {
-            foreach (string id in LiveChildren(c, tx, instance, child, fk, pk))
+            foreach (string id in ClientStore.ChildIds(c, tx, instance, child, fk, pk))
                 DeleteOrArchive(c, tx, model, instance, child, id);
         }
 
         c.Exec($"UPDATE {Q(t.Name)} SET InstanceId = @a WHERE Id = @id AND InstanceId = @i", tx,
             ("@a", SyncColumns.ArchiveOf(instance)), ("@id", pk), ("@i", instance));
         return true;
-    }
-
-    private static List<string> LiveChildren(SqliteConnection c, SqliteTransaction? tx, string instance, SyncTable child, SyncForeignKey fk, string pk)
-    {
-        var ids = new List<string>();
-        using SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", instance));
-        using SqliteDataReader r = cmd.ExecuteReader();
-        while (r.Read())
-            ids.Add(r.GetString(0));
-        return ids;
     }
 }

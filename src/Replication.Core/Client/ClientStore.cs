@@ -301,4 +301,15 @@ public sealed class ClientStore
             return $"«{name}»";
         return Short(pk);
     }
+
+    /// <summary>Ids of the live rows of the instance that point to the row through the FK.</summary>
+    internal static List<string> ChildIds(SqliteConnection c, SqliteTransaction? tx, string instance, SyncTable child, SyncForeignKey fk, string pk)
+    {
+        var ids = new List<string>();
+        using SqliteCommand cmd = c.Cmd($"SELECT Id FROM {Q(child.Name)} WHERE {Q(fk.Column)} = @p AND InstanceId = @i", tx, ("@p", pk), ("@i", instance));
+        using SqliteDataReader r = cmd.ExecuteReader();
+        while (r.Read())
+            ids.Add(r.GetString(0));
+        return ids;
+    }
 }
