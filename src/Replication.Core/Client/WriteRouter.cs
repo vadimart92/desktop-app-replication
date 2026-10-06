@@ -137,7 +137,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
                 switch (e.State)
                 {
                     case EntityState.Added:
-                        changes.Add(new Change(t, instance!, pk, OutboxKind.Create, [.. t.Columns]));
+                        changes.Add(new Change(t, instance!, pk, OutboxKind.Create, []));
                         break;
                     case EntityState.Modified:
                         List<string> cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
