@@ -92,6 +92,7 @@ internal sealed class SubscribeSession
         }
 
         Dictionary<string, CursorState> cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
+        List<(string Name, CursorState K)> states = Model.Tables.Select(t => (t.Name, K: cursors.GetValueOrDefault(t.Name) ?? new CursorState(0))).ToList();
         long head;
         string? reason = null;
         // Checked and registered in one write transaction, as is every purge batch (10.2): either a batch ran first and
@@ -100,12 +101,10 @@ internal sealed class SubscribeSession
         {
             head = _store.Head(conn, tx);
             long purged = _store.Purged(conn, tx);
-            long minC = Model.Tables.Select(t => cursors.TryGetValue(t.Name, out CursorState? c) ? c.Cursor : 0).DefaultIfEmpty(0).Min();
+            long minC = states.Select(x => x.K.Cursor).DefaultIfEmpty(0).Min();
             // A table that is still empty (cursor 0, no ranges) has no rows whose deletion it could miss, so forgotten
             // tombstones do not matter for it; this lets an empty replica (6.3) start after a purge (6.2).
-            (string Name, CursorState K) behind = Model.Tables
-                .Select(t => (t.Name, K: cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0)))
-                .FirstOrDefault(x => !(x.K.Cursor == 0 && x.K.Ranges.Count == 0) && x.K.Cursor < purged);
+            (string Name, CursorState K) behind = states.FirstOrDefault(x => !(x.K.Cursor == 0 && x.K.Ranges.Count == 0) && x.K.Cursor < purged);
             if (string.IsNullOrEmpty(start.InstanceId))
                 reason = "репліки нема";
             else if (start.InstanceId != _store.InstanceId)
@@ -116,8 +115,8 @@ internal sealed class SubscribeSession
                 reason = $"курсор {minC} > version {head}";
             if (reason is null)
             {
-                foreach (SyncTable t in Model.Tables)
-                    _mirror[t.Name] = cursors.TryGetValue(t.Name, out CursorState? c) ? c : new CursorState(0);
+                foreach ((string name, CursorState k) in states)
+                    _mirror[name] = k;
                 _open = [.. start.OpenTables];
                 _store.SaveCursors(conn, tx, _clientId, _mirror.ToDictionary(x => x.Key, x => x.Value.Cursor));
                 _store.MarkSubscribed(_clientId, true);
