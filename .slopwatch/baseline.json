@@ -1,27 +1,9 @@
 {
   "version": 1,
   "createdAt": "2026-10-05T20:40:07.9750544+00:00",
-  "updatedAt": "2026-10-05T20:40:07.9814505+00:00",
+  "updatedAt": "2026-10-06T05:31:56.5625791+00:00",
   "description": "Initial baseline created by 'slopwatch init' on 2026-10-05 20:40:07 UTC",
   "entries": [
-    {
-      "hash": "6a7a260450bad1b5",
-      "ruleId": "SW005",
-      "filePath": "src/Directory.Build.props",
-      "lineNumber": 7,
-      "codeSnippet": "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
-      "message": "TreatWarningsAsErrors is disabled - warnings will not fail the build",
-      "baselinedAt": "2026-10-05T20:40:07.9812255+00:00"
-    },
-    {
-      "hash": "7b64d86bd005a9da",
-      "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Client/SyncAgent.cs",
-      "lineNumber": 333,
-      "codeSnippet": "catch { /* the first failure is rethrown below */ }",
-      "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-10-05T20:40:07.9813922+00:00"
-    },
     {
       "hash": "49479122a8f064b7",
       "ruleId": "SW003",
@@ -68,15 +50,6 @@
       "baselinedAt": "2026-10-05T20:40:07.9814408+00:00"
     },
     {
-      "hash": "ffb287f066754cb4",
-      "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Owner/SubscribeSession.cs",
-      "lineNumber": 66,
-      "codeSnippet": "catch { /* stream closed */ }",
-      "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-10-05T20:40:07.981445+00:00"
-    },
-    {
       "hash": "a4902b939b291638",
       "ruleId": "SW003",
       "filePath": "src/Sample.Lab/Lab.cs",
@@ -84,6 +57,24 @@
       "codeSnippet": "catch (OperationCanceledException) { }",
       "message": "Empty catch block swallows exceptions without handling",
       "baselinedAt": "2026-10-05T20:40:07.9814502+00:00"
+    },
+    {
+      "hash": "b1542fc53d3ea81c",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Client/SyncAgent.cs",
+      "lineNumber": 386,
+      "codeSnippet": "catch\r\n            {\r\n                // The first failure is rethrown below.\r\n            }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-06T05:31:56.5623862+00:00"
+    },
+    {
+      "hash": "89697910f2bf9248",
+      "ruleId": "SW003",
+      "filePath": "src/Replication.Core/Owner/SubscribeSession.cs",
+      "lineNumber": 74,
+      "codeSnippet": "catch\r\n            {\r\n                // Stream closed.\r\n            }",
+      "message": "Empty catch block swallows exceptions without handling",
+      "baselinedAt": "2026-10-06T05:31:56.5625428+00:00"
     }
   ]
 }

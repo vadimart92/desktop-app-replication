@@ -823,7 +823,7 @@ public sealed class SyncAgent : IAsyncDisposable
         SnapshotMode mode = Options.SnapshotMode;
         if (mode == SnapshotMode.Auto)
         {
-            double rate = Meter.SampleRate().Down is > 10_000 and var r ? r : Options.AssumedDownBytesPerSecond;
+            double rate = Meter.SampleRate().Down is > 10_000 and double r ? r : Options.AssumedDownBytesPerSecond;
             TimeSpan eta = TimeSpan.FromSeconds(sr.SizeBytes / rate);
             mode = eta > Options.SnapshotFileThreshold && _instance is null ? SnapshotMode.EmptyReplica : SnapshotMode.File;
             Log($"знімок ~{sr.SizeBytes / 1024} КБ, за швидкістю ≈ {eta.TotalSeconds:0} с: {(mode == SnapshotMode.File ? "беру файл" : "порожня репліка, дані прийдуть потоком від нових до старих")}");
