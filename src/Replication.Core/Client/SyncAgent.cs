@@ -635,7 +635,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 return (null, []);
 
             var batch = new List<OutboxEntry>();
-            var actions = new Dictionary<long, Protocol.Action>();
+            var actions = new Dictionary<long, Protocol.Action?>();
             var visiting = new HashSet<long>();
             int budget = ApplyBudget();
             int size = 0;
@@ -656,7 +656,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 }
 
                 Protocol.Action? a = ToAction(e, tx);
-                actions[e.Id] = a!;
+                actions[e.Id] = a;
                 batch.Add(e);
                 size += a?.CalculateSize() ?? 0;
             }
@@ -683,7 +683,7 @@ public sealed class SyncAgent : IAsyncDisposable
             tx.Commit();
 
             var req = new ApplyRequest { ClientId = _store.ClientId };
-            req.Actions.AddRange(batch.Select(e => actions[e.Id]).Where(a => a is not null).OrderBy(a => a.Seq));
+            req.Actions.AddRange(batch.Select(e => actions[e.Id]).OfType<Protocol.Action>().OrderBy(a => a.Seq));
             StatusChanged?.Invoke();
             return (req.Actions.Count > 0 ? req : null, sent);
         }
@@ -911,8 +911,8 @@ public sealed class SyncAgent : IAsyncDisposable
     private async Task<string> DownloadAsync(Sync.SyncClient client, CancellationToken ct)
     {
         long offset = _download is { } d && File.Exists(d.Path) ? new FileInfo(d.Path).Length : 0;
-        if (offset > 0)
-            Log($"знімок {_download!.Id}: продовжую з {offset / 1024} КБ");
+        if (offset > 0 && _download is { } resumed)
+            Log($"знімок {resumed.Id}: продовжую з {offset / 1024} КБ");
         using AsyncServerStreamingCall<SnapshotChunk> call = client.Snapshot(new SnapshotRequest { ClientId = _store.ClientId, SnapshotId = _download?.Id ?? "", Offset = offset }, cancellationToken: ct);
         byte[]? sha = null;
         while (await call.ResponseStream.MoveNext(ct))
