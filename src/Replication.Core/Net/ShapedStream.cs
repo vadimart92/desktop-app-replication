@@ -52,7 +52,7 @@ internal sealed class ShapedStream : Stream
     private readonly Task _upPump;
     private readonly Task _downPump;
 
-    private sealed record Chunk(byte[] Data, int Length, DateTimeOffset DeliverAt);
+    private sealed record Chunk(byte[] Data, DateTimeOffset DeliverAt);
 
     public ShapedStream(Stream inner, WireMeter meter, NetworkProfile profile)
     {
@@ -87,7 +87,7 @@ internal sealed class ShapedStream : Stream
         DateTimeOffset at;
         lock (_upLock)
             at = Schedule(ref _upFreeAt, copy.Length, _profile.UpBitsPerSecond, _profile.Latency);
-        await _up.Writer.WriteAsync(new Chunk(copy, copy.Length, at), ct);
+        await _up.Writer.WriteAsync(new Chunk(copy, at), ct);
     }
 
     public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
@@ -102,9 +102,9 @@ internal sealed class ShapedStream : Stream
             await foreach (Chunk c in _up.Reader.ReadAllAsync(_cts.Token))
             {
                 await WaitUntil(c.DeliverAt, _cts.Token);
-                await _inner.WriteAsync(c.Data.AsMemory(0, c.Length), _cts.Token);
+                await _inner.WriteAsync(c.Data, _cts.Token);
                 await _inner.FlushAsync(_cts.Token);
-                _meter.AddUp(c.Length);
+                _meter.AddUp(c.Data.Length);
             }
         }
         catch (Exception) when (_cts.IsCancellationRequested) { }
@@ -116,16 +116,16 @@ internal sealed class ShapedStream : Stream
 
     private async Task DownPumpAsync()
     {
+        byte[] buf = new byte[16 * 1024];
         try
         {
             while (!_cts.IsCancellationRequested)
             {
-                byte[] buf = new byte[16 * 1024];
                 int n = await _inner.ReadAsync(buf, _cts.Token);
                 if (n == 0)
                     break;
                 DateTimeOffset at = Schedule(ref _downFreeAt, n, _profile.DownBitsPerSecond, _profile.Latency);
-                await _down.Writer.WriteAsync(new Chunk(buf, n, at), _cts.Token);
+                await _down.Writer.WriteAsync(new Chunk(buf[..n], at), _cts.Token);
             }
             _down.Writer.TryComplete();
         }
@@ -145,12 +145,12 @@ internal sealed class ShapedStream : Stream
                 return 0;
             _currentOffset = 0;
             await WaitUntil(_current.DeliverAt, ct);
-            _meter.AddDown(_current.Length);
+            _meter.AddDown(_current.Data.Length);
         }
-        int n = Math.Min(buffer.Length, _current.Length - _currentOffset);
+        int n = Math.Min(buffer.Length, _current.Data.Length - _currentOffset);
         _current.Data.AsMemory(_currentOffset, n).CopyTo(buffer);
         _currentOffset += n;
-        if (_currentOffset >= _current.Length)
+        if (_currentOffset >= _current.Data.Length)
             _current = null;
         return n;
     }
