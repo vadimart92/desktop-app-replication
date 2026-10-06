@@ -228,91 +228,97 @@ internal sealed class SubscribeSession
     /// <summary>One step of catch-up: one Batch or TableSynced. Returns false when nothing is left.</summary>
     private async Task<bool> CatchupStepAsync(SqliteConnection conn, CancellationToken ct)
     {
-        ChangeMessage? msg = null;
-        string? log = null;
+        (ChangeMessage Msg, string Log)? step;
         using (SqliteTransaction tx = conn.BeginTransaction(deferred: true))
         {
-            long head = _store.Head(conn, tx);
-            _catchupHead = head;
-            foreach (SyncTable t in PriorityTables())
-            {
-                CursorState k = _mirror[t.Name];
-                List<(long Lo, long Hi)> gaps = k.Gaps(head);
-                List<(long Lo, long Hi)> nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
-                if (nonEmpty.Count == 0)
-                {
-                    if (!_synced.Contains(t.Name))
-                    {
-                        k.Reset(head);
-                        _synced.Add(t.Name);
-                        msg = new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } };
-                        log = $"TableSynced {t.Name}, курсор = {head}";
-                        break;
-                    }
-                    // The table is synced, the head moved because of other tables: close empty ranges on the way.
-                    foreach ((long Lo, long Hi) g in gaps)
-                    {
-                        _extra.Add(new RangeExtra { Tbl = t.Name, Lo = g.Lo, Hi = g.Hi });
-                        k.AddRange(g.Lo, g.Hi);
-                    }
-                    continue;
-                }
-                _synced.Remove(t.Name);
-
-                // The highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message.
-                int n = Opt.CatchupBatchRows;
-                (long Lo, long Hi) main = nonEmpty[0];
-                (long Lo, long Hi)? tail = null;
-                if (nonEmpty.Count > 1 && nonEmpty[0].Hi == head && OwnerReader.Count(conn, tx, t, nonEmpty[0].Lo, nonEmpty[0].Hi) < n)
-                {
-                    tail = nonEmpty[0];
-                    main = nonEmpty[1];
-                }
-                List<OwnerItem> all = OwnerReader.Range(conn, tx, t, main.Lo, main.Hi, n + 1, newestFirst: true);
-                List<OwnerItem> items = all.Count > n ? all.GetRange(0, n) : all;
-                long lo = all.Count > n ? items[^1].Version - 1 : main.Lo;
-                List<OwnerItem> tailItems = tail is { } tl ? OwnerReader.Range(conn, tx, t, tl.Lo, tl.Hi, n, newestFirst: true) : [];
-
-                // The client is complete up to cur0: this decides whether a partial row is enough.
-                long cur0 = k.Cursor;
-                var covers = new List<(long Lo, long Hi)> { (lo, main.Hi) };
-                covers.AddRange(gaps.Where(g => g.Hi > main.Hi));
-                foreach ((long a, long b) in covers)
-                    k.AddRange(a, b);
-
-                var batch = new Batch { Tbl = t.Name };
-                batch.Columns.AddRange(t.Columns);
-                foreach ((long a, long b) in covers)
-                    batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = a, Hi = b });
-                var own = new List<long>();
-                foreach (OwnerItem it in tailItems.Concat(items))
-                {
-                    if (it.Origin == _clientId)
-                    {
-                        // Its own change: not sent, the range still closes.
-                        own.Add(it.Version);
-                        continue;
-                    }
-
-                    if (it.IsTombstone)
-                        batch.Tombstones.Add(new Protocol.Tombstone { Pk = PkBytes(it.Pk), Version = it.Version });
-                    else
-                        batch.Rows.Add(OwnerReader.ToWire(t, it, cur0));
-                }
-                batch.Remaining = Remaining(conn, tx, head);
-                msg = new ChangeMessage { Batch = batch };
-                log = $"Batch {t.Name}: {Describe(batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
-                    + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
-                    + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {batch.Remaining}";
-                break;
-            }
+            _catchupHead = _store.Head(conn, tx);
+            step = NextCatchup(conn, tx, _catchupHead);
             tx.Commit();
         }
-        if (msg is null)
+        if (step is not { } s)
             return false;
-        Log(log!);
-        await SendAsync(msg, ct);
+        Log(s.Log);
+        await SendAsync(s.Msg, ct);
         return true;
+    }
+
+    private (ChangeMessage Msg, string Log)? NextCatchup(SqliteConnection conn, SqliteTransaction tx, long head)
+    {
+        foreach (SyncTable t in PriorityTables())
+        {
+            CursorState k = _mirror[t.Name];
+            List<(long Lo, long Hi)> gaps = k.Gaps(head);
+            List<(long Lo, long Hi)> nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
+            if (nonEmpty.Count == 0)
+            {
+                if (_synced.Add(t.Name))
+                {
+                    k.Reset(head);
+                    return (new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } }, $"TableSynced {t.Name}, курсор = {head}");
+                }
+                // The table is synced, the head moved because of other tables: close empty ranges on the way.
+                foreach ((long Lo, long Hi) g in gaps)
+                {
+                    _extra.Add(new RangeExtra { Tbl = t.Name, Lo = g.Lo, Hi = g.Hi });
+                    k.AddRange(g.Lo, g.Hi);
+                }
+                continue;
+            }
+            _synced.Remove(t.Name);
+            return CatchupBatch(conn, tx, t, k, gaps, nonEmpty, head);
+        }
+
+        return null;
+    }
+
+    private (ChangeMessage Msg, string Log) CatchupBatch(SqliteConnection conn, SqliteTransaction tx, SyncTable t, CursorState k,
+        List<(long Lo, long Hi)> gaps, List<(long Lo, long Hi)> nonEmpty, long head)
+    {
+        // The highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message.
+        int n = Opt.CatchupBatchRows;
+        (long Lo, long Hi) main = nonEmpty[0];
+        (long Lo, long Hi)? tail = null;
+        if (nonEmpty.Count > 1 && nonEmpty[0].Hi == head && OwnerReader.Count(conn, tx, t, nonEmpty[0].Lo, nonEmpty[0].Hi) < n)
+        {
+            tail = nonEmpty[0];
+            main = nonEmpty[1];
+        }
+        List<OwnerItem> all = OwnerReader.Range(conn, tx, t, main.Lo, main.Hi, n + 1, newestFirst: true);
+        List<OwnerItem> items = all.Count > n ? all.GetRange(0, n) : all;
+        long lo = all.Count > n ? items[^1].Version - 1 : main.Lo;
+        List<OwnerItem> tailItems = tail is { } tl ? OwnerReader.Range(conn, tx, t, tl.Lo, tl.Hi, n, newestFirst: true) : [];
+
+        // The client is complete up to cur0: this decides whether a partial row is enough.
+        long cur0 = k.Cursor;
+        var covers = new List<(long Lo, long Hi)> { (lo, main.Hi) };
+        covers.AddRange(gaps.Where(g => g.Hi > main.Hi));
+        foreach ((long a, long b) in covers)
+            k.AddRange(a, b);
+
+        var batch = new Batch { Tbl = t.Name };
+        batch.Columns.AddRange(t.Columns);
+        foreach ((long a, long b) in covers)
+            batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = a, Hi = b });
+        var own = new List<long>();
+        foreach (OwnerItem it in tailItems.Concat(items))
+        {
+            if (it.Origin == _clientId)
+            {
+                // Its own change: not sent, the range still closes.
+                own.Add(it.Version);
+                continue;
+            }
+
+            if (it.IsTombstone)
+                batch.Tombstones.Add(new Protocol.Tombstone { Pk = PkBytes(it.Pk), Version = it.Version });
+            else
+                batch.Rows.Add(OwnerReader.ToWire(t, it, cur0));
+        }
+        batch.Remaining = Remaining(conn, tx, head);
+        string log = $"Batch {t.Name}: {Describe(batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
+            + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
+            + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {batch.Remaining}";
+        return (new ChangeMessage { Batch = batch }, log);
     }
 
     private long Remaining(SqliteConnection conn, SqliteTransaction tx, long head)
