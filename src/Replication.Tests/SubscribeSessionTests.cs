@@ -68,4 +68,26 @@ public class SubscribeSessionTests
         Assert.Equal(StatusCode.Unknown, e.StatusCode);
         Assert.Contains(nameof(ArgumentException), e.Status.Detail);
     }
+
+    [Fact]
+    public async Task Fault_right_after_the_handshake_still_unmarks_the_client()
+    {
+        // A log subscriber is user code; the first accepted Start makes it throw once.
+        int thrown = 0;
+        var log = new SyncLog();
+        log.Written += e =>
+        {
+            if (e.Source == "owner" && e.Text.Contains("Start прийнято") && Interlocked.Exchange(ref thrown, 1) == 0)
+                throw new InvalidOperationException("log subscriber failed");
+        };
+        await using Lab lab = await Lab.StartAsync(log: log);
+        string c1 = lab.C1.Replication.ClientId;
+
+        // The first session fails after registering the client; the reconnect goes online.
+        await lab.SyncNowAsync(lab.C1);
+        Assert.Equal(1, Volatile.Read(ref thrown));
+
+        lab.C1.Link = false;
+        await Lab.WaitAsync(() => !lab.Owner.Store.IsSubscribed(c1), TimeSpan.FromSeconds(10), "Клієнт 1 лишився відміченим як підписаний");
+    }
 }

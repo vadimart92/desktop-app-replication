@@ -53,16 +53,20 @@ internal sealed class SubscribeSession
         _who = start.ClientId.Length > 8 ? start.ClientId[..8] : start.ClientId;
 
         using SqliteConnection conn = _store.Open();
-        if (!await HandshakeAsync(conn, start))
-            return;
-
         // Whichever loop stops first ends the session, so a fault reaches the client as an error status and it reconnects (14).
         using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
-        _store.Committed += _wake.Set;
-        Task reader = Task.Run(() => ReadLoopAsync(stop.Token));
-        Task main = MainLoopAsync(conn, stop.Token);
+        if (await HandshakeAsync(conn, start) is not long head)
+            return;
+
+        // The handshake marked the client subscribed: from here every exit, a throwing log subscriber included, unmarks it in finally.
+        Task reader = Task.CompletedTask;
+        Task main = Task.CompletedTask;
         try
         {
+            Log($"Start прийнято, голова {head}; курсори {string.Join(", ", _mirror.Select(x => $"{x.Key}={x.Value}"))}", SyncLogLevel.Ok);
+            _store.Committed += _wake.Set;
+            reader = Task.Run(() => ReadLoopAsync(stop.Token));
+            main = MainLoopAsync(conn, stop.Token);
             Task first = await Task.WhenAny(reader, main);
             // A reader that ran out means the client half-closed its side: streaming goes on.
             if (first == reader && reader.IsCompletedSuccessfully)
@@ -82,13 +86,14 @@ internal sealed class SubscribeSession
 
     // Handshake (6.2).
 
-    private async Task<bool> HandshakeAsync(SqliteConnection conn, Start start)
+    /// <summary>The head when the client is accepted and marked subscribed; null when the stream is closed instead.</summary>
+    private async Task<long?> HandshakeAsync(SqliteConnection conn, Start start)
     {
         if (start.SchemaVersion != Opt.SchemaVersion)
         {
             Log($"Start: схема клієнта {start.SchemaVersion}, власника {Opt.SchemaVersion} → SchemaMismatch, потік закрито", SyncLogLevel.Warn);
             await SendAsync(new ChangeMessage { SchemaMismatch = new SchemaMismatch { OwnerSchemaVersion = Opt.SchemaVersion } }, _ct);
-            return false;
+            return null;
         }
 
         Dictionary<string, CursorState> cursors = start.Cursors.ToDictionary(c => c.Tbl, CursorState.FromWire);
@@ -140,11 +145,10 @@ internal sealed class SubscribeSession
             {
                 SnapshotRequired = new SnapshotRequired { Reason = reason, SizeBytes = size, InstanceId = _store.InstanceId },
             }, _ct);
-            return false;
+            return null;
         }
 
-        Log($"Start прийнято, голова {head}; курсори {string.Join(", ", _mirror.Select(x => $"{x.Key}={x.Value}"))}", SyncLogLevel.Ok);
-        return true;
+        return head;
     }
 
     // Client messages.
