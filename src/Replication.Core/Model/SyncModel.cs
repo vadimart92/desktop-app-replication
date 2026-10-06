@@ -16,12 +16,12 @@ public static class SyncColumns
     /// <summary><c>InstanceId</c> of the client's own data (5.4).</summary>
     public const string LocalInstance = "local";
 
+    internal static readonly HashSet<string> s_all = [Version, Base, Mask, Origin, InstanceId];
+
     public static string ArchiveOf(string instanceId) => instanceId + ":archive";
 
     public static bool IsRemote(string? instanceId) =>
         !string.IsNullOrEmpty(instanceId) && instanceId != LocalInstance && !instanceId.EndsWith(":archive", StringComparison.Ordinal);
-
-    internal static readonly HashSet<string> All = [Version, Base, Mask, Origin, InstanceId];
 }
 
 public sealed record SyncForeignKey(string Column, string ParentTable, bool Cascade);
@@ -52,25 +52,29 @@ public sealed class SyncTable
 
     public long FullMask => (1L << Columns.Count) - 1;
 
-    public int IndexOf(string column) => _index.TryGetValue(column, out var i) ? i : -1;
+    public int IndexOf(string column) => _index.TryGetValue(column, out int i) ? i : -1;
 
     public bool HasColumn(string column) => _index.ContainsKey(column);
 
     public long MaskOf(IEnumerable<string> columns)
     {
         long m = 0;
-        foreach (var c in columns)
+        foreach (string c in columns)
         {
-            var i = IndexOf(c);
-            if (i >= 0) m |= 1L << i;
+            int i = IndexOf(c);
+            if (i >= 0)
+                m |= 1L << i;
         }
         return m;
     }
 
     public IEnumerable<string> ColumnsOf(long mask)
     {
-        for (var i = 0; i < Columns.Count; i++)
-            if ((mask & (1L << i)) != 0) yield return Columns[i];
+        for (int i = 0; i < Columns.Count; i++)
+        {
+            if ((mask & (1L << i)) != 0)
+                yield return Columns[i];
+        }
     }
 
     public override string ToString() => Name;
@@ -100,29 +104,33 @@ public sealed class SyncModel
 
     /// <summary>Tables with an FK to <paramref name="parent"/>, with that FK.</summary>
     public IEnumerable<(SyncTable Child, SyncForeignKey Fk)> ChildrenOf(string parent) =>
-        from t in Tables from fk in t.ForeignKeys where fk.ParentTable == parent select (t, fk);
+        from t in Tables
+        from fk in t.ForeignKeys
+        where fk.ParentTable == parent
+        select (t, fk);
 
     public static SyncModel From(DbContext context) => From(context.Model);
 
     public static SyncModel From(IModel model)
     {
         var tables = new List<SyncTable>();
-        foreach (var et in model.GetEntityTypes())
+        foreach (IEntityType et in model.GetEntityTypes())
         {
-            if (et.FindAnnotation(ReplicationModelBuilderExtensions.ReplicatedAnnotation)?.Value is not true) continue;
-            var tableName = et.GetTableName()!;
-            var store = StoreObjectIdentifier.Table(tableName, et.GetSchema());
-            var key = et.FindPrimaryKey() ?? throw new InvalidOperationException($"{tableName}: no primary key");
+            if (et.FindAnnotation(ReplicationModelBuilderExtensions.ReplicatedAnnotation)?.Value is not true)
+                continue;
+            string tableName = et.GetTableName()!;
+            StoreObjectIdentifier store = StoreObjectIdentifier.Table(tableName, et.GetSchema());
+            IKey key = et.FindPrimaryKey() ?? throw new InvalidOperationException($"{tableName}: no primary key");
             if (key.Properties.Count != 1 || key.Properties[0].ClrType != typeof(Guid) || key.Properties[0].GetColumnName(store) != SyncColumns.Key)
                 throw new NotSupportedException($"{tableName}: a replicated table needs a single Guid key column named Id (design 5.1).");
 
-            var columns = et.GetProperties()
+            List<string> columns = et.GetProperties()
                 .Where(p => !p.IsPrimaryKey())
                 .Select(p => p.GetColumnName(store)!)
-                .Where(c => !SyncColumns.All.Contains(c))
+                .Where(c => !SyncColumns.s_all.Contains(c))
                 .ToList();
 
-            var fks = et.GetForeignKeys()
+            List<SyncForeignKey> fks = et.GetForeignKeys()
                 .Where(fk => fk.Properties.Count == 1)
                 .Select(fk => new SyncForeignKey(
                     fk.Properties[0].GetColumnName(store)!,
@@ -133,18 +141,26 @@ public sealed class SyncModel
             tables.Add(new SyncTable(tableName, et.ClrType, columns, fks));
         }
 
-        // parents first, so FK-ordered work (snapshot copy, archive) has a stable order
+        // Parents first, so FK-ordered work (snapshot copy, archive) has a stable order.
         var ordered = new List<SyncTable>();
         var visiting = new HashSet<string>();
-        var byName = tables.ToDictionary(t => t.Name);
+        Dictionary<string, SyncTable> byName = tables.ToDictionary(t => t.Name);
+
         void Visit(SyncTable t)
         {
-            if (ordered.Contains(t) || !visiting.Add(t.Name)) return;
-            foreach (var fk in t.ForeignKeys)
-                if (byName.TryGetValue(fk.ParentTable, out var p) && p != t) Visit(p);
+            if (ordered.Contains(t) || !visiting.Add(t.Name))
+                return;
+            foreach (SyncForeignKey fk in t.ForeignKeys)
+            {
+                if (byName.TryGetValue(fk.ParentTable, out SyncTable? p) && p != t)
+                    Visit(p);
+            }
+
             ordered.Add(t);
         }
-        foreach (var t in tables.OrderBy(t => t.Name, StringComparer.Ordinal)) Visit(t);
+
+        foreach (SyncTable t in tables.OrderBy(t => t.Name, StringComparer.Ordinal))
+            Visit(t);
         return new SyncModel(ordered);
     }
 }

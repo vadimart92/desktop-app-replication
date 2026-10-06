@@ -29,7 +29,8 @@ public sealed class LogFeed : ObservableObject
             _ => e.Source == "owner" ? Brushes.SteelBlue : e.Source == "сценарій" ? Brushes.MediumPurple : Brushes.Gray,
         };
         Lines.Add(new LogLine(e.At.ToString("HH:mm:ss.fff"), e.Source, e.Text, brush));
-        while (Lines.Count > Max) Lines.RemoveAt(0);
+        while (Lines.Count > Max)
+            Lines.RemoveAt(0);
         Appended?.Invoke();
     }
 
@@ -41,14 +42,19 @@ internal static class CollectionSync
     /// <summary>Updates the list in place so the grid keeps scroll position and selection where it can.</summary>
     public static void SyncTo<T>(this ObservableCollection<T> target, IReadOnlyList<T> source)
     {
-        for (var i = 0; i < source.Count; i++)
+        for (int i = 0; i < source.Count; i++)
         {
             if (i < target.Count)
             {
-                if (!Equals(target[i], source[i])) target[i] = source[i];
+                if (!Equals(target[i], source[i]))
+                    target[i] = source[i];
             }
-            else target.Add(source[i]);
+            else
+            {
+                target.Add(source[i]);
+            }
         }
-        while (target.Count > source.Count) target.RemoveAt(target.Count - 1);
+        while (target.Count > source.Count)
+            target.RemoveAt(target.Count - 1);
     }
 }

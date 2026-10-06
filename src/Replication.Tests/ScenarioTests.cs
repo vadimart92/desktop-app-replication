@@ -14,8 +14,12 @@ public class ScenarioTests(ITestOutputHelper output)
     {
         var log = new SyncLog();
         var lines = new List<string>();
-        log.Written += e => { lock (lines) lines.Add($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}"); };
-        await using var lab = await Lab.StartAsync(log: log);
+        log.Written += e =>
+        {
+            lock (lines)
+                lines.Add($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
+        };
+        await using Lab lab = await Lab.StartAsync(log: log);
         var run = new ScenarioRunner(lab, Scenarios.Find(id));
         List<string> problems;
         try
@@ -31,7 +35,11 @@ public class ScenarioTests(ITestOutputHelper output)
         }
         finally
         {
-            lock (lines) foreach (var l in lines) output.WriteLine(l);
+            lock (lines)
+            {
+                foreach (string l in lines)
+                    output.WriteLine(l);
+            }
         }
         Assert.Empty(problems);
     }

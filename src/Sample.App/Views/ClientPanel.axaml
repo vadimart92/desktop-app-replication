@@ -95,8 +95,8 @@
           <DockPanel>
             <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,4,0,0">
               <WrapPanel>
-                <TextBox Text="{Binding EditName}" Width="150" Margin="0,0,4,4" Watermark="назва" />
-                <TextBox Text="{Binding EditPrice}" Width="70" Margin="0,0,4,4" Watermark="ціна" />
+                <TextBox Text="{Binding EditName}" Width="150" Margin="0,0,4,4" PlaceholderText="назва" />
+                <TextBox Text="{Binding EditPrice}" Width="70" Margin="0,0,4,4" PlaceholderText="ціна" />
                 <ComboBox ItemsSource="{Binding StatusOptions}" SelectedItem="{Binding EditStatus}" Width="110" Margin="0,0,4,4" />
                 <Button Content="Зберегти" Command="{Binding SaveCommand}" Margin="0,0,4,4" />
                 <Button Content="Видалити" Command="{Binding DeleteCommand}" Margin="0,0,4,4" />

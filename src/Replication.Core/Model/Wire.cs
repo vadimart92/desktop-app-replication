@@ -14,7 +14,7 @@ public static class Wire
 
     public static ByteString PkBytes(string text) => PkBytes(Guid.Parse(text));
 
-    public static Guid PkGuid(ByteString b) => new(b.Span);
+    public static Guid PkGuid(ByteString b) => new Guid(b.Span);
 
     public static string PkText(ByteString b) => PkText(PkGuid(b));
 
@@ -46,31 +46,33 @@ public static class Wire
 
     public static string Q(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";
 
-    public static RowRef Ref(string tbl, string pk) => new() { Tbl = tbl, Pk = PkBytes(pk) };
+    public static RowRef Ref(string tbl, string pk) => new RowRef { Tbl = tbl, Pk = PkBytes(pk) };
 }
 
 internal static class SqliteExtensions
 {
     public static SqliteCommand Cmd(this SqliteConnection c, string sql, SqliteTransaction? tx = null, params (string, object?)[] args)
     {
-        var cmd = c.CreateCommand();
+        SqliteCommand cmd = c.CreateCommand();
         cmd.CommandText = sql;
         cmd.Transaction = tx;
-        foreach (var (n, v) in args) cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
+        foreach ((string n, object? v) in args)
+            cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
         return cmd;
     }
 
     public static int Exec(this SqliteConnection c, string sql, SqliteTransaction? tx = null, params (string, object?)[] args)
     {
-        using var cmd = c.Cmd(sql, tx, args);
+        using SqliteCommand cmd = c.Cmd(sql, tx, args);
         return cmd.ExecuteNonQuery();
     }
 
     public static T? Scalar<T>(this SqliteConnection c, string sql, SqliteTransaction? tx = null, params (string, object?)[] args)
     {
-        using var cmd = c.Cmd(sql, tx, args);
-        var r = cmd.ExecuteScalar();
-        if (r is null or DBNull) return default;
+        using SqliteCommand cmd = c.Cmd(sql, tx, args);
+        object? r = cmd.ExecuteScalar();
+        if (r is null or DBNull)
+            return default;
         return (T)Convert.ChangeType(r, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 

@@ -18,6 +18,54 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 {
     public static readonly string[] Statuses = ["новий", "активний", "архів"];
 
+    [ObservableProperty]
+    private string _statusText = "";
+
+    [ObservableProperty]
+    private IBrush _statusBrush = Brushes.Gray;
+
+    [ObservableProperty]
+    private string _pendingText = "";
+
+    [ObservableProperty]
+    private string _bytesUp = "0 Б";
+
+    [ObservableProperty]
+    private string _bytesDown = "0 Б";
+
+    [ObservableProperty]
+    private string _rateUp = "";
+
+    [ObservableProperty]
+    private string _rateDown = "";
+
+    [ObservableProperty]
+    private NetworkChoice _selectedNetwork;
+
+    [ObservableProperty]
+    private bool _newSchema;
+
+    [ObservableProperty]
+    private int _selectedTab;
+
+    [ObservableProperty]
+    private RowView? _selectedItem;
+
+    [ObservableProperty]
+    private RowView? _selectedCategory;
+
+    [ObservableProperty]
+    private string _editName = "";
+
+    [ObservableProperty]
+    private string _editPrice = "";
+
+    [ObservableProperty]
+    private string _editStatus = "новий";
+
+    [ObservableProperty]
+    private string? _error;
+
     public ClientPanelViewModel(ClientNode node)
     {
         Node = node;
@@ -29,10 +77,10 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     public IReadOnlyList<NetworkChoice> Networks { get; } =
     [
-        new("Локально, без обмежень", NetworkProfile.Local()),
-        new("Цільова: 1,5 с в кожен бік, ↑ 70 кбіт/с, ↓ 2 Мбіт/с", NetworkProfile.Target()),
-        new("Затримка 0,7 с в кожен бік", new NetworkProfile { Latency = TimeSpan.FromMilliseconds(700) }),
-        new("Повільна: ↑ 20 кбіт/с, ↓ 100 кбіт/с", new NetworkProfile { UpBitsPerSecond = 20_000, DownBitsPerSecond = 100_000 }),
+        new NetworkChoice("Локально, без обмежень", NetworkProfile.Local()),
+        new NetworkChoice("Цільова: 1,5 с в кожен бік, ↑ 70 кбіт/с, ↓ 2 Мбіт/с", NetworkProfile.Target()),
+        new NetworkChoice("Затримка 0,7 с в кожен бік", new NetworkProfile { Latency = TimeSpan.FromMilliseconds(700) }),
+        new NetworkChoice("Повільна: ↑ 20 кбіт/с, ↓ 100 кбіт/с", new NetworkProfile { UpBitsPerSecond = 20_000, DownBitsPerSecond = 100_000 }),
     ];
 
     public IReadOnlyList<string> StatusOptions => Statuses;
@@ -44,23 +92,6 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     public ObservableCollection<string> Cursors { get; } = [];
     public ObservableCollection<string> Notes { get; } = [];
     public ObservableCollection<string> MessageStats { get; } = [];
-
-    [ObservableProperty] private string _statusText = "";
-    [ObservableProperty] private IBrush _statusBrush = Brushes.Gray;
-    [ObservableProperty] private string _pendingText = "";
-    [ObservableProperty] private string _bytesUp = "0 Б";
-    [ObservableProperty] private string _bytesDown = "0 Б";
-    [ObservableProperty] private string _rateUp = "";
-    [ObservableProperty] private string _rateDown = "";
-    [ObservableProperty] private NetworkChoice _selectedNetwork;
-    [ObservableProperty] private bool _newSchema;
-    [ObservableProperty] private int _selectedTab;
-    [ObservableProperty] private RowView? _selectedItem;
-    [ObservableProperty] private RowView? _selectedCategory;
-    [ObservableProperty] private string _editName = "";
-    [ObservableProperty] private string _editPrice = "";
-    [ObservableProperty] private string _editStatus = "новий";
-    [ObservableProperty] private string? _error;
 
     public bool Link
     {
@@ -90,7 +121,8 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     partial void OnSelectedItemChanged(RowView? value)
     {
-        if (value is null || value.Mark == "архів") return;
+        if (value is null || value.Mark == "архів")
+            return;
         EditName = value.Label;
         EditPrice = value.Price?.ToString() ?? "";
         EditStatus = value.Status ?? "новий";
@@ -100,11 +132,11 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     {
         try
         {
-            var s = Node.Agent.GetStatus();
+            AgentStatus s = Node.Agent.GetStatus();
             (StatusText, StatusBrush) = Describe(s);
             PendingText = s.Pending == 0 ? "усе відправлено" : $"{s.Pending} змін очікують відправки{(s.InFlight > 0 ? $", {s.InFlight} у дорозі" : "")}{(s.PendingDeletes > 0 ? $"; видалень: {s.PendingDeletes}" : "")}";
-            var m = Node.Agent.Meter;
-            var (up, down) = m.SampleRate();
+            WireMeter m = Node.Agent.Meter;
+            (double up, double down) = m.SampleRate();
             BytesUp = WireMeter.Format(m.BytesUp);
             BytesDown = WireMeter.Format(m.BytesDown);
             RateUp = up > 0 ? $"{WireMeter.Format(up)}/с" : "";
@@ -129,7 +161,8 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     private static (string, IBrush) Describe(AgentStatus s)
     {
-        if (!s.LinkEnabled) return (s.OfflineSince is { } t ? $"Нема зв'язку з {t:HH:mm:ss}" : "Нема зв'язку", Brushes.IndianRed);
+        if (!s.LinkEnabled)
+            return (s.OfflineSince is { } t ? $"Нема зв'язку з {t:HH:mm:ss}" : "Нема зв'язку", Brushes.IndianRed);
         return s.State switch
         {
             AgentState.SchemaMismatch => ("Оновіть додаток на інстансі або клієнті", Brushes.IndianRed),
@@ -145,8 +178,8 @@ public sealed partial class ClientPanelViewModel : ObservableObject
 
     private static string Describe(OutboxEntry e)
     {
-        var state = e.Sent switch { 1 => "в дорозі", 2 => $"підтверджено, чекає курсор ≥ {e.ExpectedVersion}", _ => "чекає" };
-        var what = e.Kind switch
+        string state = e.Sent switch { 1 => "в дорозі", 2 => $"підтверджено, чекає курсор ≥ {e.ExpectedVersion}", _ => "чекає" };
+        string what = e.Kind switch
         {
             OutboxKind.Archive => $"архів {ArchiveCount(e)} записів, SyncVersion ≤ {e.ExpectedVersion}",
             OutboxKind.PredicateDelete => $"видалення де {Predicate.Parse(e.Predicate)}, SyncVersion ≤ {e.ExpectedVersion}",
@@ -172,16 +205,31 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private Task Save() => Run(() => SelectedItem is { Mark: not "архів" } r && long.TryParse(EditPrice, out var p)
+    private Task Save() => Run(() => SelectedItem is { Mark: not "архів" } r && long.TryParse(EditPrice, out long p)
         ? Node.UpdateItemAsync(Guid.Parse(r.Id), EditName, p, EditStatus)
         : Task.CompletedTask);
 
-    [RelayCommand] private Task Delete() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.DeleteAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task Archive() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task AddItem() => Run(Node.AddItemAsync);
-    [RelayCommand] private Task AddCategory() => Run(() => Node.CreateCategoryAsync($"Категорія {Categories.Count + 1}"));
-    [RelayCommand] private Task DeleteCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.DeleteAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task ArchiveCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
-    [RelayCommand] private Task DeleteArchived() => Run(() => Node.DeleteWhereStatusAsync("архів"));
-    [RelayCommand] private void ResetBytes() => Node.Agent.Meter.Reset();
+    [RelayCommand]
+    private Task Delete() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.DeleteAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task Archive() => Run(() => SelectedItem is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Item", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task AddItem() => Run(Node.AddItemAsync);
+
+    [RelayCommand]
+    private Task AddCategory() => Run(() => Node.CreateCategoryAsync($"Категорія {Categories.Count + 1}"));
+
+    [RelayCommand]
+    private Task DeleteCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.DeleteAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task ArchiveCategory() => Run(() => SelectedCategory is { Mark: not "архів" } r ? Node.ArchiveByIdAsync("Category", Guid.Parse(r.Id)) : Task.CompletedTask);
+
+    [RelayCommand]
+    private Task DeleteArchived() => Run(() => Node.DeleteWhereStatusAsync("архів"));
+
+    [RelayCommand]
+    private void ResetBytes() => Node.Agent.Meter.Reset();
 }

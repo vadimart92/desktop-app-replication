@@ -13,13 +13,14 @@ namespace Sample.App;
 /// </summary>
 public static class Program
 {
-    public static StartOptions Options { get; private set; } = new();
+    public static StartOptions Options { get; private set; } = new StartOptions();
 
     [STAThread]
     public static int Main(string[] args)
     {
         Options = StartOptions.Parse(args);
-        if (Options.Mode == AppMode.Owner && Options.Headless) return RunHeadlessOwner(Options).GetAwaiter().GetResult();
+        if (Options.Mode == AppMode.Owner && Options.Headless)
+            return RunHeadlessOwner(Options).GetAwaiter().GetResult();
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
@@ -34,16 +35,25 @@ public static class Program
     {
         var log = new SyncLog();
         log.Written += e => Console.WriteLine($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        await using var owner = await OwnerNode.StartAsync(o.Db ?? "owner.db", log, o.Port, o.ListenAnywhere);
+        await using OwnerNode owner = await OwnerNode.StartAsync(o.Db ?? "owner.db", log, o.Port, o.ListenAnywhere);
         Console.WriteLine($"Власник працює: {owner.Address} (БД {owner.DbPath}). Ctrl+C для зупинки.");
         var done = new TaskCompletionSource();
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; done.TrySetResult(); };
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            done.TrySetResult();
+        };
         await done.Task;
         return 0;
     }
 }
 
-public enum AppMode { Lab, Owner, Client }
+public enum AppMode
+{
+    Lab,
+    Owner,
+    Client
+}
 
 public sealed class StartOptions
 {
@@ -58,22 +68,39 @@ public sealed class StartOptions
     public static StartOptions Parse(string[] args)
     {
         var o = new StartOptions();
-        for (var i = 0; i < args.Length; i++)
+        for (int i = 0; i < args.Length; i++)
         {
             string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]}: потрібне значення");
             switch (args[i])
             {
-                case "--owner": o.Mode = AppMode.Owner; break;
-                case "--client": o.Mode = AppMode.Client; break;
-                case "--headless": o.Headless = true; break;
-                case "--any": o.ListenAnywhere = true; break;
-                case "--port": o.Port = int.Parse(Next()); break;
-                case "--db": o.Db = Next(); break;
-                case "--connect": o.Connect = Next(); break;
-                case "--name": o.Name = Next(); break;
+                case "--owner":
+                    o.Mode = AppMode.Owner;
+                    break;
+                case "--client":
+                    o.Mode = AppMode.Client;
+                    break;
+                case "--headless":
+                    o.Headless = true;
+                    break;
+                case "--any":
+                    o.ListenAnywhere = true;
+                    break;
+                case "--port":
+                    o.Port = int.Parse(Next());
+                    break;
+                case "--db":
+                    o.Db = Next();
+                    break;
+                case "--connect":
+                    o.Connect = Next();
+                    break;
+                case "--name":
+                    o.Name = Next();
+                    break;
             }
         }
-        if (o.Mode == AppMode.Client && o.Connect is null) o.Connect = "http://127.0.0.1:5005";
+        if (o.Mode == AppMode.Client && o.Connect is null)
+            o.Connect = "http://127.0.0.1:5005";
         return o;
     }
 }

@@ -33,6 +33,21 @@ dotnet run --project Sample.App -- --client --connect http://10.0.0.5:5005 --db 
 dotnet test Replication.Tests
 ```
 
+## Стиль коду і перевірки
+
+Код написано за конвенціями Microsoft: [coding style dotnet/runtime](https://github.com/dotnet/runtime/blob/main/docs/coding-guidelines/coding-style.md) і [C# coding conventions](https://learn.microsoft.com/dotnet/csharp/fundamentals/coding-style/coding-conventions). Правила записані в `.editorconfig` у корені. Відступ від них один: не-ASCII символи в рядках лишаються як є, без `\uXXXX`, бо тексти журналу й інтерфейсу українською. `EnforceCodeStyleInBuild` і `TreatWarningsAsErrors` увімкнені, тож більшість порушень ламає збірку.
+
+Перед комітом усі чотири перевірки мають пройти:
+
+```bash
+dotnet build Replication.slnx
+dotnet format Replication.slnx --verify-no-changes
+dotnet test Replication.Tests
+dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
+```
+
+`dotnet format --verify-no-changes` потрібен окремо: порядок `using`, `this.` і ключові слова замість імен типів BCL збірка не перевіряє. Slopwatch (локальний інструмент `Slopwatch.Cmd` з `dotnet-tools.json`) ловить вимкнені тести, придушені попередження і порожні `catch`; наявні випадки записані в `.slopwatch/baseline.json`.
+
 ## Лічильник байтів
 
 У кожного клієнта два числа: ↑ клієнт → власник і ↓ власник → клієнт. Це байти на TCP-з'єднанні клієнта: HTTP/2-кадри з gzip-стисненими повідомленнями gRPC, заголовками і пінгами (`Net/ShapedStream.cs`, `Net/WireMeter.cs`). Під ними розгортається розбивка за типами повідомлень gRPC у нестисненому вигляді, щоб видно було, що дає стиснення. У панелі власника сума по клієнтах.
