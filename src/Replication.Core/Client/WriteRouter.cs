@@ -39,14 +39,14 @@ public sealed class WriteRouter : SaveChangesInterceptor
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
-        if (eventData.Context is { } ctx && Collect(ctx) is { } p && ctx.Database.CurrentTransaction is null)
+        if (eventData.Context is { } ctx && Collect(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
             p.OwnTransaction = ctx.Database.BeginTransaction();
         return result;
     }
 
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
     {
-        if (eventData.Context is { } ctx && Collect(ctx) is { } p && ctx.Database.CurrentTransaction is null)
+        if (eventData.Context is { } ctx && Collect(ctx) is { } p && p.OwnTransaction is null && ctx.Database.CurrentTransaction is null)
             p.OwnTransaction = await ctx.Database.BeginTransactionAsync(ct);
         return result;
     }
@@ -122,46 +122,63 @@ public sealed class WriteRouter : SaveChangesInterceptor
         var changes = new List<Change>();
         var moves = new List<(SyncTable, string, string)>();
         bool opened = false;
-        foreach (EntityEntry e in entries)
+        IDbContextTransaction? own = null;
+        try
         {
-            if (_model.ForType(e.Metadata.ClrType) is not { } t)
-                continue;
-            string? instance = (string?)(e.State == EntityState.Deleted ? e.Property(SyncColumns.InstanceId).OriginalValue : e.Property(SyncColumns.InstanceId).CurrentValue);
-            if (!SyncColumns.IsRemote(instance))
-                continue;
-            string pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
-            StoreObjectIdentifier store = StoreObjectIdentifier.Table(t.Name, null);
-            switch (e.State)
+            foreach (EntityEntry e in entries)
             {
-                case EntityState.Added:
-                    changes.Add(new Change(t, instance!, pk, OutboxKind.Create, [.. t.Columns]));
-                    break;
-                case EntityState.Modified:
-                    List<string> cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
-                    if (cols.Count > 0)
-                        changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
-                    break;
-                case EntityState.Deleted:
-                    // Only the parent goes to the outbox; the owner cascades by its own schema (8.7).
-                    bool cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
-                                                          && deleted.Contains((fk.ParentTable, PkText(pid))));
-                    changes.Add(new Change(t, instance!, pk, cascaded ? (OutboxKind)0 : OutboxKind.Delete, []));
-                    // Archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6).
-                    if (_model.ChildrenOf(t.Name).Any())
-                    {
-                        if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
+                if (_model.ForType(e.Metadata.ClrType) is not { } t)
+                    continue;
+                string? instance = (string?)(e.State == EntityState.Deleted ? e.Property(SyncColumns.InstanceId).OriginalValue : e.Property(SyncColumns.InstanceId).CurrentValue);
+                if (!SyncColumns.IsRemote(instance))
+                    continue;
+                string pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
+                StoreObjectIdentifier store = StoreObjectIdentifier.Table(t.Name, null);
+                switch (e.State)
+                {
+                    case EntityState.Added:
+                        changes.Add(new Change(t, instance!, pk, OutboxKind.Create, [.. t.Columns]));
+                        break;
+                    case EntityState.Modified:
+                        List<string> cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
+                        if (cols.Count > 0)
+                            changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
+                        break;
+                    case EntityState.Deleted:
+                        // Only the parent goes to the outbox; the owner cascades by its own schema (8.7).
+                        bool cascaded = t.ForeignKeys.Any(fk => fk.Cascade && e.Property(PropertyOf(e.Metadata, fk.Column, store)).OriginalValue is Guid pid
+                                                              && deleted.Contains((fk.ParentTable, PkText(pid))));
+                        changes.Add(new Change(t, instance!, pk, cascaded ? (OutboxKind)0 : OutboxKind.Delete, []));
+                        // Archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6).
+                        if (_model.ChildrenOf(t.Name).Any())
                         {
-                            ctx.Database.OpenConnection();
-                            opened = true;
+                            if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
+                            {
+                                ctx.Database.OpenConnection();
+                                opened = true;
+                            }
+                            // The check and EF's DELETE share one write transaction, so an archive move cannot commit between them.
+                            if (ctx.Database.CurrentTransaction is null)
+                                own = ctx.Database.BeginTransaction();
+                            var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
+                            if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), tx, _model, instance!, t, pk))
+                            {
+                                moves.Add((t, instance!, pk));
+                                e.State = EntityState.Unchanged;
+                            }
                         }
-                        if (ArchiveGuard.HasArchiveBelow((SqliteConnection)ctx.Database.GetDbConnection(), null, _model, instance!, t, pk))
-                        {
-                            moves.Add((t, instance!, pk));
-                            e.State = EntityState.Unchanged;
-                        }
-                    }
-                    break;
+                        break;
+                }
             }
+        }
+        catch
+        {
+            // EF does not call SaveChangesFailed for a failure inside SavingChanges.
+            own?.Rollback();
+            own?.Dispose();
+            if (opened)
+                ctx.Database.CloseConnection();
+            throw;
         }
         if (changes.Count == 0)
             return null;
@@ -170,6 +187,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
         p.Changes.AddRange(changes);
         p.ArchiveMoves.Clear();
         p.ArchiveMoves.AddRange(moves);
+        p.OwnTransaction = own;
         p.OpenedConnection = opened;
         return p;
     }

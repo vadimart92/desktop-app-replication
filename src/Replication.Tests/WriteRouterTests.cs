@@ -1,7 +1,9 @@
 using System.Data;
+using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Replication.Client;
 using Replication.Model;
 using Sample.Domain;
@@ -9,7 +11,10 @@ using Xunit;
 
 namespace Replication.Tests;
 
-/// <summary>Design 8.1: the WriteRouter's own transaction ends with the save, whichever way the save ends.</summary>
+/// <summary>
+/// Design 8.1: the outbox is written in the save's transaction, and the router's own transaction ends with the save;
+/// 11.6: the archive check before a parent delete runs in that transaction.
+/// </summary>
 public class WriteRouterTests
 {
     public enum FailingChange
@@ -77,6 +82,75 @@ public class WriteRouterTests
         await AssertNextSaveQueuesNothingAsync(client, db);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Parent_delete_inside_a_caller_transaction_goes_through_the_archive_check(bool archiveBelow, bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        Guid office = client.Seed(new Category { Name = "Офіс" });
+        Guid stapler = client.Seed(new Item { Name = "Степлер", CategoryId = office });
+        Guid catalog = client.Seed(new Item { Name = "Каталог 2019", CategoryId = office }, archiveBelow ? ClientDb.Archive : ClientDb.Instance);
+        await using SampleDbContext db = client.Db();
+        Category category = await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken);
+
+        if (async)
+        {
+            await using IDbContextTransaction tx = await db.Database.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            db.Categories.Remove(category);
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+            await tx.CommitAsync(TestContext.Current.CancellationToken);
+        }
+        else
+        {
+            using IDbContextTransaction tx = db.Database.BeginTransaction();
+            db.Categories.Remove(category);
+            db.SaveChanges();
+            tx.Commit();
+        }
+
+        // Only the parent is queued; the owner cascades by its own schema (8.7).
+        OutboxEntry entry = Assert.Single(client.Replication.Store.Entries());
+        Assert.Equal(("Category", Wire.PkText(office), OutboxKind.Delete), (entry.Table, entry.Pk, entry.Kind));
+        Assert.Null(client.InstanceOf("Item", stapler));
+        Assert.Equal(archiveBelow ? ClientDb.Archive : null, client.InstanceOf("Category", office));
+        Assert.Equal(archiveBelow ? ClientDb.Archive : null, client.InstanceOf("Item", catalog));
+    }
+
+    [Fact]
+    public async Task Archive_move_committed_before_the_parent_delete_gets_the_lock_survives()
+    {
+        await using ClientDb client = ClientDb.Create();
+        Guid office = client.Seed(new Category { Name = "Офіс" });
+        Guid stapler = client.Seed(new Item { Name = "Степлер", CategoryId = office });
+        Guid catalog = client.Seed(new Item { Name = "Каталог 2019", CategoryId = office });
+        var starting = new TransactionStartingSignal();
+        await using SampleDbContext db = client.Db(starting);
+        db.Categories.Remove(await db.Categories.SingleAsync(x => x.Id == office, TestContext.Current.CancellationToken));
+        // The agent moves the item to the archive (11.2, step 4) and holds the write lock while the user saves.
+        using SqliteConnection agent = client.Replication.Store.Open(foreignKeys: false);
+        using SqliteTransaction archiving = agent.BeginTransaction();
+        using (SqliteCommand cmd = agent.CreateCommand())
+        {
+            cmd.Transaction = archiving;
+            cmd.CommandText = "UPDATE Item SET InstanceId = @a WHERE Id = @id";
+            cmd.Parameters.AddWithValue("@a", ClientDb.Archive);
+            cmd.Parameters.AddWithValue("@id", Wire.PkText(catalog));
+            cmd.ExecuteNonQuery();
+        }
+
+        Task<int> save = Task.Run(() => db.SaveChanges(), TestContext.Current.CancellationToken);
+        await starting.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        archiving.Commit();
+        await save;
+
+        Assert.Equal(ClientDb.Archive, client.InstanceOf("Item", catalog));
+        Assert.Equal(ClientDb.Archive, client.InstanceOf("Category", office));
+        Assert.Null(client.InstanceOf("Item", stapler));
+    }
+
     private static void AssertReleased(ClientDb client, SampleDbContext db)
     {
         Assert.Null(db.Database.CurrentTransaction);
@@ -98,6 +172,20 @@ public class WriteRouterTests
         Assert.Empty(client.Replication.Store.Entries());
     }
 
+    /// <summary>Completes when the router asks for its write transaction; the BEGIN itself then waits for the lock.</summary>
+    private sealed class TransactionStartingSignal : DbTransactionInterceptor
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+
+        public override InterceptionResult<DbTransaction> TransactionStarting(DbConnection connection, TransactionStartingEventData eventData, InterceptionResult<DbTransaction> result)
+        {
+            _started.TrySetResult();
+            return result;
+        }
+    }
+
     private sealed class CancelOnSaving(CancellationTokenSource cts) : SaveChangesInterceptor
     {
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken ct = default)
@@ -112,6 +200,7 @@ public class WriteRouterTests
 internal sealed class ClientDb : IAsyncDisposable
 {
     public const string Instance = "inst-x";
+    public const string Archive = Instance + ":archive";
 
     private ClientDb(string dbPath, ClientReplication replication)
     {
@@ -140,16 +229,30 @@ internal sealed class ClientDb : IAsyncDisposable
 
     public SampleDbContext Db(params IInterceptor[] after) => SampleDbContext.Open(DbPath, [Replication.Router, .. after]);
 
-    /// <summary>A remote category with one item, written past the router as the agent writes the replica.</summary>
+    /// <summary>A remote category with one item.</summary>
     public (Guid Category, Guid Item) SeedRemote()
     {
+        Guid category = Seed(new Category { Name = "Офіс" });
+        return (category, Seed(new Item { Name = "Степлер", Price = 100, CategoryId = category }));
+    }
+
+    /// <summary>Writes a row past the router, as the agent writes the replica.</summary>
+    public Guid Seed(BaseEntity row, string instance = Instance)
+    {
         using SampleDbContext db = SampleDbContext.Open(DbPath);
-        var category = new Category { Name = "Офіс" };
-        var item = new Item { Name = "Степлер", Price = 100, CategoryId = category.Id };
-        db.Categories.Add(category).SetInstance(Instance);
-        db.Items.Add(item).SetInstance(Instance);
+        db.Add(row).SetInstance(instance);
         db.SaveChanges();
-        return (category.Id, item.Id);
+        return row.Id;
+    }
+
+    /// <summary>The row's InstanceId, or null when the row is gone.</summary>
+    public string? InstanceOf(string table, Guid id)
+    {
+        using SqliteConnection c = Replication.Store.Open();
+        using SqliteCommand cmd = c.CreateCommand();
+        cmd.CommandText = $"SELECT InstanceId FROM {Wire.Q(table)} WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", Wire.PkText(id));
+        return cmd.ExecuteScalar() as string;
     }
 
     public int Sql(string sql, params (string Name, object Value)[] args)
