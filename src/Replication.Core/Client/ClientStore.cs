@@ -247,15 +247,16 @@ public sealed class ClientStore
             default:
                 return "без змін";
         }
+        string what = nc.Count > 0 ? $"{nk} {string.Join(", ", nc)}" : $"{nk}";
         if (e.Sent == OutboxSendState.InFlight)
         {
             Remove(c, tx, e.Id);
             Insert(c, tx, instance, table, pk, nk, newCls, nc);
-            return $"дія #{e.Seq} уже в дорозі: рядок черги замінено новим ({nk}{(nc.Count > 0 ? " " + string.Join(", ", nc) : "")})";
+            return $"дія #{e.Seq} уже в дорозі: рядок черги замінено новим ({what})";
         }
         c.Exec("UPDATE _sync_outbox SET kind = @k, columns = @cols, cls = @c WHERE id = @id", tx,
             ("@k", (int)nk), ("@cols", string.Join(',', nc)), ("@c", (int)newCls), ("@id", e.Id));
-        return $"{nk}{(nc.Count > 0 ? " " + string.Join(", ", nc) : "")}";
+        return what;
     }
 
     /// <summary>A local cascade removed child rows: their pending creates and patches have nothing left to send.</summary>
