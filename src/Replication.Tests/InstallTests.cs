@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Replication.Model;
 using Replication.Owner;
 using Sample.Domain;
+using Sample.Lab;
 using Xunit;
 
 namespace Replication.Tests;
@@ -31,7 +32,7 @@ public class InstallTests
     public async Task First_install_gives_every_existing_row_its_own_version()
     {
         CancellationToken ct = TestContext.Current.CancellationToken;
-        string dir = Path.Combine(Path.GetTempPath(), "replication-lab", $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
+        string dir = Lab.NewDir();
         Directory.CreateDirectory(dir);
         string path = Path.Combine(dir, "owner.db");
         SyncModel model;

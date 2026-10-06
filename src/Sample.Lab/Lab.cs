@@ -32,9 +32,12 @@ public sealed class Lab : IAsyncDisposable
     /// <summary>Background actions scheduled by a step (<see cref="When"/>, <see cref="Later"/>) that have not run yet.</summary>
     public int Scheduled => Volatile.Read(ref _scheduled);
 
+    /// <summary>A new path under %TEMP%/replication-lab for one run's databases.</summary>
+    public static string NewDir() => Path.Combine(Path.GetTempPath(), "replication-lab", $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
+
     public static async Task<Lab> StartAsync(string? dir = null, SyncLog? log = null, Action<OwnerOptions>? configureOwner = null)
     {
-        dir ??= Path.Combine(Path.GetTempPath(), "replication-lab", $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
+        dir ??= NewDir();
         Directory.CreateDirectory(dir);
         log ??= new SyncLog();
         OwnerNode owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), log, configure: o =>
