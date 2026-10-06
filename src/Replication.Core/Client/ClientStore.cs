@@ -258,6 +258,18 @@ public sealed class ClientStore
         return $"{nk}{(nc.Count > 0 ? " " + string.Join(", ", nc) : "")}";
     }
 
+    /// <summary>A local cascade removed child rows: their pending creates and patches have nothing left to send.</summary>
+    internal static void DropOrphanEntries(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance)
+    {
+        foreach (SyncTable t in model.Tables)
+        {
+            c.Exec($"""
+                DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND kind IN (1, 2) AND sent = 0
+                AND NOT EXISTS (SELECT 1 FROM {Q(t.Name)} x WHERE x.Id = _sync_outbox.pk AND x.InstanceId = @i)
+                """, tx, ("@i", instance), ("@t", t.Name));
+        }
+    }
+
     // Notes.
 
     public static void Note(SqliteConnection c, SqliteTransaction? tx, string instance, string text, bool info = false) =>

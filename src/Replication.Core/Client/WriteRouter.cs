@@ -221,7 +221,7 @@ public sealed class WriteRouter : SaveChangesInterceptor
             if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or null))
             {
                 foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
-                    DropOrphanEntries(conn, tx, _model, inst);
+                    ClientStore.DropOrphanEntries(conn, tx, _model, inst);
             }
 
             p.OwnTransaction?.Commit();
@@ -239,17 +239,5 @@ public sealed class WriteRouter : SaveChangesInterceptor
         }
         foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
             OutboxChanged?.Invoke(inst);
-    }
-
-    /// <summary>A local cascade removed child rows: their pending creates and patches have nothing left to send.</summary>
-    internal static void DropOrphanEntries(SqliteConnection c, SqliteTransaction? tx, SyncModel model, string instance)
-    {
-        foreach (SyncTable t in model.Tables)
-        {
-            c.Exec($"""
-                DELETE FROM _sync_outbox WHERE instance = @i AND tbl = @t AND kind IN (1, 2) AND sent = 0
-                AND NOT EXISTS (SELECT 1 FROM {Q(t.Name)} x WHERE x.Id = _sync_outbox.pk AND x.InstanceId = @i)
-                """, tx, ("@i", instance), ("@t", t.Name));
-        }
     }
 }

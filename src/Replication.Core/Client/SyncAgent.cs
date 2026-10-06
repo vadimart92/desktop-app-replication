@@ -994,7 +994,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 ClientStore.Insert(c, tx, _instance, table, null, OutboxKind.PredicateDelete, OutboxClass.Bulk, predicate: predicate.Serialize(), expectedVersion: k.Cursor);
                 Log($"масове видалення {count} записів: у черзі одна дія {predicate} і SyncVersion ≤ {k.Cursor}{(own.Count > 0 ? $", ключами ще {own.Count} (мають свої дії в черзі)" : "")}");
             }
-            WriteRouter.DropOrphanEntries(c, tx, _store.Model, _instance);
+            ClientStore.DropOrphanEntries(c, tx, _store.Model, _instance);
             tx.Commit();
         }
         finally
