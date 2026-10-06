@@ -120,8 +120,8 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         {
             ClientStore.Remove(c, tx, e.Id);
             var gone = new List<string>();
-            // Creates that depend on it (8.4).
-            RemoveChildren(c, tx, t, pk, gone);
+            // Creates that depend on it (8.4); the row itself is not its own child.
+            RemoveChildren(c, tx, t, pk, gone, [(t.Name, pk)]);
             Note(c, tx, $"правку запису {label} втрачено: його видалено на інстансі{(gone.Count > 0 ? $"; не збережено залежні: {string.Join(", ", gone)}" : "")}");
         }
         return n;
@@ -148,24 +148,30 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
     /// Deletes a row of this instance with its children and their outbox entries; returns their labels. A row that
     /// archived rows point to goes to the archive instead (11.6).
     /// </summary>
-    public void RemoveWithChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone)
+    public void RemoveWithChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone) =>
+        RemoveWithChildren(c, tx, t, pk, gone, []);
+
+    private void RemoveWithChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone, HashSet<(string Table, string Pk)> seen)
     {
+        // An FK cycle leads back to a row that is already being removed further up.
+        if (!seen.Add((t.Name, pk)))
+            return;
         if (c.Scalar<string>($"SELECT InstanceId FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @inst", tx, ("@id", pk), ("@inst", Instance)) is null)
             return;
         gone.Add(ClientStore.Label(c, tx, t, pk));
-        RemoveChildren(c, tx, t, pk, gone);
+        RemoveChildren(c, tx, t, pk, gone, seen);
         ArchiveGuard.DeleteOrArchive(c, tx, model, Instance, t, pk);
         if (ClientStore.FindEntry(c, tx, Instance, t.Name, pk) is { } e)
             ClientStore.Remove(c, tx, e.Id);
         TouchedTables.Add(t.Name);
     }
 
-    private void RemoveChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone)
+    private void RemoveChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone, HashSet<(string Table, string Pk)> seen)
     {
         foreach ((SyncTable child, SyncForeignKey fk) in model.ChildrenOf(t.Name))
         {
             foreach (string id in ClientStore.ChildIds(c, tx, Instance, child, fk, pk))
-                RemoveWithChildren(c, tx, child, id, gone);
+                RemoveWithChildren(c, tx, child, id, gone, seen);
         }
     }
 

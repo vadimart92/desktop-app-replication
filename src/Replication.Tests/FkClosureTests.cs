@@ -224,6 +224,16 @@ internal sealed class GraphPair : IAsyncDisposable
         return pair;
     }
 
+    /// <summary>Owner rows: a root whose ParentId is its own Id, and the nodes below it.</summary>
+    public static void SeedTree(GraphDbContext owner, Node root, params Node[] below)
+    {
+        owner.Nodes.Add(root);
+        owner.Nodes.AddRange(below);
+        owner.SaveChanges();
+        root.ParentId = root.Id;
+        owner.SaveChanges();
+    }
+
     public GraphDbContext ClientDb() => GraphDbContext.Open(Client.Store.DbPath, Client.Router);
 
     public GraphDbContext OwnerDb() => GraphDbContext.Open(Owner.Store.DbPath);
