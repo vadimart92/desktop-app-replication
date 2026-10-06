@@ -36,22 +36,24 @@ public sealed class CursorState
     /// <summary>Adds (lo, hi] and merges: ranges that touch merge, a range that reaches the cursor lifts it.</summary>
     public void AddRange(long lo, long hi)
     {
-        if (hi <= lo || hi <= Cursor)
+        lo = Math.Max(lo, Cursor);
+        if (hi <= lo)
             return;
-        List<(long Lo, long Hi)> all = _ranges.Append((Lo: Math.Max(lo, Cursor), Hi: hi)).OrderBy(r => r.Lo).ToList();
-        _ranges.Clear();
-        foreach ((long Lo, long Hi) r in all)
+        int j = _ranges.Count;
+        while (j > 0 && _ranges[j - 1].Lo > hi)
+            j--;
+        int i = j;
+        while (i > 0 && _ranges[i - 1].Hi >= lo)
         {
-            if (_ranges.Count > 0 && r.Lo <= _ranges[^1].Hi)
-                _ranges[^1] = (_ranges[^1].Lo, Math.Max(_ranges[^1].Hi, r.Hi));
-            else
-                _ranges.Add(r);
+            i--;
+            lo = Math.Min(lo, _ranges[i].Lo);
+            hi = Math.Max(hi, _ranges[i].Hi);
         }
-        while (_ranges.Count > 0 && _ranges[0].Lo <= Cursor)
-        {
-            Cursor = Math.Max(Cursor, _ranges[0].Hi);
-            _ranges.RemoveAt(0);
-        }
+        _ranges.RemoveRange(i, j - i);
+        if (lo <= Cursor)
+            Cursor = hi;
+        else
+            _ranges.Insert(i, (lo, hi));
     }
 
     /// <summary>Head(V) in the online phase lifts the cursor of a table that has no open ranges (6.4).</summary>
