@@ -1,10 +1,11 @@
+using System.Collections.Concurrent;
 using Sample.Lab;
 using Xunit;
 
 namespace Replication.Tests;
 
 /// <summary>Every scenario of the demo page, run against the real core over gRPC on localhost.</summary>
-public class ScenarioTests(ITestOutputHelper output)
+public sealed class ScenarioTests(ITestOutputHelper output)
 {
     public static TheoryData<string> Ids => [.. Scenarios.All.Select(s => s.Id)];
 
@@ -13,12 +14,8 @@ public class ScenarioTests(ITestOutputHelper output)
     public async Task Scenario_converges(string id)
     {
         var log = new SyncLog();
-        var lines = new List<string>();
-        log.Written += e =>
-        {
-            lock (lines)
-                lines.Add($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        };
+        var lines = new ConcurrentQueue<string>();
+        log.Written += e => lines.Enqueue($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
         await using Lab lab = await Lab.StartAsync(log: log);
         var run = new ScenarioRunner(lab, Scenarios.Find(id));
         List<string> problems;
@@ -35,11 +32,8 @@ public class ScenarioTests(ITestOutputHelper output)
         }
         finally
         {
-            lock (lines)
-            {
-                foreach (string l in lines)
-                    output.WriteLine(l);
-            }
+            foreach (string l in lines)
+                output.WriteLine(l);
         }
         Assert.Empty(problems);
     }
