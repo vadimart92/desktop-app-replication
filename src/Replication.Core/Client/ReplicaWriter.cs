@@ -145,8 +145,8 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
     }
 
     /// <summary>
-    /// Deletes a row of this instance with its children and their outbox entries; returns their labels. A row that
-    /// archived rows point to goes to the archive instead (11.6).
+    /// Deletes a row of this instance with its children and their outbox entries, adding their labels to <paramref name="gone"/>.
+    /// A row that archived rows point to goes to the archive instead (11.6).
     /// </summary>
     public void RemoveWithChildren(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, List<string> gone) =>
         RemoveWithChildren(c, tx, t, pk, gone, []);
