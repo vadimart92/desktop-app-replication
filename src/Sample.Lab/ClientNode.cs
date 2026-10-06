@@ -12,9 +12,8 @@ namespace Sample.Lab;
 /// </summary>
 public sealed class ClientNode : IAsyncDisposable
 {
-    private ClientNode(string id, string label, string dbPath, ClientReplication replication, SyncAgent agent, SyncLog log)
+    private ClientNode(string label, string dbPath, ClientReplication replication, SyncAgent agent, SyncLog log)
     {
-        Id = id;
         Label = label;
         DbPath = dbPath;
         Replication = replication;
@@ -22,14 +21,13 @@ public sealed class ClientNode : IAsyncDisposable
         Log = log;
     }
 
-    public string Id { get; }
     public string Label { get; }
     public string DbPath { get; }
     public ClientReplication Replication { get; }
     public SyncAgent Agent { get; }
     public SyncLog Log { get; }
 
-    public static ClientNode Create(string id, string label, string dbPath, string ownerAddress, SyncLog log, AgentOptions? options = null)
+    public static ClientNode Create(string label, string dbPath, string ownerAddress, SyncLog log, AgentOptions? options = null)
     {
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(dbPath))
@@ -41,7 +39,7 @@ public sealed class ClientNode : IAsyncDisposable
         replication.Install();
         SyncAgent agent = replication.Connect(ownerAddress, "Власник", options, label);
         agent.SetOpenTables("Item");
-        return new ClientNode(id, label, dbPath, replication, agent, log);
+        return new ClientNode(label, dbPath, replication, agent, log);
     }
 
     public bool Link
@@ -62,7 +60,7 @@ public sealed class ClientNode : IAsyncDisposable
     private async Task<Item> ItemAsync(SampleDbContext db, string name) =>
         await Mine<Item>(db).FirstOrDefaultAsync(x => x.Name == name) ?? throw new InvalidOperationException($"{Label}: нема «{name}»");
 
-    public async Task EditItemAsync(string name, Action<Item> change, string what)
+    private async Task EditItemAsync(string name, Action<Item> change, string what)
     {
         await using SampleDbContext db = Db();
         Item it = await ItemAsync(db, name);
@@ -123,15 +121,6 @@ public sealed class ClientNode : IAsyncDisposable
         (it.Name, it.Price, it.Status) = (name, price, status);
         await db.SaveChangesAsync();
         Say($"«{name}»: Price = {price}, Status = {status}");
-    }
-
-    public async Task RenameCategoryAsync(Guid id, string name)
-    {
-        await using SampleDbContext db = Db();
-        Category c = await Mine<Category>(db).FirstAsync(x => x.Id == id);
-        c.Name = name;
-        await db.SaveChangesAsync();
-        Say($"категорія «{name}»");
     }
 
     public async Task DeleteAsync(string table, Guid id)

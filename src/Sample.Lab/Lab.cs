@@ -46,12 +46,10 @@ public sealed class Lab : IAsyncDisposable
             configureOwner?.Invoke(o);
         });
         AgentOptions Opt() => new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
-        ClientNode c1 = ClientNode.Create("c1", "Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
-        ClientNode c2 = ClientNode.Create("c2", "Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
+        ClientNode c1 = ClientNode.Create("Клієнт 1", Path.Combine(dir, "client1.db"), owner.Address, log, Opt());
+        ClientNode c2 = ClientNode.Create("Клієнт 2", Path.Combine(dir, "client2.db"), owner.Address, log, Opt());
         return new Lab(dir, log, owner, c1, c2);
     }
-
-    public ClientNode C(string id) => id == "c1" ? C1 : C2;
 
     public void Say(string text, SyncLogLevel level = SyncLogLevel.Info) => Log.Write("сценарій", text, level);
 
@@ -150,7 +148,7 @@ public sealed class Lab : IAsyncDisposable
         return $"{s.State}, черга {s.Pending}, курсор {c.Agent.MinCursor}, голова {Owner.Head()}";
     }
 
-    public bool IsQuiet()
+    private bool IsQuiet()
     {
         if (Scheduled > 0)
             return false;
