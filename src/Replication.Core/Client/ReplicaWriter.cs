@@ -181,6 +181,16 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         Notes.Add(text);
     }
 
+    /// <summary>
+    /// Drops a local edit the owner rejected while keeping its own row: the row loses its version and asks for the
+    /// owner's full row, which then overwrites it (7, 9).
+    /// </summary>
+    public void Revert(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk)
+    {
+        c.Exec($"UPDATE {Q(t.Name)} SET SyncVersion = 0 WHERE Id = @id AND InstanceId = @inst", tx, ("@id", pk), ("@inst", Instance));
+        NeedFull.Add(Ref(t.Name, pk));
+    }
+
     public void SetVersion(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, long version) =>
         c.Exec($"UPDATE {Q(t.Name)} SET SyncVersion = @v WHERE Id = @id AND InstanceId = @inst AND SyncVersion < @v",
             tx, ("@v", version), ("@id", pk), ("@inst", Instance));
