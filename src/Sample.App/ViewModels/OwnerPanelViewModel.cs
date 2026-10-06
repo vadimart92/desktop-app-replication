@@ -35,7 +35,7 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
     public string Title => $"Власник · {Owner.Address}";
 
     /// <summary>Byte counters of the clients connected in this process (the lab); empty for a standalone owner.</summary>
-    public Func<IEnumerable<WireMeter>>? Meters { get; set; }
+    public IReadOnlyList<WireMeter> Meters { get; init; } = [];
 
     public void Refresh()
     {
@@ -49,8 +49,8 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
             Log.SyncTo(Inspect.OwnerRows(Owner, "Log", 30));
             Tombstones.SyncTo(Inspect.Tombstones(Owner));
             Clients.SyncTo(Inspect.Clients(Owner));
-            if (Meters?.Invoke().ToList() is { Count: > 0 } meters)
-                Traffic = $"усього на дроті: від клієнтів ↑ {WireMeter.Format(meters.Sum(x => x.BytesUp))}, до клієнтів ↓ {WireMeter.Format(meters.Sum(x => x.BytesDown))}";
+            if (Meters.Count > 0)
+                Traffic = $"усього на дроті: від клієнтів ↑ {WireMeter.Format(Meters.Sum(x => x.BytesUp))}, до клієнтів ↓ {WireMeter.Format(Meters.Sum(x => x.BytesDown))}";
         }
         catch (Exception e)
         {
