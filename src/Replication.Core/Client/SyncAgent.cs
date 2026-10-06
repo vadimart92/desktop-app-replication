@@ -570,12 +570,12 @@ public sealed class SyncAgent : IAsyncDisposable
     /// <summary>Sends one batch: retries first, then interactive actions, then bulk ones, closed over FK dependencies.</summary>
     private async Task<bool> SendOnceAsync(Sync.SyncClient client, CancellationToken ct)
     {
-        (ApplyRequest? req, List<OutboxEntry> entries) = await BuildBatchAsync();
+        (ApplyRequest? req, Dictionary<long, OutboxEntry> sent) = await BuildBatchAsync();
         if (req is null)
             return false;
         int size = req.CalculateSize();
         Meter.CountMessage("↑ Apply", size);
-        Log($"→ Apply: {string.Join("; ", req.Actions.Select(a => Describe(a, entries)))}");
+        Log($"→ Apply: {string.Join("; ", req.Actions.Select(a => Describe(a, sent)))}");
         Stopwatch sw = Stopwatch.StartNew();
         ApplyReply reply;
         try
@@ -598,14 +598,13 @@ public sealed class SyncAgent : IAsyncDisposable
             await Task.Delay(TimeSpan.FromSeconds(1), ct);
             return false;
         }
-        await ProcessReplyAsync(reply, entries);
+        await ProcessReplyAsync(reply, sent);
         return true;
     }
 
-    private static string Describe(Protocol.Action a, List<OutboxEntry> entries)
+    private static string Describe(Protocol.Action a, IReadOnlyDictionary<long, OutboxEntry> bySeq)
     {
-        OutboxEntry? e = entries.FirstOrDefault(x => x.Seq == a.Seq);
-        string cls = e?.Class == OutboxClass.Bulk ? "[масова] " : "";
+        string cls = bySeq.GetValueOrDefault(a.Seq)?.Class == OutboxClass.Bulk ? "[масова] " : "";
         return a.Kind switch
         {
             ActionKind.Archive => $"#{a.Seq} {cls}архів {a.Rows.Count} записів, SyncVersion ≤ {a.ExpectedVersion}",
@@ -614,14 +613,14 @@ public sealed class SyncAgent : IAsyncDisposable
         };
     }
 
-    private async Task<(ApplyRequest?, List<OutboxEntry>)> BuildBatchAsync()
+    private async Task<(ApplyRequest?, Dictionary<long, OutboxEntry>)> BuildBatchAsync()
     {
         await _gate.WaitAsync();
         try
         {
             if (_instance is null)
                 return (null, []);
-            (ApplyRequest? req, List<OutboxEntry> sent) = ApplyBatchBuilder.Build(_conn, _store.Model, _store.ClientId, Address, _instance, ApplyBudget);
+            (ApplyRequest? req, Dictionary<long, OutboxEntry> sent) = ApplyBatchBuilder.Build(_conn, _store.Model, _store.ClientId, Address, _instance, ApplyBudget);
             if (sent.Count > 0)
                 StatusChanged?.Invoke();
             return (req, sent);
@@ -632,7 +631,7 @@ public sealed class SyncAgent : IAsyncDisposable
         }
     }
 
-    private async Task ProcessReplyAsync(ApplyReply reply, List<OutboxEntry> sent)
+    private async Task ProcessReplyAsync(ApplyReply reply, IReadOnlyDictionary<long, OutboxEntry> bySeq)
     {
         await _gate.WaitAsync();
         ReplicaWriter w;
@@ -641,29 +640,31 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             w = new ReplicaWriter(_store.Model, _instance!);
             using SqliteTransaction tx = _conn.BeginTransaction();
-            Dictionary<long, OutboxEntry> bySeq = sent.ToDictionary(e => e.Seq!.Value);
             var versions = new List<string>();
             foreach (ActionResult r in reply.Results)
             {
                 if (!bySeq.TryGetValue(r.Seq, out OutboxEntry? e))
                     continue;
                 SyncTable? t = _store.Model.TryGet(e.Table, out SyncTable? tt) ? tt : null;
-                string label = t is not null && e.Pk is not null ? ClientStore.Label(_conn, tx, t, e.Pk) : "";
+
+                string LabelOf() => t is not null && e.Pk is not null ? ClientStore.Label(_conn, tx, t, e.Pk) : "";
+
                 switch (r.Status)
                 {
                     case ResultStatus.Rejected when r.Reason == "unique":
-                        w.Note(_conn, tx, $"не збережено {label}: на інстансі вже є запис з таким значенням");
+                        w.Note(_conn, tx, $"не збережено {LabelOf()}: на інстансі вже є запис з таким значенням");
                         break;
                     case ResultStatus.Rejected when t is not null && e.Pk is not null:
                     {
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
-                        w.Note(_conn, tx, $"не збережено: {string.Join(", ", gone.DefaultIfEmpty(label))} ({(r.Reason == "parent deleted" ? "батьківський запис видалено" : "запис видалено на інстансі")})");
+                        w.Note(_conn, tx, $"не збережено: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({(r.Reason == "parent deleted" ? "батьківський запис видалено" : "запис видалено на інстансі")})");
                         break;
                     }
                     case ResultStatus.Ignored when t is not null && e.Pk is not null:
                     {
                         // Delete wins: the record goes here right away, without waiting for the tombstone (6.5, 9.1).
+                        string label = LabelOf();
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
                         w.Note(_conn, tx, $"правку запису {label} втрачено: його видалено на інстансі");
@@ -674,7 +675,7 @@ public sealed class SyncAgent : IAsyncDisposable
                         {
                             case OutboxKind.Create or OutboxKind.Patch when r.HasVersion && t is not null:
                                 w.SetVersion(_conn, tx, t, e.Pk!, r.Version);
-                                versions.Add($"{label} v{r.Version}");
+                                versions.Add($"{LabelOf()} v{r.Version}");
                                 break;
                             case OutboxKind.Delete when r.HasVersion:
                                 long cur;

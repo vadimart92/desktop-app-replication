@@ -12,7 +12,7 @@ namespace Replication.Client;
 internal static class ApplyBatchBuilder
 {
     /// <param name="applyBudget">Read only when the outbox has something to send.</param>
-    public static (ApplyRequest? Request, List<OutboxEntry> Sent) Build(
+    public static (ApplyRequest? Request, Dictionary<long, OutboxEntry> Sent) Build(
         SqliteConnection c, SyncModel model, string clientId, string address, string instance, Func<int> applyBudget)
     {
         using SqliteTransaction tx = c.BeginTransaction();
@@ -20,6 +20,13 @@ internal static class ApplyBatchBuilder
             .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();
         if (all.Count == 0)
             return (null, []);
+        var unsentCreates = new Dictionary<(string Table, string Pk), OutboxEntry>();
+        foreach (OutboxEntry x in all)
+        {
+            if (x is { Kind: OutboxKind.Create, Sent: OutboxSendState.Waiting, Pk: { } p })
+                unsentCreates.TryAdd((x.Table, p), x);
+        }
+        HashSet<string> createTables = unsentCreates.Keys.Select(k => k.Table).ToHashSet();
 
         var batch = new List<OutboxEntry>();
         var actions = new Dictionary<long, Protocol.Action?>();
@@ -36,8 +43,10 @@ internal static class ApplyBatchBuilder
                 foreach (SyncForeignKey fk in t.ForeignKeys.Where(f => e.Kind == OutboxKind.Create || e.Columns.Contains(f.Column)))
                 {
                     // A create this row points to must go in the same or an earlier batch (8.4).
+                    if (!createTables.Contains(fk.ParentTable))
+                        continue;
                     string? pid = c.Scalar<string>($"SELECT {Q(fk.Column)} FROM {Q(t.Name)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", e.Pk), ("@i", instance));
-                    if (all.FirstOrDefault(x => x.Table == fk.ParentTable && x.Pk == pid && x.Kind == OutboxKind.Create && x.Sent == OutboxSendState.Waiting) is { } pe)
+                    if (pid is not null && unsentCreates.TryGetValue((fk.ParentTable, pid), out OutboxEntry? pe))
                         Add(pe);
                 }
             }
@@ -56,7 +65,7 @@ internal static class ApplyBatchBuilder
         }
 
         long next = c.Scalar<long>("SELECT next_seq FROM _sync_instances WHERE address = @a", tx, ("@a", address));
-        var sent = new List<OutboxEntry>();
+        var sent = new Dictionary<long, OutboxEntry>();
         foreach (OutboxEntry e in batch)
         {
             // Seq is given at the first send, so the owner always sees seq ascending (8.5).
@@ -64,7 +73,7 @@ internal static class ApplyBatchBuilder
             c.Exec("UPDATE _sync_outbox SET seq = @s, sent = 1 WHERE id = @id", tx, ("@s", seq), ("@id", e.Id));
             if (actions[e.Id] is { } a)
                 a.Seq = seq;
-            sent.Add(e with { Seq = seq, Sent = OutboxSendState.InFlight });
+            sent[seq] = e with { Seq = seq, Sent = OutboxSendState.InFlight };
         }
         c.Exec("UPDATE _sync_instances SET next_seq = @n WHERE address = @a", tx, ("@n", next), ("@a", address));
         tx.Commit();
