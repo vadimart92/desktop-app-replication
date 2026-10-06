@@ -9,15 +9,13 @@ namespace Replication.Tests;
 /// <summary>Design 11.6: a parent that archived rows point to is moved to the archive instead of deleted.</summary>
 public class ArchiveParentTests
 {
-    private static async Task<Sample.Lab.Lab> ArchivedCatalogAsync()
+    private static async Task ArchiveCatalogAsync(Sample.Lab.Lab lab)
     {
-        Lab lab = await Sample.Lab.Lab.StartAsync();
         await lab.SyncNowAsync(lab.C1);
         await lab.SyncNowAsync(lab.C2);
         await lab.C1.ArchiveAsync(("Item", "Каталог 2019"));
         await lab.SettleAsync();
         Assert.True(Sample.Lab.Inspect.ClientHas(lab.C1, "Каталог 2019", archive: true));
-        return lab;
     }
 
     private static void AssertArchiveIntact(Sample.Lab.Lab lab, string category = "Офіс")
@@ -33,7 +31,8 @@ public class ArchiveParentTests
     [Fact]
     public async Task Local_delete_moves_the_parent_to_the_archive()
     {
-        await using Lab lab = await ArchivedCatalogAsync();
+        await using Lab lab = await Sample.Lab.Lab.StartAsync();
+        await ArchiveCatalogAsync(lab);
         await lab.C1.DeleteCategoryAsync("Офіс");
         await lab.SettleAsync();
         AssertArchiveIntact(lab);
@@ -42,7 +41,8 @@ public class ArchiveParentTests
     [Fact]
     public async Task Tombstone_from_another_client_moves_the_parent_to_the_archive()
     {
-        await using Lab lab = await ArchivedCatalogAsync();
+        await using Lab lab = await Sample.Lab.Lab.StartAsync();
+        await ArchiveCatalogAsync(lab);
         await lab.C2.DeleteCategoryAsync("Офіс");
         await lab.SettleAsync();
         AssertArchiveIntact(lab);
@@ -51,7 +51,8 @@ public class ArchiveParentTests
     [Fact]
     public async Task Bulk_delete_moves_the_parent_to_the_archive()
     {
-        await using Lab lab = await ArchivedCatalogAsync();
+        await using Lab lab = await Sample.Lab.Lab.StartAsync();
+        await ArchiveCatalogAsync(lab);
         await lab.C1.Agent.DeleteWhereAsync("Category", new Predicate("Name", "Офіс"));
         await lab.SettleAsync();
         AssertArchiveIntact(lab);
@@ -60,7 +61,8 @@ public class ArchiveParentTests
     [Fact]
     public async Task Ignored_reply_moves_the_parent_to_the_archive()
     {
-        await using Lab lab = await ArchivedCatalogAsync();
+        await using Lab lab = await Sample.Lab.Lab.StartAsync();
+        await ArchiveCatalogAsync(lab);
         string office = Inspect.ClientRows(lab.C1, "Category").Single(r => r.Label == "Офіс" && r.InstanceId == lab.C1.Instance).Id;
         // C1's stream is held, so the reply to its patch overtakes the tombstone: Ignored, and C1 removes the row itself (6.5, 9.1).
         OwnerFaults faults = lab.Owner.Store.Options.Faults;
