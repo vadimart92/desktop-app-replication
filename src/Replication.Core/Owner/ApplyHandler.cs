@@ -63,9 +63,12 @@ internal sealed class ApplyHandler(OwnerStore store)
 
         foreach (Protocol.Action a in actions)
         {
-            if (!Model.TryGet(a.Tbl, out SyncTable? t) && a.Kind is not ActionKind.Archive)
+            if (!Model.TryGet(a.Tbl, out SyncTable? t))
             {
-                Res(a, ResultStatus.Rejected, "unknown table");
+                if (a.Kind is not ActionKind.Archive)
+                    Res(a, ResultStatus.Rejected, "unknown table");
+                else if (a.Seq <= applied)
+                    Res(a, ResultStatus.Skipped, Reasons.AlreadyApplied);
                 continue;
             }
             if (a.Seq <= applied)

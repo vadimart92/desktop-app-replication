@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 
@@ -98,7 +99,7 @@ public sealed class SyncModel
 
     public SyncTable this[string name] => _byName[name];
 
-    public bool TryGet(string name, out SyncTable table) => _byName.TryGetValue(name, out table!);
+    public bool TryGet(string name, [MaybeNullWhen(false)] out SyncTable table) => _byName.TryGetValue(name, out table);
 
     public SyncTable? ForType(Type clrType) => _byType.GetValueOrDefault(clrType);
 
