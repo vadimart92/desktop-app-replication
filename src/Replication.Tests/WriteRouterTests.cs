@@ -101,11 +101,9 @@ public class WriteRouterTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task Save_rejected_by_a_later_interceptor_leaves_nothing_to_the_next_save(bool retry, bool async)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Save_rejected_by_a_later_interceptor_leaves_nothing_to_the_next_save(bool async)
     {
         await using ClientDb client = ClientDb.Create();
         (_, Guid itemId) = client.SeedRemote();
@@ -114,30 +112,25 @@ public class WriteRouterTests
         item.Price = 1;
 
         // EF reports a failure inside SavingChanges to no interceptor: the router's transaction outlives the save.
-        if (async)
-        {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => db.SaveChangesAsync(TestContext.Current.CancellationToken));
-        }
-        else
-        {
-            Assert.Throws<InvalidOperationException>(() => db.SaveChanges());
-        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
 
-        if (!retry)
-        {
-            await AssertNextSaveQueuesNothingAsync(client, db);
-            AssertReleased(client, db);
-            return;
-        }
+        await AssertNextSaveQueuesNothingAsync(client, db);
+        AssertReleased(client, db);
+    }
 
-        if (async)
-        {
-            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
-        }
-        else
-        {
-            db.SaveChanges();
-        }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Save_retried_after_a_later_interceptor_rejected_it_commits_the_edit(bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (_, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.Db(new RejectFirstSave());
+        Item item = await db.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken);
+        item.Price = 1;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SaveAsync(db, async));
+        await SaveAsync(db, async);
 
         await using (SampleDbContext other = client.Db())
             Assert.Equal(1L, (await other.Items.SingleAsync(x => x.Id == itemId, TestContext.Current.CancellationToken)).Price);
