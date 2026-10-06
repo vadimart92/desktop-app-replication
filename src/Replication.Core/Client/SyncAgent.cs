@@ -939,14 +939,16 @@ public sealed class SyncAgent : IAsyncDisposable
             }
             using SqliteTransaction tx = _conn.BeginTransaction();
             var set = new List<(string Table, string Pk)>();
+            var members = new HashSet<(string Table, string Pk)>();
 
             void Add(string table, string pk)
             {
-                if (set.Contains((table, pk)))
+                if (members.Contains((table, pk)))
                     return;
                 if (_conn.Scalar<string>($"SELECT InstanceId FROM {Q(table)} WHERE Id = @id AND InstanceId = @i", tx, ("@id", pk), ("@i", _instance)) is null)
                     return;
                 set.Add((table, pk));
+                members.Add((table, pk));
                 // FK closure: the owner's cascade would delete the children with the parent (11.2, step 3).
                 foreach ((SyncTable child, SyncForeignKey fk) in _store.Model.ChildrenOf(table))
                 {
@@ -968,9 +970,14 @@ public sealed class SyncAgent : IAsyncDisposable
             ClientStore.Insert(_conn, tx, _instance, set[0].Table, null, OutboxKind.Archive, OutboxClass.Bulk, predicate: ArchiveSet.Serialize(set), expectedVersion: v);
             tx.Commit();
             text = $"{(tries > 0 ? "повторне перенесення" : "перенесення в архів")}: {string.Join(", ", labels)} отримали InstanceId = {archive} в одній транзакції; у черзі одна дія: Id ∈ набір і SyncVersion ≤ {v}";
-            _archiveRetry.RemoveAll(x => set.Contains((x.Table, x.Pk)));
+            _archiveRetry.RemoveAll(x => members.Contains((x.Table, x.Pk)));
             foreach ((string _, string pk) in set)
-                _archiveTries[pk] = tries;
+            {
+                if (tries > 0)
+                    _archiveTries[pk] = tries;
+                else
+                    _archiveTries.Remove(pk);
+            }
         }
         finally
         {
