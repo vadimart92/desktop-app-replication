@@ -21,6 +21,7 @@ internal sealed class SubscribeSession
     private readonly ConcurrentQueue<RowRef> _needFull = new();
     private readonly Dictionary<string, CursorState> _mirror = new(StringComparer.Ordinal);
     private readonly HashSet<string> _synced = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _rangesCapped = new(StringComparer.Ordinal);
     private readonly List<RangeExtra> _extra = [];
     private volatile string[] _open = [];
     private string _clientId = "";
@@ -216,44 +217,49 @@ internal sealed class SubscribeSession
         }
     }
 
+    /// <summary>
+    /// Open tables first (6.4). The tables they reference are not pulled in whole: the rows a batch references come
+    /// with it by key (<see cref="ParentsOf"/>), so a million categories do not hold back the first item.
+    /// </summary>
     private IEnumerable<SyncTable> PriorityTables()
     {
         string[] open = _open;
-        // Open tables first, together with the tables they reference by FK (6.4).
-        bool First(SyncTable t) => open.Contains(t.Name) || Model.ChildrenOf(t.Name).Any(c => open.Contains(c.Child.Name));
-        return Model.Tables.OrderBy(t => First(t) ? 0 : 1);
+        return Model.Tables.OrderBy(t => open.Contains(t.Name) ? 0 : 1);
     }
 
-    /// <summary>One step of catch-up: one Batch or TableSynced. Returns false when nothing is left.</summary>
+    /// <summary>One step of catch-up: a Batch with the batches of its parents, or TableSynced. Returns false when nothing is left.</summary>
     private async Task<bool> CatchupStepAsync(SqliteConnection conn, CancellationToken ct)
     {
-        (ChangeMessage Msg, string Log)? step;
+        List<(ChangeMessage Msg, string Log)>? steps;
         using (SqliteTransaction tx = conn.BeginTransaction(deferred: true))
         {
             _catchupHead = _store.Head(conn, tx);
-            step = NextCatchup(conn, tx, _catchupHead);
+            steps = NextCatchup(conn, tx, _catchupHead);
             tx.Commit();
         }
-        if (step is not { } s)
+        if (steps is null)
             return false;
-        Log(s.Log);
-        await SendAsync(s.Msg, ct);
+        foreach ((ChangeMessage msg, string log) in steps)
+        {
+            Log(log);
+            await SendAsync(msg, ct);
+        }
         return true;
     }
 
-    private (ChangeMessage Msg, string Log)? NextCatchup(SqliteConnection conn, SqliteTransaction tx, long head)
+    private List<(ChangeMessage Msg, string Log)>? NextCatchup(SqliteConnection conn, SqliteTransaction tx, long head)
     {
         foreach (SyncTable t in PriorityTables())
         {
             CursorState k = _mirror[t.Name];
             IReadOnlyList<(long Lo, long Hi)> gaps = k.Gaps(head);
-            List<(long Lo, long Hi)> nonEmpty = gaps.Where(g => OwnerReader.Any(conn, tx, t, g.Lo, g.Hi)).ToList();
-            if (nonEmpty.Count == 0)
+            (List<OwnerItem> items, List<(long Lo, long Hi)> covers) = Collect(conn, tx, t, gaps);
+            if (items.Count == 0)
             {
                 if (_synced.Add(t.Name))
                 {
                     k.Reset(head);
-                    return (new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } }, $"TableSynced {t.Name}, курсор = {head}");
+                    return [(new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } }, $"TableSynced {t.Name}, курсор = {head}")];
                 }
                 // The table is synced, the head moved because of other tables: close empty ranges on the way.
                 foreach ((long Lo, long Hi) g in gaps)
@@ -264,42 +270,117 @@ internal sealed class SubscribeSession
                 continue;
             }
             _synced.Remove(t.Name);
-            return CatchupBatch(conn, tx, t, k, gaps, nonEmpty, head);
+            return CatchupBatch(conn, tx, t, k, items, covers, head);
         }
 
         return null;
     }
 
-    private (ChangeMessage Msg, string Log) CatchupBatch(SqliteConnection conn, SqliteTransaction tx, SyncTable t, CursorState k,
-        IReadOnlyList<(long Lo, long Hi)> gaps, List<(long Lo, long Hi)> nonEmpty, long head)
+    /// <summary>
+    /// The highest unsent versions across the gaps (highest first), at most a batch, and the parts of the gaps they
+    /// close. A batch fills from several gaps: points pulled by key cut the parent table's gaps into small pieces.
+    /// </summary>
+    private (List<OwnerItem> Items, List<(long Lo, long Hi)> Covers) Collect(SqliteConnection conn, SqliteTransaction tx, SyncTable t,
+        IReadOnlyList<(long Lo, long Hi)> gaps)
     {
-        // The highest unsent versions, newest first; a fresh tail smaller than a batch rides in the same message.
         int n = Opt.CatchupBatchRows;
-        (long Lo, long Hi) main = nonEmpty[0];
-        (long Lo, long Hi)? tail = null;
-        if (nonEmpty.Count > 1 && nonEmpty[0].Hi == head && OwnerReader.Count(conn, tx, t, nonEmpty[0].Lo, nonEmpty[0].Hi) < n)
+        var items = new List<OwnerItem>();
+        var covers = new List<(long Lo, long Hi)>();
+        foreach ((long lo, long hi) in gaps)
         {
-            tail = nonEmpty[0];
-            main = nonEmpty[1];
+            int left = n - items.Count;
+            if (left == 0)
+                break;
+            List<OwnerItem> got = OwnerReader.Range(conn, tx, t, lo, hi, left + 1, newestFirst: true);
+            if (got.Count > left)
+            {
+                items.AddRange(got.Take(left));
+                covers.Add((items[^1].Version - 1, hi));
+                break;
+            }
+            items.AddRange(got);
+            covers.Add((lo, hi));
         }
-        List<OwnerItem> all = OwnerReader.Range(conn, tx, t, main.Lo, main.Hi, n + 1, newestFirst: true);
-        List<OwnerItem> items = all.Count > n ? all.GetRange(0, n) : all;
-        long lo = all.Count > n ? items[^1].Version - 1 : main.Lo;
-        List<OwnerItem> tailItems = tail is { } tl ? OwnerReader.Range(conn, tx, t, tl.Lo, tl.Hi, n, newestFirst: true) : [];
+        return (items, covers);
+    }
 
+    private List<(ChangeMessage Msg, string Log)> CatchupBatch(SqliteConnection conn, SqliteTransaction tx, SyncTable t, CursorState k,
+        List<OwnerItem> items, List<(long Lo, long Hi)> covers, long head)
+    {
         // The client is complete up to cur0: this decides whether a partial row is enough.
         long cur0 = k.Cursor;
-        var covers = new List<(long Lo, long Hi)> { (lo, main.Hi) };
-        covers.AddRange(gaps.Where(g => g.Hi > main.Hi));
         foreach ((long a, long b) in covers)
             k.AddRange(a, b);
-
-        var batch = new Batch { Tbl = t.Name };
-        batch.Columns.AddRange(t.Columns);
+        (Batch batch, List<long> own) = NewBatch(t, items, cur0);
         foreach ((long a, long b) in covers)
             batch.Covers.Add(new RangeExtra { Tbl = t.Name, Lo = a, Hi = b });
+
+        // After this table's covers: a row that references a row of the same batch does not pull it again.
+        List<(ChangeMessage Msg, string Log)> steps = ParentsOf(conn, tx, t, items);
+        steps.Add((new ChangeMessage { Batch = batch }, ""));
+        long remaining = Remaining(conn, tx, head);
+        foreach ((ChangeMessage m, string _) in steps)
+            m.Batch.Remaining = remaining;
+        steps[^1] = (steps[^1].Msg, $"Batch {t.Name}: {Describe(t, batch)}"
+            + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
+            + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {remaining}");
+        return steps;
+    }
+
+    /// <summary>
+    /// Batches with the rows that <paramref name="items"/> reference by FK and the client does not have yet, parents of
+    /// parents first (6.4). Each row closes its point range (v-1, v]: the version counter is shared, so no other row or
+    /// tombstone has version v, and the parent table's own catch-up does not send the row again.
+    /// </summary>
+    private List<(ChangeMessage Msg, string Log)> ParentsOf(SqliteConnection conn, SqliteTransaction tx, SyncTable t, IEnumerable<OwnerItem> items)
+    {
+        var steps = new List<(ChangeMessage Msg, string Log)>();
+        // The client wrote its own rows, so it has their parents.
+        List<OwnerItem> live = items.Where(it => !it.IsTombstone && it.Origin != _clientId).ToList();
+        foreach (IGrouping<string, SyncForeignKey> fks in t.ForeignKeys.GroupBy(fk => fk.ParentTable))
+        {
+            if (!Model.TryGet(fks.Key, out SyncTable? p))
+                continue;
+            CursorState kp = _mirror[p.Name];
+            if (kp.Ranges.Count >= Opt.ParentRangesLimit)
+            {
+                if (_rangesCapped.Add(p.Name))
+                    Log($"{p.Name}: {kp.Ranges.Count} відрізків у курсорі, батьків за ключами більше не підтягую до досинхронізації таблиці", SyncLogLevel.Warn);
+                continue;
+            }
+            var pks = new HashSet<string>(StringComparer.Ordinal);
+            foreach (int i in fks.Select(fk => t.IndexOf(fk.Column)).Where(i => i >= 0))
+            {
+                foreach (OwnerItem it in live)
+                {
+                    if (it.Values![i] is string pk)
+                        pks.Add(pk);
+                }
+            }
+            List<OwnerItem> parents = OwnerReader.Rows(conn, tx, p, pks).Where(r => !kp.Has(r.Version)).OrderByDescending(r => r.Version).ToList();
+            if (parents.Count == 0)
+                continue;
+
+            long cur0 = kp.Cursor;
+            foreach (OwnerItem r in parents)
+                kp.AddRange(r.Version - 1, r.Version);
+            (Batch batch, List<long> own) = NewBatch(p, parents, cur0);
+            foreach (OwnerItem r in parents)
+                batch.Covers.Add(new RangeExtra { Tbl = p.Name, Lo = r.Version - 1, Hi = r.Version });
+            steps.AddRange(ParentsOf(conn, tx, p, parents));
+            steps.Add((new ChangeMessage { Batch = batch }, $"Batch {p.Name} за ключами з {t.Name}: {Describe(p, batch)}"
+                + (own.Count > 0 ? $"; власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")));
+        }
+        return steps;
+    }
+
+    /// <summary>A catch-up batch of <paramref name="items"/>; the client's own changes are left out, their versions returned (5.2).</summary>
+    private (Batch Batch, List<long> Own) NewBatch(SyncTable t, IEnumerable<OwnerItem> items, long cur0)
+    {
+        var batch = new Batch { Tbl = t.Name };
+        batch.Columns.AddRange(t.Columns);
         var own = new List<long>();
-        foreach (OwnerItem it in tailItems.Concat(items))
+        foreach (OwnerItem it in items)
         {
             if (it.Origin == _clientId)
             {
@@ -313,24 +394,11 @@ internal sealed class SubscribeSession
             else
                 batch.Rows.Add(OwnerReader.ToWire(t, it, cur0));
         }
-        batch.Remaining = Remaining(conn, tx, head);
-        string log = $"Batch {t.Name}: {Describe(t, batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
-            + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
-            + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {batch.Remaining}";
-        return (new ChangeMessage { Batch = batch }, log);
+        return (batch, own);
     }
 
-    private long Remaining(SqliteConnection conn, SqliteTransaction tx, long head)
-    {
-        long n = 0;
-        foreach (SyncTable t in Model.Tables)
-        {
-            foreach ((long Lo, long Hi) g in _mirror[t.Name].Gaps(head))
-                n += OwnerReader.Count(conn, tx, t, g.Lo, g.Hi);
-        }
-
-        return n;
-    }
+    private long Remaining(SqliteConnection conn, SqliteTransaction tx, long head) =>
+        Model.Tables.Sum(t => OwnerReader.Count(conn, tx, t, _mirror[t.Name].Gaps(head)));
 
     /// <summary>Online: everything after the last sent version, oldest first, then Head(V) (6.4).</summary>
     private async Task<bool> OnlineStepAsync(SqliteConnection conn, CancellationToken ct)

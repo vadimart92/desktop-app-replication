@@ -457,9 +457,12 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             w = new ReplicaWriter(_store.Model, _instance!);
             // The cursors change on a copy that is published only after the commit (6.4, 14).
-            Dictionary<string, CursorState> next;
+            Dictionary<string, CursorState> prev, next;
             lock (_cursorsLock)
+            {
+                prev = _cursors;
                 next = _cursors.ToDictionary(x => x.Key, x => x.Value.Clone(), StringComparer.Ordinal);
+            }
             using SqliteTransaction tx = _conn.BeginTransaction();
             foreach (RangeExtra x in m.Extra)
                 next[x.Tbl].AddRange(x.Lo, x.Hi);
@@ -493,8 +496,12 @@ public sealed class SyncAgent : IAsyncDisposable
                         text = "усі таблиці досинхронізовано, репліка цілісна";
                     break;
             }
+            // Only the cursors this message moved: a parent table can hold thousands of point ranges (6.4).
             foreach ((string t, CursorState k) in next)
-                ClientStore.SaveCursor(_conn, tx, _instance!, t, k);
+            {
+                if (!prev.TryGetValue(t, out CursorState? was) || !was.SameAs(k))
+                    ClientStore.SaveCursor(_conn, tx, _instance!, t, k);
+            }
             // A confirmed delete waits until the cursor passes its tombstone: a late batch cannot bring the row back (9.1).
             foreach ((string t, CursorState k) in next)
             {
