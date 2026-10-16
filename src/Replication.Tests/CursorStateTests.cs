@@ -21,6 +21,18 @@ public sealed class CursorStateTests
     }
 
     [Test]
+    public void Point_ranges_hold_exactly_their_version()
+    {
+        var k = new CursorState(10);
+        k.AddRange(41, 42);
+        k.AddRange(19, 20);
+        k.AddRange(20, 21);
+        Assert.That(k.Ranges, Is.EqualTo(new[] { (19L, 21L), (41L, 42L) }));
+        Assert.That(new long[] { 3, 10, 20, 21, 42 }.All(k.Has), Is.True);
+        Assert.That(new long[] { 11, 19, 22, 41, 43 }.Any(k.Has), Is.False);
+    }
+
+    [Test]
     public void Wire_encoding_round_trips()
     {
         var k = new CursorState(1000, [(1500L, 1600L), (2000L, 2100L)]);

@@ -10,6 +10,13 @@ public sealed class OwnerOptions
     /// <summary>Rows per catch-up batch. The design sizes a batch at ~64 KB or more (6.4); the sample lowers it to show ranges.</summary>
     public int CatchupBatchRows { get; set; } = 500;
 
+    /// <summary>
+    /// Parents pulled by key leave a point range each in the parent table's cursor until its own catch-up merges them
+    /// (6.4). Past this many ranges in that cursor, rows of open tables go without their parents (the replica keeps
+    /// FKs off), so the state the client keeps and sends in <c>Start</c> stays bounded.
+    /// </summary>
+    public int ParentRangesLimit { get; set; } = 10_000;
+
     /// <summary>Rows per online batch.</summary>
     public int OnlineBatchRows { get; set; } = 2000;
 

@@ -47,23 +47,42 @@ internal static class OwnerReader
         return items.Count > limit ? items.GetRange(0, limit) : items;
     }
 
-    public static long Count(SqliteConnection c, SqliteTransaction? tx, SyncTable t, long lo, long hi) =>
-        c.Scalar<long>($"""
-            SELECT (SELECT COUNT(*) FROM {Q(t.Name)} WHERE SyncVersion > @lo AND SyncVersion <= @hi)
-                 + (SELECT COUNT(*) FROM _sync_tombstones WHERE tbl = @t AND version > @lo AND version <= @hi)
-            """, tx, ("@t", t.Name), ("@lo", lo), ("@hi", hi));
-
-    public static bool Any(SqliteConnection c, SqliteTransaction? tx, SyncTable t, long lo, long hi) =>
-        c.Scalar<long>($"""
-            SELECT EXISTS(SELECT 1 FROM {Q(t.Name)} WHERE SyncVersion > @lo AND SyncVersion <= @hi)
-                OR EXISTS(SELECT 1 FROM _sync_tombstones WHERE tbl = @t AND version > @lo AND version <= @hi)
-            """, tx, ("@t", t.Name), ("@lo", lo), ("@hi", hi)) != 0;
+    /// <summary>
+    /// Rows and tombstones in any of the ranges (lo, hi], in one statement: a cursor with points pulled by key (6.4)
+    /// has thousands of gaps. The bounds are numbers and are inlined, so their count is not bound by the parameter limit.
+    /// </summary>
+    public static long Count(SqliteConnection c, SqliteTransaction? tx, SyncTable t, IReadOnlyList<(long Lo, long Hi)> ranges)
+    {
+        if (ranges.Count == 0)
+            return 0;
+        string values = string.Join(", ", ranges.Select(g => FormattableString.Invariant($"({g.Lo}, {g.Hi})")));
+        return c.Scalar<long>($"""
+            WITH g(lo, hi) AS (VALUES {values})
+            SELECT (SELECT COUNT(*) FROM g JOIN {Q(t.Name)} x ON x.SyncVersion > g.lo AND x.SyncVersion <= g.hi)
+                 + (SELECT COUNT(*) FROM g JOIN _sync_tombstones s ON s.tbl = @t AND s.version > g.lo AND s.version <= g.hi)
+            """, tx, ("@t", t.Name));
+    }
 
     public static OwnerItem? Row(SqliteConnection c, SqliteTransaction? tx, SyncTable t, string pk)
     {
         using SqliteCommand cmd = c.Cmd($"{RowSelect(t)} WHERE Id = @id", tx, ("@id", pk));
         using SqliteDataReader r = cmd.ExecuteReader();
         return r.Read() ? ReadRow(t, r) : null;
+    }
+
+    /// <summary>The live rows among <paramref name="pks"/>; a key with no row is skipped.</summary>
+    public static List<OwnerItem> Rows(SqliteConnection c, SqliteTransaction? tx, SyncTable t, IReadOnlyCollection<string> pks)
+    {
+        var items = new List<OwnerItem>();
+        foreach (string[] chunk in pks.Chunk(500))
+        {
+            (string, object?)[] args = chunk.Select((pk, i) => ($"@p{i}", (object?)pk)).ToArray();
+            using SqliteCommand cmd = c.Cmd($"{RowSelect(t)} WHERE Id IN ({string.Join(", ", args.Select(a => a.Item1))})", tx, args);
+            using SqliteDataReader r = cmd.ExecuteReader();
+            while (r.Read())
+                items.Add(ReadRow(t, r));
+        }
+        return items;
     }
 
     public static OwnerItem? Tombstone(SqliteConnection c, SqliteTransaction? tx, SyncTable t, string pk)

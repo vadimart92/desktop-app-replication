@@ -56,6 +56,27 @@ public sealed class CursorState
             _ranges.Insert(i, (lo, hi));
     }
 
+    /// <summary>Whether version <paramref name="v"/> is received: at or below the cursor, or inside a range.</summary>
+    public bool Has(long v)
+    {
+        if (v <= Cursor)
+            return true;
+        int lo = 0, hi = _ranges.Count - 1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (v <= _ranges[mid].Lo)
+                hi = mid - 1;
+            else if (v > _ranges[mid].Hi)
+                lo = mid + 1;
+            else
+                return true;
+        }
+        return false;
+    }
+
+    public bool SameAs(CursorState other) => Cursor == other.Cursor && _ranges.SequenceEqual(other._ranges);
+
     /// <summary>Head(V) in the online phase lifts the cursor of a table that has no open ranges (6.4).</summary>
     public void LiftTo(long v)
     {
