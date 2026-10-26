@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Replication.Net;
 using Sample.Lab;
+using Sample.Lab.Net;
 
 namespace Sample.App.ViewModels;
 

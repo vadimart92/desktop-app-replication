@@ -72,8 +72,8 @@ public sealed partial class TwoOwnerLabViewModel : ObservableObject
                 logging: b => b.AddProvider(new LogFeedLoggerProvider(Feed)), ownerLogging: (name, b) => b.AddProvider(new LogFeedLoggerProvider(Feed, name))));
             _lab = lab;
             LabDir = lab.Dir;
-            OwnerA = new OwnerPanelViewModel(lab.A) { Name = TwoOwnerLab.OwnerA, Meters = [lab.ToA.Agent.Meter] };
-            OwnerB = new OwnerPanelViewModel(lab.B) { Name = TwoOwnerLab.OwnerB, Meters = [lab.ToB.Agent.Meter] };
+            OwnerA = new OwnerPanelViewModel(lab.A) { Name = TwoOwnerLab.OwnerA, Meters = [lab.ToA.Meter] };
+            OwnerB = new OwnerPanelViewModel(lab.B) { Name = TwoOwnerLab.OwnerB, Meters = [lab.ToB.Meter] };
             Client = new ClientPanelViewModel("Клієнт · одна БД: власні дані і два власники", [lab.ToA, lab.ToB], lab.Local);
             _timer.Start();
             State = "";

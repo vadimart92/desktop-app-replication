@@ -7,7 +7,6 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Replication.Model;
-using Replication.Net;
 using Replication.Protocol;
 using static Replication.Model.Wire;
 
@@ -66,6 +65,7 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private readonly ClientStore _store;
     private readonly ILogger _log;
+    private readonly Func<Stream, Stream>? _wrapStream;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly SqliteConnection _conn;
     private readonly AsyncSignal _linkSignal = new();
@@ -107,12 +107,17 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private sealed record ArchiveRetry(string Table, string Pk, ArchiveLeftover Why, long Version, int Tries);
 
-    public SyncAgent(ClientStore store, ILogger<SyncAgent> log, string address, string name, AgentOptions? options = null)
+    /// <param name="wrapStream">
+    /// Decorates the TCP stream of each connection, reconnects included, for example to count bytes or emulate a slow link;
+    /// the returned stream owns the one it wraps. None when null.
+    /// </param>
+    public SyncAgent(ClientStore store, ILogger<SyncAgent> log, string address, string name, AgentOptions? options = null, Func<Stream, Stream>? wrapStream = null)
     {
         _store = store;
         Address = address;
         Name = name;
         Options = options ?? new AgentOptions();
+        _wrapStream = wrapStream;
         _log = log;
         // Children may arrive before parents during catch-up (7).
         _conn = store.Open(foreignKeys: false);
@@ -126,8 +131,6 @@ public sealed class SyncAgent : IAsyncDisposable
 
     public AgentOptions Options { get; }
     public string? InstanceId => _instance;
-    public WireMeter Meter { get; } = new WireMeter();
-    public NetworkProfile Network { get; } = new NetworkProfile();
 
     /// <summary>Drop the next ApplyReply as if it was lost in the network (the demo's "lost reply").</summary>
     public bool LoseNextApplyReply { get; set; }
@@ -329,7 +332,8 @@ public sealed class SyncAgent : IAsyncDisposable
                     s.Dispose();
                     throw;
                 }
-                return new ShapedStream(new NetworkStream(s, ownsSocket: true), Meter, Network);
+                Stream tcp = new NetworkStream(s, ownsSocket: true);
+                return _wrapStream?.Invoke(tcp) ?? tcp;
             },
         };
         return GrpcChannel.ForAddress(Address, new GrpcChannelOptions
@@ -363,7 +367,6 @@ public sealed class SyncAgent : IAsyncDisposable
                 await writeGate.WaitAsync(ct);
                 try
                 {
-                    Meter.CountMessage("↑ " + m.BodyCase, m.CalculateSize());
                     await call.RequestStream.WriteAsync(m, ct);
                 }
                 finally
@@ -382,7 +385,6 @@ public sealed class SyncAgent : IAsyncDisposable
                 throw new IOException("the owner closed the stream");
             ChangeMessage first = call.ResponseStream.Current;
             TouchReceived();
-            Meter.CountMessage("↓ " + first.BodyCase, first.CalculateSize());
 
             if (first.BodyCase == ChangeMessage.BodyOneofCase.SchemaMismatch)
             {
@@ -500,7 +502,6 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             ChangeMessage m = call.ResponseStream.Current;
             TouchReceived();
-            Meter.CountMessage("↓ " + m.BodyCase, m.CalculateSize());
             await HandleAsync(m);
         }
     }
@@ -667,7 +668,6 @@ public sealed class SyncAgent : IAsyncDisposable
         if (req is null)
             return false;
         int size = req.CalculateSize();
-        Meter.CountMessage("↑ Apply", size);
         Log(LogLevel.Information, $"→ Apply: {string.Join("; ", req.Actions.Select(a => Describe(a, sent)))}");
         Stopwatch sw = Stopwatch.StartNew();
         ApplyReply reply;
@@ -682,7 +682,6 @@ public sealed class SyncAgent : IAsyncDisposable
         }
         double secs = Math.Max(sw.Elapsed.TotalSeconds, 0.05);
         _applyRate = _applyRate <= 0 ? size / secs : _applyRate * 0.5 + size / secs * 0.5;
-        Meter.CountMessage("↓ ApplyReply", reply.CalculateSize());
         if (LoseNextApplyReply)
         {
             LoseNextApplyReply = false;
@@ -903,7 +902,6 @@ public sealed class SyncAgent : IAsyncDisposable
         while (await call.ResponseStream.MoveNext(ct))
         {
             SnapshotChunk ch = call.ResponseStream.Current;
-            Meter.CountMessage("↓ SnapshotChunk", ch.CalculateSize());
             if (_download is null || _download.Id != ch.SnapshotId)
             {
                 if (_download is not null)

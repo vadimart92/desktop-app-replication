@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Replication.Client;
 using Replication.Model;
 using Sample.Domain;
+using Sample.Lab.Net;
 
 namespace Sample.Lab;
 
@@ -16,13 +17,15 @@ public sealed class ClientNode
 {
     private readonly ILogger<ClientNode> _log;
 
-    private ClientNode(string label, string ownerName, string dbPath, ClientReplication replication, SyncAgent agent)
+    private ClientNode(string label, string ownerName, string dbPath, ClientReplication replication, SyncAgent agent, WireMeter meter, NetworkProfile network)
     {
         Label = label;
         OwnerName = ownerName;
         DbPath = dbPath;
         Replication = replication;
         Agent = agent;
+        Meter = meter;
+        Network = network;
         _log = replication.Loggers.CreateLogger<ClientNode>();
     }
 
@@ -34,6 +37,12 @@ public sealed class ClientNode
     public string DbPath { get; }
     public ClientReplication Replication { get; }
     public SyncAgent Agent { get; }
+
+    /// <summary>Bytes on the agent's TCP connection.</summary>
+    public WireMeter Meter { get; }
+
+    /// <summary>The emulated link of the agent; change it at any time, it applies to the bytes sent after that.</summary>
+    public NetworkProfile Network { get; }
 
     /// <summary>The client without owners: the database migrated, the service tables installed. Owners are added by <see cref="Connect"/>.</summary>
     /// <param name="loggers">Loggers of the client; none when null. The caller disposes them.</param>
@@ -50,9 +59,11 @@ public sealed class ClientNode
     /// <summary>Connects the client to one more owner: the same database and WriteRouter, a new agent (4).</summary>
     public static ClientNode Connect(ClientReplication replication, string label, string ownerAddress, AgentOptions? options = null, string ownerName = "Власник")
     {
-        SyncAgent agent = replication.Connect(ownerAddress, label, options);
+        var meter = new WireMeter();
+        var network = new NetworkProfile();
+        SyncAgent agent = replication.Connect(ownerAddress, label, options, s => new ShapedStream(s, meter, network));
         agent.SetOpenTables(["Item"]);
-        return new ClientNode(label, ownerName, replication.Store.DbPath, replication, agent);
+        return new ClientNode(label, ownerName, replication.Store.DbPath, replication, agent, meter, network);
     }
 
     public bool Link

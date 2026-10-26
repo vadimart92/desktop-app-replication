@@ -104,7 +104,7 @@ public sealed partial class LabViewModel : ObservableObject
             LabDir = lab.Dir;
             var c1 = new ClientPanelViewModel(lab.C1);
             var c2 = new ClientPanelViewModel(lab.C2);
-            Owner = new OwnerPanelViewModel(lab.Owner) { Meters = [.. lab.Clients.Select(c => c.Agent.Meter)] };
+            Owner = new OwnerPanelViewModel(lab.Owner) { Meters = [.. lab.Clients.Select(c => c.Meter)] };
             Client1 = c1;
             Client2 = c2;
             _runner = new ScenarioRunner(lab, scenario);

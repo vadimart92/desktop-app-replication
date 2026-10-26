@@ -74,9 +74,10 @@ public sealed class ClientReplication : IAsyncDisposable
     /// Starts an agent for the owner at <paramref name="address"/> (link off). The agent learns the owner's instance id on
     /// the first link, and <see cref="SyncAgent.InstanceId"/> stays null until then.
     /// </summary>
-    public SyncAgent Connect(string address, string name, AgentOptions? options = null)
+    /// <param name="wrapStream">Decorates the agent's TCP stream (see <see cref="SyncAgent"/>); none when null.</param>
+    public SyncAgent Connect(string address, string name, AgentOptions? options = null, Func<Stream, Stream>? wrapStream = null)
     {
-        var agent = new SyncAgent(Store, Loggers.CreateLogger<SyncAgent>(), address, name, options);
+        var agent = new SyncAgent(Store, Loggers.CreateLogger<SyncAgent>(), address, name, options, wrapStream);
         lock (_agents)
             _agents.Add(agent);
         agent.Start();

@@ -3,8 +3,8 @@ using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Replication.Client;
-using Replication.Net;
 using Sample.Lab;
+using Sample.Lab.Net;
 
 namespace Sample.App.ViewModels;
 
@@ -74,7 +74,6 @@ public sealed partial class AgentViewModel : ObservableObject
 
     public ObservableCollection<string> Outbox { get; } = [];
     public ObservableCollection<string> Cursors { get; } = [];
-    public ObservableCollection<string> MessageStats { get; } = [];
 
     public bool Link
     {
@@ -96,7 +95,7 @@ public sealed partial class AgentViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedNetworkChanged(NetworkChoice value) => Node.Agent.Network.CopyFrom(value.Profile);
+    partial void OnSelectedNetworkChanged(NetworkChoice value) => Node.Network.CopyFrom(value.Profile);
 
     /// <summary>The demo's app update: a new schema version; the link the agent turned off on SchemaMismatch goes on again.</summary>
     partial void OnNewSchemaChanged(bool value)
@@ -114,13 +113,12 @@ public sealed partial class AgentViewModel : ObservableObject
         AgentStatus s = Node.Agent.GetStatus();
         (StatusText, StatusBrush) = Describe(s);
         PendingText = Prefix + (s.Pending == 0 ? "усе відправлено" : $"{s.Pending} змін очікують відправки");
-        WireMeter m = Node.Agent.Meter;
+        WireMeter m = Node.Meter;
         (double up, double down) = m.SampleRate();
         BytesUp = WireMeter.Format(m.BytesUp);
         BytesDown = WireMeter.Format(m.BytesDown);
         RateUp = up > 0 ? $"{WireMeter.Format(up)}/с" : "";
         RateDown = down > 0 ? $"{WireMeter.Format(down)}/с" : "";
-        MessageStats.SyncTo([.. m.Messages.OrderBy(x => x.Key).Select(x => $"{x.Key}: {x.Value.Count} шт., {WireMeter.Format(x.Value.Bytes)} без стиснення")]);
         OnPropertyChanged(nameof(Link));
         OnPropertyChanged(nameof(LoseNextReply));
         Cursors.SyncTo([.. s.Cursors.Select(x => $"{x.Key}: {x.Value}")]);
@@ -163,5 +161,5 @@ public sealed partial class AgentViewModel : ObservableObject
     private static int ArchiveCount(OutboxEntry e) => e.Predicate?.Split("],[").Length ?? 0;
 
     [RelayCommand]
-    private void ResetBytes() => Node.Agent.Meter.Reset();
+    private void ResetBytes() => Node.Meter.Reset();
 }

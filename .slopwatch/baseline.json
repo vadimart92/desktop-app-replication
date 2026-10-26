@@ -5,10 +5,10 @@
   "description": "Initial baseline created by 'slopwatch init' on 2026-10-05 20:40:07 UTC",
   "entries": [
     {
-      "hash": "e93eb0841a85c516",
+      "hash": "6b0779db47c30b89",
       "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Net/ShapedStream.cs",
-      "lineNumber": 107,
+      "filePath": "src/Sample.Lab/Net/ShapedStream.cs",
+      "lineNumber": 78,
       "codeSnippet": "catch (Exception) when (_cts.IsCancellationRequested) { }",
       "message": "Empty catch block swallows exceptions without handling",
       "baselinedAt": "2026-10-05T20:40:07.9814082+00:00"

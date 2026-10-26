@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Replication;
 using Replication.Client;
-using Replication.Net;
 
 namespace Sample.Lab;
 
@@ -170,7 +169,7 @@ public static class Scenarios
             async l =>
             {
                 await BothSynced(l);
-                l.C1.Agent.Network.Latency = TimeSpan.FromMilliseconds(1500);
+                l.C1.Network.Latency = TimeSpan.FromMilliseconds(1500);
             },
             [
                 new ScenarioStep("Змінити ціну «Стрейч-плівки», а поки Apply летить, змінити назву", "Затримка Клієнта 1 тут 1,5 с в кожен бік. Рядок черги з sent = 1 видаляється, вставляється новий без seq з колонками Price, Name. Відповідь на першу відправку прибирає тільки seq ≤ applied_up_to_seq, нова правка їде наступною пачкою.",
@@ -291,12 +290,12 @@ public static class Scenarios
                 new ScenarioStep("Увімкнути зв'язок Клієнта 2", "Start: курсор < purged_version, тому власник відповідає SnapshotRequired і закриває потік. Агент завантажує знімок шматками по 4 КБ, чергу не відправляє. Знімок замінює репліку, а черга дій старої репліки (ціна «Палети» і перейменування паперу посеред завантаження) відкидається.",
                     l =>
                     {
-                        l.C2.Agent.Network.DownBitsPerSecond = 200_000;
+                        l.C2.Network.DownBitsPerSecond = 200_000;
                         l.C2.Link = true;
                         l.When(() => l.C2.Agent.GetStatus().SnapshotProgress > 0.2, async () =>
                         {
                             await l.C2.RenameAsync("Папір A4", "Папір A4 (500 арк.)");
-                            l.C2.Agent.Network.DownBitsPerSecond = 0;
+                            l.C2.Network.DownBitsPerSecond = 0;
                         });
                         return Task.CompletedTask;
                     }),
@@ -352,7 +351,7 @@ public static class Scenarios
                 new ScenarioStep("Увімкнути зв'язок Клієнта 2", "Репліки нема (курсори нульові), тому на Start власник відповідає SnapshotRequired з розміром знімка. Власник робить VACUUM INTO, реєструє клієнта з acked_version = V і віддає файл шматками по 4 КБ (канал Клієнта 2 тут 100 кбіт/с). Поки файл їде, автоматика змінює «Степлер». На третині файлу зв'язок рветься, а після відновлення завантаження продовжується з того ж зміщення за snapshot_id. Після підміни Subscribe довозить зміну «Степлера», новішу за V.",
                     l =>
                     {
-                        l.C2.Agent.Network.DownBitsPerSecond = 100_000;
+                        l.C2.Network.DownBitsPerSecond = 100_000;
                         l.C2.Link = true;
                         l.When(() => l.C2.Agent.GetStatus().SnapshotProgress > 0.15, () => l.Owner.SetPriceAsync("Степлер", 175));
                         l.When(() => l.C2.Agent.GetStatus().SnapshotProgress > 0.35, () =>
@@ -360,7 +359,7 @@ public static class Scenarios
                             l.C2.Link = false;
                             l.Later(TimeSpan.FromSeconds(1.5), () =>
                             {
-                                l.C2.Agent.Network.DownBitsPerSecond = 0;
+                                l.C2.Network.DownBitsPerSecond = 0;
                                 l.C2.Link = true;
                                 return Task.CompletedTask;
                             });
@@ -405,7 +404,7 @@ public static class Scenarios
             async l =>
             {
                 await BothSynced(l);
-                l.C1.Agent.Network.Latency = TimeSpan.FromMilliseconds(700);
+                l.C1.Network.Latency = TimeSpan.FromMilliseconds(700);
             },
             [
                 new ScenarioStep("Клієнт 1 переносить в архів категорію «Архів» і товар «Каталог 2019»", "Замикання по FK додає дочірні «Старий принтер» і «Факс». Набір отримує InstanceId = X:archive однією транзакцією. У чергу йде одна дія: Id ∈ набір і SyncVersion ≤ V. Поки Apply летить, автоматика змінює ціну «Факсу»; рядок в архіві, тому ця зміна проходить повз. Власник видаляє рядки з SyncVersion ≤ V: «Факс» новіший і лишається, а з ним його батько «Архів». Клієнт повертає обидва з архіву в репліку, «Факс» іде в NeedFull, і клієнт повторює перенесення.",
