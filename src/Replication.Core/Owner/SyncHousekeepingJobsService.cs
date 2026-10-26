@@ -1,9 +1,10 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Replication.Owner;
 
 /// <summary>Owner background jobs: version file (5.3), floor refresh (5.2) and tombstone cleanup (10.2).</summary>
-public sealed class SyncHousekeepingJobsService(OwnerStore store) : BackgroundService
+public sealed class SyncHousekeepingJobsService(OwnerStore store, ILogger<SyncHousekeepingJobsService> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -25,7 +26,7 @@ public sealed class SyncHousekeepingJobsService(OwnerStore store) : BackgroundSe
                 {
                     OwnerStore.PurgeResult r = store.Purge();
                     if (r.Tombstones > 0)
-                        store.Options.Log.Write("owner", $"очищення: видалено {r.Tombstones} tombstones, purged_version = {r.PurgedVersion}");
+                        log.LogInformation("Purge: deleted {Tombstones} tombstones, purged_version = {PurgedVersion}", r.Tombstones, r.PurgedVersion);
                     store.IncrementalVacuum(256);
                     lastPurge = DateTimeOffset.UtcNow;
                 }
@@ -33,7 +34,7 @@ public sealed class SyncHousekeepingJobsService(OwnerStore store) : BackgroundSe
             catch (OperationCanceledException) { }
             catch (Exception e)
             {
-                store.Options.Log.Write("owner", "фонова задача: " + e.Message, SyncLogLevel.Bad);
+                log.LogError(e, "Background job failed: {Error}", e.Message);
             }
         }
     }

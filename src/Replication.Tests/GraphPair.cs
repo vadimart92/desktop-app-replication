@@ -71,20 +71,13 @@ internal sealed class GraphPair : IAsyncDisposable
 {
     private const string Label = "клієнт";
 
-    private readonly List<string> _applies = [];
+    private readonly TestLog _log;
 
-    private GraphPair(OwnerHost owner, ClientReplication client, SyncLog log)
+    private GraphPair(OwnerHost owner, ClientReplication client, TestLog log)
     {
         Owner = owner;
         Client = client;
-        log.Written += e =>
-        {
-            if (e.Source == Label && e.Text.StartsWith("→ Apply:", StringComparison.Ordinal))
-            {
-                lock (_applies)
-                    _applies.Add(e.Text);
-            }
-        };
+        _log = log;
     }
 
     public OwnerHost Owner { get; }
@@ -93,19 +86,12 @@ internal sealed class GraphPair : IAsyncDisposable
     public string Instance => Agent.InstanceId ?? throw new InvalidOperationException("репліки ще нема");
 
     /// <summary>The "→ Apply:" log lines of the client: one per sent batch.</summary>
-    public IReadOnlyList<string> Applies
-    {
-        get
-        {
-            lock (_applies)
-                return [.. _applies];
-        }
-    }
+    public IReadOnlyList<string> Applies => [.. _log.OfAgent(Label).Where(l => l.StartsWith("→ Apply:", StringComparison.Ordinal))];
 
     public static async Task<GraphPair> StartAsync(Action<GraphDbContext>? seedOwner = null)
     {
         string dir = TestDb.NewDir();
-        var log = new SyncLog();
+        var log = new TestLog();
         string ownerPath = Path.Combine(dir, "owner.db");
         SyncModel model;
         using (GraphDbContext db = GraphDbContext.Open(ownerPath))
@@ -113,7 +99,7 @@ internal sealed class GraphPair : IAsyncDisposable
             db.Database.EnsureCreated();
             model = SyncModel.From(db);
         }
-        OwnerHost owner = await OwnerHost.StartAsync(ownerPath, model, new OwnerOptions { Log = log, OnlineInterval = TimeSpan.FromMilliseconds(300) });
+        OwnerHost owner = await OwnerHost.StartAsync(ownerPath, model, new OwnerOptions { OnlineInterval = TimeSpan.FromMilliseconds(300) });
         if (seedOwner is not null)
         {
             using GraphDbContext db = GraphDbContext.Open(ownerPath);
@@ -124,7 +110,7 @@ internal sealed class GraphPair : IAsyncDisposable
         string clientPath = Path.Combine(dir, "client.db");
         using (GraphDbContext db = GraphDbContext.Open(clientPath))
             db.Database.EnsureCreated();
-        var client = new ClientReplication(ClientReplication.BuildServices(clientPath, model).InstallClientStore(), log);
+        var client = new ClientReplication(ClientReplication.BuildServices(clientPath, model, loggers: log.Loggers).InstallClientStore());
         var pair = new GraphPair(owner, client, log);
         client.Connect(owner.Address, Label, new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300) });
         await pair.SyncAsync();
@@ -162,6 +148,7 @@ internal sealed class GraphPair : IAsyncDisposable
     {
         await Client.DisposeAsync();
         await Owner.DisposeAsync();
+        _log.Dispose();
         SqliteConnection.ClearAllPools();
     }
 }

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 
 namespace Replication.Owner;
@@ -8,7 +9,7 @@ namespace Replication.Owner;
 /// <summary>
 /// Snapshot files made with VACUUM INTO, served in chunks and resumable by snapshot_id and offset (6.3).
 /// </summary>
-internal sealed class SnapshotStore(OwnerStore store)
+internal sealed class SnapshotStore(OwnerStore store, ILogger<SnapshotStore> log)
 {
     private readonly ConcurrentDictionary<string, Snap> _snaps = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -71,7 +72,7 @@ internal sealed class SnapshotStore(OwnerStore store)
             }
 
             _snaps[id] = snap;
-            store.Options.Log.Write("owner", $"VACUUM INTO → {id}, V = {snap.Version}, {snap.Size / 1024} КБ; клієнт зареєстровано з acked_version = {snap.Version}");
+            log.LogInformation("VACUUM INTO → {SnapshotId}, V = {Version}, {SizeKb} KB; client registered with acked_version = {AckedVersion}", id, snap.Version, snap.Size / 1024, snap.Version);
             return snap;
         }
         finally
@@ -110,7 +111,7 @@ internal sealed class SnapshotStore(OwnerStore store)
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            store.Options.Log.Write("owner", $"знімок {System.IO.Path.GetFileName(path)}: не вдалося видалити ({e.Message})", SyncLogLevel.Warn);
+            log.LogWarning("Snapshot {File}: delete failed ({Error})", System.IO.Path.GetFileName(path), e.Message);
             return false;
         }
     }

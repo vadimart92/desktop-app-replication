@@ -27,13 +27,16 @@ public sealed class OwnerHost : IAsyncDisposable
     public OwnerStore Store { get; }
     public int Port { get; }
     public string Address => $"http://127.0.0.1:{Port}";
+    public ILoggerFactory Loggers => _app.Services.GetRequiredService<ILoggerFactory>();
 
     /// <param name="port">0 picks a free port.</param>
     /// <param name="listenAnywhere">Listen on all interfaces instead of loopback only.</param>
-    public static async Task<OwnerHost> StartAsync(string dbPath, SyncModel model, OwnerOptions options, int port = 0, bool listenAnywhere = false)
+    /// <param name="logging">Logging providers of the host; none when null.</param>
+    public static async Task<OwnerHost> StartAsync(string dbPath, SyncModel model, OwnerOptions options, int port = 0, bool listenAnywhere = false, Action<ILoggingBuilder>? logging = null)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
+        logging?.Invoke(builder.Logging);
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.ConfigureSyncKestrelServerOptions();
@@ -59,7 +62,7 @@ public sealed class OwnerHost : IAsyncDisposable
         await app.StartAsync();
         OwnerStore store = app.Services.GetRequiredService<OwnerStore>();
         int actualPort = BindingAddress.Parse(app.Urls.First()).Port;
-        options.Log.Write("owner", $"gRPC-сервер слухає порт {actualPort}, instance_id {store.InstanceId}", SyncLogLevel.Ok);
+        app.Services.GetRequiredService<ILogger<OwnerHost>>().LogInformation("gRPC-сервер слухає порт {Port}, instance_id {InstanceId}", actualPort, store.InstanceId);
         return new OwnerHost(app, store, actualPort);
     }
 

@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using Replication;
 using Sample.Lab;
 
@@ -67,9 +68,8 @@ public sealed partial class TwoOwnerLabViewModel : ObservableObject
             if (old is not null)
                 await old.DisposeAsync();
             Feed.Clear();
-            var log = new SyncLog();
-            Feed.Attach(log);
-            TwoOwnerLab lab = await Task.Run(() => TwoOwnerLab.StartAsync(log: log, localSeed: LocalData.Seed));
+            TwoOwnerLab lab = await Task.Run(() => TwoOwnerLab.StartAsync(localSeed: LocalData.Seed,
+                logging: b => b.AddProvider(new LogFeedLoggerProvider(Feed)), ownerLogging: (name, b) => b.AddProvider(new LogFeedLoggerProvider(Feed, name))));
             _lab = lab;
             LabDir = lab.Dir;
             OwnerA = new OwnerPanelViewModel(lab.A) { Name = TwoOwnerLab.OwnerA, Meters = [lab.ToA.Agent.Meter] };

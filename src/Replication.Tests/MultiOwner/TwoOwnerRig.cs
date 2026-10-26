@@ -7,6 +7,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Replication.Client;
 using Replication.Model;
 using Replication.Owner;
@@ -39,15 +40,12 @@ internal sealed class TestOwner : IAsyncDisposable
     public string Address { get; }
 
     /// <summary>Starts the server and seeds the empty database with <paramref name="data"/>.</summary>
-    /// <param name="log">The owner's lines go there under <paramref name="name"/> instead of "owner".</param>
-    public static async Task<TestOwner> StartAsync(string name, string dbPath, OwnerData data, SyncLog log, Action<OwnerOptions>? configure = null)
+    public static async Task<TestOwner> StartAsync(string name, string dbPath, OwnerData data, Action<OwnerOptions>? configure = null)
     {
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(dbPath))
             model = SyncModel.From(db);
-        var own = new SyncLog();
-        own.Written += e => log.Write(e.Source == "owner" ? name : e.Source, e.Text, e.Level);
-        var options = new OwnerOptions { Log = own, OnlineInterval = TimeSpan.FromMilliseconds(300) };
+        var options = new OwnerOptions { OnlineInterval = TimeSpan.FromMilliseconds(300) };
         configure?.Invoke(options);
 
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
@@ -153,15 +151,15 @@ internal sealed record Step(string Agent, AgentState State, string? Table, DateT
 internal sealed class TestClient : IAsyncDisposable
 {
     private readonly ServiceProvider _services;
-    private readonly SyncLog _log;
+    private readonly ILoggerFactory? _loggers;
     private readonly List<SyncAgent> _agents = [];
     private readonly List<Step> _steps = [];
 
-    private TestClient(string dbPath, ServiceProvider services, SyncLog log)
+    private TestClient(string dbPath, ServiceProvider services, ILoggerFactory? loggers)
     {
         DbPath = dbPath;
         _services = services;
-        _log = log;
+        _loggers = loggers;
         Store = services.GetRequiredService<ClientStore>();
         WriteRouter router = services.GetRequiredService<WriteRouter>();
         // The router commits an outbox row for an instance: wake that instance's agent.
@@ -195,17 +193,20 @@ internal sealed class TestClient : IAsyncDisposable
     }
 
     /// <summary>The database migrated and the client service tables installed; no owners yet.</summary>
-    public static TestClient Create(string dbPath, SyncLog log)
+    public static TestClient Create(string dbPath, ILoggerFactory? loggers)
     {
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(dbPath))
             model = SyncModel.From(db);
-        ServiceProvider services = new ServiceCollection()
+        var collection = new ServiceCollection();
+        if (loggers is not null)
+            collection.AddSingleton(loggers);
+        ServiceProvider services = collection
             .AddClientServices(dbPath, model)
             .AddSampleDb(dbPath, sp => [sp.GetRequiredService<WriteRouter>()])
             .BuildServiceProvider();
         services.MigrateSampleDb().InstallClientStore();
-        return new TestClient(dbPath, services, log);
+        return new TestClient(dbPath, services, loggers);
     }
 
     /// <summary>A new agent for <paramref name="owner"/> with the link off; catch-up instead of a snapshot, Item open.</summary>
@@ -218,7 +219,7 @@ internal sealed class TestClient : IAsyncDisposable
             LagWarningWindow = TimeSpan.FromSeconds(6),
             SkipSnapshotOnEmptyReplica = true,
         };
-        var agent = new SyncAgent(Store, owner.Address, AgentName(owner), options, _log);
+        var agent = new SyncAgent(Store, _loggers?.CreateLogger<SyncAgent>() ?? NullLogger<SyncAgent>.Instance, owner.Address, AgentName(owner), options);
         agent.SetOpenTables(["Item"]);
         AgentState last = AgentState.Offline;
         agent.StatusChanged += () =>
@@ -286,7 +287,7 @@ internal sealed class TwoOwnerRig : IAsyncDisposable
         ("Мастило", 95L, "новий", "Гараж"), ("Шини", 2400L, "архів", "Гараж"),
     ], 6);
 
-    private TwoOwnerRig(string dir, SyncLog log, TestOwner a, TestOwner b)
+    private TwoOwnerRig(string dir, TestLog? log, TestOwner a, TestOwner b)
     {
         Dir = dir;
         Log = log;
@@ -295,7 +296,8 @@ internal sealed class TwoOwnerRig : IAsyncDisposable
     }
 
     public string Dir { get; }
-    public SyncLog Log { get; }
+    /// <summary>Where the agents log; nowhere when null.</summary>
+    public TestLog? Log { get; }
     public TestOwner A { get; }
     public TestOwner B { get; }
     public TestClient Client { get; private set; } = null!;
@@ -307,12 +309,12 @@ internal sealed class TwoOwnerRig : IAsyncDisposable
 
     /// <param name="configureOwner">Applied to both owners.</param>
     /// <param name="seedClient">Writes the client's own rows through its DbContext before any agent exists.</param>
-    public static async Task<TwoOwnerRig> StartAsync(SyncLog log, Action<OwnerOptions>? configureOwner = null, Func<SampleDbContext, Task>? seedClient = null)
+    public static async Task<TwoOwnerRig> StartAsync(TestLog? log = null, Action<OwnerOptions>? configureOwner = null, Func<SampleDbContext, Task>? seedClient = null)
     {
         string dir = Path.Combine(Path.GetTempPath(), "replication-tests", $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
         Directory.CreateDirectory(dir);
-        TestOwner a = await TestOwner.StartAsync(OwnerA, Path.Combine(dir, "owner1.db"), DataA, log, configureOwner);
-        TestOwner b = await TestOwner.StartAsync(OwnerB, Path.Combine(dir, "owner2.db"), DataB, log, configureOwner);
+        TestOwner a = await TestOwner.StartAsync(OwnerA, Path.Combine(dir, "owner1.db"), DataA, configureOwner);
+        TestOwner b = await TestOwner.StartAsync(OwnerB, Path.Combine(dir, "owner2.db"), DataB, configureOwner);
         var rig = new TwoOwnerRig(dir, log, a, b);
         await rig.OpenClientAsync(seedClient);
         return rig;
@@ -320,7 +322,7 @@ internal sealed class TwoOwnerRig : IAsyncDisposable
 
     private async Task OpenClientAsync(Func<SampleDbContext, Task>? seed = null)
     {
-        Client = TestClient.Create(ClientPath, Log);
+        Client = TestClient.Create(ClientPath, Log?.Loggers);
         if (seed is not null)
         {
             await using SampleDbContext db = Client.Db();

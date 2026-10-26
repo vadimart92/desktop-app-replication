@@ -113,7 +113,7 @@ public sealed partial class AgentViewModel : ObservableObject
     {
         AgentStatus s = Node.Agent.GetStatus();
         (StatusText, StatusBrush) = Describe(s);
-        PendingText = Prefix + (s.Pending == 0 ? "усе відправлено" : $"{s.Pending} змін очікують відправки{(s.InFlight > 0 ? $", {s.InFlight} у дорозі" : "")}{(s.PendingDeletes > 0 ? $"; видалень: {s.PendingDeletes}" : "")}");
+        PendingText = Prefix + (s.Pending == 0 ? "усе відправлено" : $"{s.Pending} змін очікують відправки");
         WireMeter m = Node.Agent.Meter;
         (double up, double down) = m.SampleRate();
         BytesUp = WireMeter.Format(m.BytesUp);

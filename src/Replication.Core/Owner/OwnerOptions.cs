@@ -11,7 +11,13 @@ public sealed class OwnerOptions
     public int CatchupBatchRows { get; set; } = 500;
 
     /// <summary>Rows per online batch.</summary>
-    public int OnlineBatchRows { get; set; } = 2000;
+    public int OnlineBatchRows { get; set; } = 500;
+
+    /// <summary>
+    /// An online stream that is still more than this many versions behind the head after a step falls back to catch-up:
+    /// open tables first, newest first, with <c>remaining</c> reported.
+    /// </summary>
+    public long OnlineLagVersions { get; set; } = 1200;
 
     /// <summary>Online batches are sent at most this often, gathering what appeared meanwhile (6.4, "gluing small batches").</summary>
     public TimeSpan OnlineInterval { get; set; } = TimeSpan.FromMilliseconds(500);
@@ -33,8 +39,6 @@ public sealed class OwnerOptions
 
     /// <summary>Where VACUUM INTO writes snapshot files. Defaults to a folder next to the database.</summary>
     public string? SnapshotDirectory { get; set; }
-
-    public SyncLog Log { get; set; } = SyncLog.Null;
 
     /// <summary>Fault injection for demos and tests. Not used in production paths unless set.</summary>
     public OwnerFaults Faults { get; } = new OwnerFaults();

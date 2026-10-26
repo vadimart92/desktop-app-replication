@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Replication;
 using Replication.Client;
 using Replication.Owner;
@@ -11,19 +12,22 @@ namespace Sample.Lab;
 public sealed class Lab : IAsyncDisposable
 {
     private readonly CancellationTokenSource _cts = new();
+    private readonly ILogger<Lab> _log;
     private int _scheduled;
 
-    private Lab(string dir, SyncLog log, OwnerNode owner, ClientNode c1, ClientNode c2)
+    private Lab(string dir, ILoggerFactory loggers, OwnerNode owner, ClientNode c1, ClientNode c2)
     {
         Dir = dir;
-        Log = log;
+        Loggers = loggers;
+        _log = loggers.CreateLogger<Lab>();
         Owner = owner;
         C1 = c1;
         C2 = c2;
     }
 
     public string Dir { get; }
-    public SyncLog Log { get; }
+    /// <summary>Loggers of the clients and the scenarios; the owner's host has its own.</summary>
+    public ILoggerFactory Loggers { get; }
     public OwnerNode Owner { get; }
     public ClientNode C1 { get; }
     public ClientNode C2 { get; }
@@ -35,23 +39,24 @@ public sealed class Lab : IAsyncDisposable
     /// <summary>A new path under %TEMP%/replication-lab for one run's databases.</summary>
     public static string NewDir() => Path.Combine(Path.GetTempPath(), "replication-lab", $"{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}");
 
-    public static async Task<Lab> StartAsync(string? dir = null, SyncLog? log = null, Action<OwnerOptions>? configureOwner = null)
+    /// <param name="logging">Logging providers of the owner's host, the clients and the scenarios; none when null.</param>
+    public static async Task<Lab> StartAsync(string? dir = null, Action<OwnerOptions>? configureOwner = null, Action<ILoggingBuilder>? logging = null)
     {
         dir ??= NewDir();
         Directory.CreateDirectory(dir);
-        log ??= new SyncLog();
-        OwnerNode owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), log, configure: o =>
+        ILoggerFactory loggers = LoggerFactory.Create(b => logging?.Invoke(b));
+        OwnerNode owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), configure: o =>
         {
             o.OnlineInterval = TimeSpan.FromMilliseconds(300);
             configureOwner?.Invoke(o);
-        });
+        }, logging: logging);
         AgentOptions Opt() => new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
-        ClientNode c1 = ClientNode.Connect(ClientNode.Create(Path.Combine(dir, "client1.db"), log), "Клієнт 1", owner.Address, Opt());
-        ClientNode c2 = ClientNode.Connect(ClientNode.Create(Path.Combine(dir, "client2.db"), log), "Клієнт 2", owner.Address, Opt());
-        return new Lab(dir, log, owner, c1, c2);
+        ClientNode c1 = ClientNode.Connect(ClientNode.Create(Path.Combine(dir, "client1.db"), loggers), "Клієнт 1", owner.Address, Opt());
+        ClientNode c2 = ClientNode.Connect(ClientNode.Create(Path.Combine(dir, "client2.db"), loggers), "Клієнт 2", owner.Address, Opt());
+        return new Lab(dir, loggers, owner, c1, c2);
     }
 
-    public void Say(string text, SyncLogLevel level = SyncLogLevel.Info) => Log.Write("сценарій", text, level);
+    public void Say(string text, LogLevel level = LogLevel.Information) => _log.Log(level, "{Text}", text);
 
     /// <summary>Turns the link on and waits until the client is online (the demo's syncNow).</summary>
     public async Task SyncNowAsync(ClientNode c, TimeSpan? timeout = null)
@@ -109,7 +114,7 @@ public sealed class Lab : IAsyncDisposable
             catch (OperationCanceledException) { }
             catch (Exception e)
             {
-                Say("відкладена дія: " + e.Message, SyncLogLevel.Bad);
+                Say("відкладена дія: " + e.Message, LogLevel.Error);
             }
             finally
             {
@@ -172,6 +177,7 @@ public sealed class Lab : IAsyncDisposable
         await C1.Replication.DisposeAsync();
         await C2.Replication.DisposeAsync();
         await Owner.DisposeAsync();
+        Loggers.Dispose();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
     }
 }

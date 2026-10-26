@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Replication;
+using Microsoft.Extensions.Logging;
 using Replication.Client;
 using Replication.Model;
 using Sample.Domain;
@@ -14,14 +14,16 @@ namespace Sample.Lab;
 /// <remarks>The <see cref="ClientReplication"/> owns the agents: dispose it, not the nodes.</remarks>
 public sealed class ClientNode
 {
-    private ClientNode(string label, string ownerName, string dbPath, ClientReplication replication, SyncAgent agent, SyncLog log)
+    private readonly ILogger<ClientNode> _log;
+
+    private ClientNode(string label, string ownerName, string dbPath, ClientReplication replication, SyncAgent agent)
     {
         Label = label;
         OwnerName = ownerName;
         DbPath = dbPath;
         Replication = replication;
         Agent = agent;
-        Log = log;
+        _log = replication.Loggers.CreateLogger<ClientNode>();
     }
 
     public string Label { get; }
@@ -32,17 +34,17 @@ public sealed class ClientNode
     public string DbPath { get; }
     public ClientReplication Replication { get; }
     public SyncAgent Agent { get; }
-    public SyncLog Log { get; }
 
     /// <summary>The client without owners: the database migrated, the service tables installed. Owners are added by <see cref="Connect"/>.</summary>
-    public static ClientReplication Create(string dbPath, SyncLog log)
+    /// <param name="loggers">Loggers of the client; none when null. The caller disposes them.</param>
+    public static ClientReplication Create(string dbPath, ILoggerFactory? loggers = null)
     {
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(dbPath))
             model = SyncModel.From(db);
-        ServiceProvider services = ClientReplication.BuildServices(dbPath, model, s => s.AddSampleDb(dbPath, sp => [sp.GetRequiredService<WriteRouter>()]));
+        ServiceProvider services = ClientReplication.BuildServices(dbPath, model, s => s.AddSampleDb(dbPath, sp => [sp.GetRequiredService<WriteRouter>()]), loggers);
         services.MigrateSampleDb().InstallClientStore();
-        return new ClientReplication(services, log);
+        return new ClientReplication(services);
     }
 
     /// <summary>Connects the client to one more owner: the same database and WriteRouter, a new agent (4).</summary>
@@ -50,7 +52,7 @@ public sealed class ClientNode
     {
         SyncAgent agent = replication.Connect(ownerAddress, label, options);
         agent.SetOpenTables(["Item"]);
-        return new ClientNode(label, ownerName, replication.Store.DbPath, replication, agent, replication.Log);
+        return new ClientNode(label, ownerName, replication.Store.DbPath, replication, agent);
     }
 
     public bool Link
@@ -63,7 +65,7 @@ public sealed class ClientNode
 
     public SampleDbContext Db() => Replication.Services.GetRequiredService<IDbContextFactory<SampleDbContext>>().CreateDbContext();
 
-    private void Say(string text) => Log.Write(Label, "користувач: " + text);
+    private void Say(string text) => _log.LogInformation("[{Agent}] користувач: {Text}", Label, text);
 
     private IQueryable<T> Mine<T>(SampleDbContext db) where T : BaseEntity =>
         db.Set<T>().Where(x => EF.Property<string>(x, SyncColumns.InstanceId) == Instance);

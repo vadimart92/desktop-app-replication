@@ -225,7 +225,7 @@ public sealed class ClientStore
         if (e.Sent is OutboxSendState.DeleteConfirmed || e.Kind is OutboxKind.Delete)
         {
             // The row is gone locally.
-            return "вже видалено";
+            return "already deleted";
         }
 
         var newCls = (OutboxClass)Math.Min((int)e.Class, (int)cls);
@@ -240,7 +240,7 @@ public sealed class ClientStore
                 if (e.Sent == OutboxSendState.Waiting)
                 {
                     Remove(c, tx, e.Id);
-                    return "створення і видалення схлопнулись: власник нічого не дізнається";
+                    return "create and delete collapsed: the owner learns nothing";
                 }
                 nk = OutboxKind.Delete;
                 break;
@@ -252,14 +252,14 @@ public sealed class ClientStore
                 nk = OutboxKind.Delete;
                 break;
             default:
-                return "без змін";
+                return "no change";
         }
         string what = nc.Count > 0 ? $"{nk} {string.Join(", ", nc)}" : $"{nk}";
         if (e.Sent == OutboxSendState.InFlight)
         {
             Remove(c, tx, e.Id);
             Insert(c, tx, instance, table, pk, nk, newCls, nc);
-            return $"дія #{e.Seq} уже в дорозі: рядок черги замінено новим ({what})";
+            return $"action #{e.Seq} is already on the way: the queue row is replaced by a new one ({what})";
         }
         c.Exec("UPDATE _sync_outbox SET kind = @k, columns = @cols, cls = @c WHERE id = @id", tx,
             ("@k", (int)nk), ("@cols", string.Join(',', nc)), ("@c", (int)newCls), ("@id", e.Id));

@@ -21,18 +21,12 @@ public sealed class TwoOwnerCoreTests
 
     /// <summary>The tables the seed fills: an empty table sends nothing in a catch-up.</summary>
     private static readonly string[] s_seeded = ["Category", "Item", "Log"];
-    private readonly List<SyncLogEntry> _log = [];
+    private TestLog _log = new();
     private TwoOwnerRig? _rig;
 
     private async Task<TwoOwnerRig> StartAsync(int catchupBatchRows = 3, Func<SampleDbContext, Task>? seedClient = null)
     {
-        var log = new SyncLog();
-        log.Written += e =>
-        {
-            lock (_log)
-                _log.Add(e);
-        };
-        _rig = await TwoOwnerRig.StartAsync(log, o => o.CatchupBatchRows = catchupBatchRows, seedClient);
+        _rig = await TwoOwnerRig.StartAsync(_log, o => o.CatchupBatchRows = catchupBatchRows, seedClient);
         return _rig;
     }
 
@@ -51,12 +45,9 @@ public sealed class TwoOwnerCoreTests
         if (_rig is not null)
             await _rig.DisposeAsync();
         _rig = null;
-        lock (_log)
-        {
-            foreach (SyncLogEntry e in _log)
-                TestContext.Out.WriteLine($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-            _log.Clear();
-        }
+        _log.WriteTo(TestContext.Out);
+        _log.Dispose();
+        _log = new TestLog();
     }
 
     // Raw reads.

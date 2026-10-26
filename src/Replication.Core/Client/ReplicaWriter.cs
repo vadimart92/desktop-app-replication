@@ -115,7 +115,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         {
             // A parent that archived rows point to goes to the archive instead (11.6).
             if (ArchiveGuard.DeleteOrArchive(c, tx, model, Instance, t, pk))
-                Note(c, tx, $"{label} видалено на інстансі; на нього посилаються архівні записи, тому він перенесений в архів", info: true);
+                Note(c, tx, $"{label} was deleted on the instance; archived rows point to it, so it was moved to the archive", info: true);
             n = 1;
         }
         if (e is { Kind: OutboxKind.Patch or OutboxKind.Create })
@@ -124,7 +124,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             var gone = new List<string>();
             // Creates that depend on it (8.4); the row itself is not its own child.
             RemoveChildren(c, tx, t, pk, gone, [(t.Name, pk)]);
-            Note(c, tx, $"правку запису {label} втрачено: його видалено на інстансі{(gone.Count > 0 ? $"; не збережено залежні: {string.Join(", ", gone)}" : "")}");
+            Note(c, tx, $"the edit of {label} is lost: it was deleted on the instance{(gone.Count > 0 ? $"; dependent rows not saved: {string.Join(", ", gone)}" : "")}");
         }
         return n;
     }

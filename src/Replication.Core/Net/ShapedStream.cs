@@ -26,10 +26,10 @@ public sealed class NetworkProfile
 
     public override string ToString() =>
         Latency == TimeSpan.Zero && UpBitsPerSecond == 0 && DownBitsPerSecond == 0
-            ? "без обмежень"
-            : $"затримка {Latency.TotalMilliseconds:0} мс в кожен бік, ↑ {Kbit(UpBitsPerSecond)}, ↓ {Kbit(DownBitsPerSecond)}";
+            ? "no limits"
+            : $"latency {Latency.TotalMilliseconds:0} ms each way, ↑ {Kbit(UpBitsPerSecond)}, ↓ {Kbit(DownBitsPerSecond)}";
 
-    private static string Kbit(long bps) => bps == 0 ? "∞" : bps >= 1_000_000 ? $"{bps / 1_000_000.0:0.#} Мбіт/с" : $"{bps / 1000} кбіт/с";
+    private static string Kbit(long bps) => bps == 0 ? "∞" : bps >= 1_000_000 ? $"{bps / 1_000_000.0:0.#} Mbit/s" : $"{bps / 1000} kbit/s";
 }
 
 /// <summary>

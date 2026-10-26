@@ -166,6 +166,56 @@ public sealed class SubscribeProtocolTests
         Assert.That(answer.Batch.Rows, Has.Count.EqualTo(1));
     }
 
+    [Test]
+    public async Task Online_stream_that_falls_behind_goes_back_to_catchup_and_online_again_without_losing_rows()
+    {
+        await using Lab lab = await Lab.StartAsync(configureOwner: o =>
+        {
+            o.OnlineBatchRows = 10;
+            o.OnlineLagVersions = 20;
+        });
+        using RawSession session = RawSession.Open(lab);
+        await session.SendStartAsync(session.NewStart(skipSnapshot: true));
+        await session.ReadUntilAsync(m => m.BodyCase == ChangeMessage.BodyOneofCase.Progress && m.Progress.Done);
+
+        // One commit of 100 rows: the online step takes 10, the other 90 are more than the lag limit.
+        InsertLogRows(lab, 100);
+        var received = new HashSet<string>();
+        ChangeMessage m;
+        while ((m = await session.ReadAsync()).BodyCase != ChangeMessage.BodyOneofCase.Progress)
+        {
+            if (m.BodyCase == ChangeMessage.BodyOneofCase.Batch)
+            {
+                Assert.That(m.Batch.Online, Is.True, "before the fallback the stream is online");
+                received.UnionWith(m.Batch.Rows.Select(r => Wire.PkText(r.Pk)));
+            }
+        }
+        Assert.That(m.Progress.Done, Is.False);
+        Assert.That(m.Progress.Remaining, Is.EqualTo(90));
+        Assert.That(received, Has.Count.EqualTo(10));
+
+        int catchupBatches = 0;
+        while ((m = await session.ReadAsync()).BodyCase != ChangeMessage.BodyOneofCase.Progress)
+        {
+            if (m.BodyCase == ChangeMessage.BodyOneofCase.Batch)
+            {
+                Assert.That(m.Batch.Online, Is.False, "after the fallback the owner sends catch-up batches");
+                catchupBatches++;
+                received.UnionWith(m.Batch.Rows.Select(r => Wire.PkText(r.Pk)));
+            }
+        }
+        Assert.That(m.Progress.Done, Is.True);
+        Assert.That(catchupBatches, Is.GreaterThan(0));
+        Assert.That(received, Has.Count.EqualTo(100), "every row arrives once the stream is online again");
+    }
+
+    internal static void InsertLogRows(Lab lab, int count)
+    {
+        IEnumerable<string> values = Enumerable.Range(0, count)
+            .Select(i => $"('{Wire.PkText(Guid.NewGuid())}', 'lag {i}', '2026-01-01 00:00:00', '2026-01-01 00:00:00')");
+        OwnerSql.Exec(lab, $"INSERT INTO Log(Id, Text, CreatedOn, ModifiedOn) VALUES {string.Join(", ", values)}");
+    }
+
     /// <summary>A Subscribe call made by hand to the lab's owner.</summary>
     private sealed class RawSession : IDisposable
     {

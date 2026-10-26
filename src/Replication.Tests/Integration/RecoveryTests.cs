@@ -12,8 +12,7 @@ namespace Replication.Tests.Integration;
 [TestFixture]
 public sealed class RecoveryTests
 {
-    private readonly List<string> _log = [];
-    private SyncLog _syncLog = null!;
+    private TestLog _log = null!;
     private string _dir = "";
     private OwnerNode? _owner;
     private ClientNode? _client;
@@ -25,13 +24,7 @@ public sealed class RecoveryTests
     [SetUp]
     public void SetUp()
     {
-        _log.Clear();
-        _syncLog = new SyncLog();
-        _syncLog.Written += e =>
-        {
-            lock (_log)
-                _log.Add($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        };
+        _log = new TestLog();
         _dir = TestDb.NewDir();
     }
 
@@ -40,11 +33,8 @@ public sealed class RecoveryTests
     {
         await StopClientAsync();
         await StopOwnerAsync();
-        lock (_log)
-        {
-            foreach (string l in _log)
-                TestContext.Out.WriteLine(l);
-        }
+        _log.WriteTo(TestContext.Out);
+        _log.Dispose();
     }
 
     [Test]
@@ -219,7 +209,7 @@ public sealed class RecoveryTests
 
     private async Task StartOwnerAsync()
     {
-        _owner = await OwnerNode.StartAsync(OwnerPath, _syncLog, _port, configure: o => o.OnlineInterval = TimeSpan.FromMilliseconds(300));
+        _owner = await OwnerNode.StartAsync(OwnerPath, _port, configure: o => o.OnlineInterval = TimeSpan.FromMilliseconds(300), logging: _log.AddTo);
         _port = _owner.Host.Port;
     }
 
@@ -239,7 +229,7 @@ public sealed class RecoveryTests
             ReconnectMin = TimeSpan.FromMilliseconds(200),
             ReconnectMax = TimeSpan.FromSeconds(1),
         };
-        _client = ClientNode.Connect(ClientNode.Create(ClientPath, _syncLog), "клієнт", $"http://127.0.0.1:{_port}", options);
+        _client = ClientNode.Connect(ClientNode.Create(ClientPath, _log.Loggers), "клієнт", $"http://127.0.0.1:{_port}", options);
         _client.Link = link;
     }
 
@@ -262,8 +252,7 @@ public sealed class RecoveryTests
 
     private int SnapshotRequests()
     {
-        lock (_log)
-            return _log.Count(l => l.Contains("→ Snapshot", StringComparison.Ordinal));
+        return _log.OfAgent("клієнт").Count(l => l.StartsWith("→ Snapshot", StringComparison.Ordinal));
     }
 
     private long SnapshotVersion() => (long)Rows.Scalar(ClientPath, "SELECT snapshot_version FROM _sync_instances")!;

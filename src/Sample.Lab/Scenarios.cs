@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Replication;
 using Replication.Client;
 using Replication.Net;
@@ -113,7 +114,7 @@ public static class Scenarios
                 Gone(l, "Маркери");
                 Gone(l, "Маркери (12 шт)");
                 Gone(l, "Скотч");
-                Check(HasNote(l.C1, "втрачено"), "Клієнт 1 не отримав повідомлення про втрачену правку");
+                Check(HasNote(l.C1, "is lost"), "Клієнт 1 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask;
             }),
 
@@ -143,7 +144,7 @@ public static class Scenarios
                 Check(Inspect.OwnerHas(l.Owner, "Дрон"), "«Дрон» не доїхав до власника");
                 Gone(l, "Сканер");
                 Gone(l, "Факс");
-                Check(HasNote(l.C1, "не збережено"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
+                Check(HasNote(l.C1, "not saved"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
                 return Task.CompletedTask;
             }),
 
@@ -336,7 +337,7 @@ public static class Scenarios
                 Gone(l, "Каталог 2019");
                 Check(Inspect.OwnerHas(l.Owner, "Архівна шафа") && Inspect.ClientHas(l.C1, "Архівна шафа"), "«Архівна шафа» мала лишитись і приїхати до Клієнта 1");
                 Check(Inspect.OwnerItem(l.Owner, "Степлер") is { Price: 135 }, "правка ціни «Степлера» не доїхала");
-                Check(HasNote(l.C1, "не видалено"), "Клієнт 1 не отримав повідомлення про невидалений запис");
+                Check(HasNote(l.C1, "not deleted"), "Клієнт 1 не отримав повідомлення про невидалений запис");
                 return Task.CompletedTask;
             }),
 
@@ -542,7 +543,7 @@ public static class Scenarios
             {
                 foreach (string n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" })
                     Gone(l, n);
-                Check(HasNote(l.C2, "втрачено"), "Клієнт 2 не отримав повідомлення про втрачену правку");
+                Check(HasNote(l.C2, "is lost"), "Клієнт 2 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask;
             }),
 
@@ -613,7 +614,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
 
     public async Task SetupAsync()
     {
-        Lab.Say($"сценарій «{Scenario.Title}»: старт", SyncLogLevel.Ok);
+        Lab.Say($"сценарій «{Scenario.Title}»: старт");
         await Scenario.Setup(Lab);
     }
 
@@ -622,7 +623,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
         if (Done)
             return;
         ScenarioStep s = Scenario.Steps[Step++];
-        Lab.Say($"— крок {Step}: {s.Title}", SyncLogLevel.Ok);
+        Lab.Say($"— крок {Step}: {s.Title}");
         await s.Do(Lab);
     }
 
@@ -646,7 +647,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
         foreach (ClientNode c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
             problems.AddRange(Inspect.Diff(Lab.Owner, c).Select(d => $"{c.Label}: {d}"));
         Lab.Say(problems.Count == 0 ? "перевірка: репліки дорівнюють власнику, очікуваний результат є" : "перевірка: " + string.Join("; ", problems),
-            problems.Count == 0 ? SyncLogLevel.Ok : SyncLogLevel.Bad);
+            problems.Count == 0 ? LogLevel.Information : LogLevel.Error);
         return problems;
     }
 }

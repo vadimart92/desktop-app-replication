@@ -67,7 +67,7 @@ dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
 3. Власник, після міграцій:
 
    ```csharp
-   services.AddOwnerServices("owner.db", SyncModel.From(db), new OwnerOptions { Log = log });
+   services.AddOwnerServices("owner.db", SyncModel.From(db), new OwnerOptions());
    services.AddGrpc().ConfigureSyncGrpcServiceOptions();     // ліміти повідомлень і стиснення gRPC
    kestrel.ConfigureSyncKestrelServerOptions();              // у ConfigureKestrel, ліміти Kestrel
    app.MapSyncGrpcService();
@@ -77,6 +77,30 @@ dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
    ```
 
    Автоматика пише як завжди: SaveChanges, ExecuteUpdate, ExecuteDelete, сирий SQL. Усе ловлять тригери.
+
+   Журнал власника йде через `ILogger` з Microsoft.Extensions.Logging хоста: провайдери, фільтри і рівні налаштовує застосунок. Категорії:
+
+   | Категорія | Що пише |
+   |---|---|
+   | `Replication.Owner.SubscribeSession` | Start, досинхронізація (рядок на кожну пачку), онлайн-пачки, NeedFull, `[client_id]` на початку рядка |
+   | `Replication.Owner.SyncGrpcService` | Apply (рядок на кожен виклик), продовження завантаження знімка |
+   | `Replication.Owner.SnapshotStore` | VACUUM INTO, невдале видалення старого знімка |
+   | `Replication.Owner.SyncHousekeepingJobsService` | очищення tombstones, збої фонової задачі |
+
+   Рівні: `Information` для звичайного ходу синку (його багато: кожна пачка і кожен Apply), `Warning` для SchemaMismatch, SnapshotRequired, відставання онлайну з поверненням до досинхронізації, Apply з Rejected/Ignored/changed і невдалого видалення знімка, `Error` для збоїв фонової задачі. У робочому застосунку `Information` зазвичай варто приглушити, наприклад в `appsettings.json`:
+
+   ```json
+   {
+     "Logging": {
+       "LogLevel": {
+         "Default": "Information",
+         "Replication.Owner": "Warning"
+       }
+     }
+   }
+   ```
+
+   Для розбору проблем з окремим клієнтом можна лишити `Information` лише для `Replication.Owner.SubscribeSession`.
 4. Клієнт, після міграцій:
 
    ```csharp
@@ -84,10 +108,12 @@ dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
    options.AddInterceptors(validation, router);                   // у DbContextOptions клієнта, WriteRouter з DI останнім
    // ... міграції застосунку
    app.Services.InstallClientStore();                             // IServiceProvider: службові таблиці клієнта
-   var agent = new SyncAgent(store, "http://10.0.0.5:5005", "Склад"); // по одному на власника
+   var agent = new SyncAgent(store, "http://10.0.0.5:5005", "Склад", options, loggerFactory.CreateLogger<SyncAgent>()); // по одному на власника
    agent.Start();
    agent.LinkEnabled = true;
    ```
+
+   Агент пише в `ILogger<SyncAgent>` (категорія `Replication.Client.SyncAgent`; без логера не пише нікуди), кожен рядок починається з `[ім'я агента]`. Рівні: `Information` для звичайного ходу (Start, кожна пачка, кожен Apply і ApplyReply, знімок), `Warning` для обриву зв'язку, вимкненого зв'язку, SchemaMismatch, SnapshotRequired, відставання каналу, повтору Apply і перенесень в архів, що лишились на власнику, `Error` для другого агента на ту саму репліку, загубленого ApplyReply, відкинутої черги старої репліки і відхилених дій. `WriteRouter` пише кожен запис у чергу в `Replication.Client.WriteRouter` (`Information`, рядок починається з `[instance]`) через `ILoggerFactory`, зареєстрований у тих самих сервісах, що й `AddClientServices`. Приглушується так само, наприклад `"Replication.Client": "Warning"` поруч із `"Replication.Owner"` у `appsettings.json`.
 
    Роутер стоїть після власних перехоплювачів застосунку (тут `validation`). EF не повідомляє жодному перехоплювачу, що наступний за ним кинув виняток у `SavingChanges`, тож перехоплювач після роутера, який відхилив збереження, лишив би транзакцію роутера, а з нею блокування запису клієнтської БД, до наступного збереження на цьому контексті.
 
@@ -102,7 +128,8 @@ dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
 - **Черга при новому знімку.** Знімок і `SkipSnapshotOnEmptyReplica` відкидають чергу інстансу (з повідомленням), а не переносять її (10.3).
 - **Зміна версії схеми** лише зупиняє агента в `SchemaMismatch`; знімок за нею не береться, курсори продовжуються.
 - **Перенесення в архів** йде набором ключів з замиканням по FK, а не предикатом; відповідь `Applied` несе `changed[]` і `children[]` замість `Rejected: changed`. За предикатом передається лише `DeleteWhereAsync`.
-- **`Progress`** власник шле один раз (`done`), а залишок змін це одне число `Batch.remaining`.
+- **`Progress`** власник шле з `done = true` наприкінці досинхронізації, а залишок змін це одне число `Batch.remaining`. Онлайн-потік, що відстав від голови більше ніж на `OwnerOptions.OnlineLagVersions` (1200), без обриву повертається до досинхронізації: власник шле `Progress` з `done = false` і `remaining`, клієнт переходить у `AgentState.Catchup`.
+- **Розмір онлайн-пачки** `OwnerOptions.OnlineBatchRows` 500 рядків, як і пачки досинхронізації (у дизайні було 2000).
 - **Додатково до дизайну:** стани `Connecting` і `Duplicate` (один агент на інстанс у `ClientStore`), таблиці `_sync_notes` (повідомлення користувачу) і `_sync_columns` (перенумерація масок), колонка `_sync_meta.clock_offset`; `<БД>.syncstate` це файл версії з 5.3.
 - **Не реалізовано** (позначено в дизайні): маска `BLOB` для таблиць понад 63 колонки (комплексні типи розгортаються в колонки і теж рахуються), ліміт відрізків, ліміт байтів у польоті за BDP, мінімум ~64 КБ на пачку, послідовні знімки кількох інстансів, конфігурація шумних таблиць, перенесення в архів за предикатом, перехоплення `ExecuteUpdate`/`ExecuteDelete` у `WriteRouter` (він лише `SaveChangesInterceptor`), клас «масова» для імпорту, продовження знімка після перезапуску клієнта, відновлення з бекапу в самому додатку, тести лічильника 2³¹ і ліміту відрізків.
 

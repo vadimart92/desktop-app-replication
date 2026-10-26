@@ -57,8 +57,8 @@ public sealed class WireMeter
 
     public static string Format(double bytes) => bytes switch
     {
-        < 1024 => $"{bytes:0} Б",
-        < 1024 * 1024 => $"{bytes / 1024:0.0} КБ",
-        _ => $"{bytes / 1024 / 1024:0.00} МБ",
+        < 1024 => $"{bytes:0} B",
+        < 1024 * 1024 => $"{bytes / 1024:0.0} KB",
+        _ => $"{bytes / 1024 / 1024:0.00} MB",
     };
 }

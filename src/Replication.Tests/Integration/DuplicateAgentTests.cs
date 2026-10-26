@@ -25,7 +25,7 @@ public sealed class DuplicateAgentTests : LabTests
             Assert.That(second.GetStatus().LastError, Does.Contain(lab.C1.Agent.Name));
             Assert.That(lab.C1.Agent.GetStatus().State, Is.EqualTo(AgentState.Online), "the first agent keeps the replica");
             Assert.That(lab.Diff(lab.C1), Is.Empty);
-            Assert.That(OwnerLogAbout(lab.C1).Count(l => l.Contains("Start прийнято", StringComparison.Ordinal)), Is.EqualTo(1));
+            Assert.That(OwnerLogAbout(lab.C1).Count(l => l.Contains("Start accepted", StringComparison.Ordinal)), Is.EqualTo(1));
         });
 
         await Task.Delay(TimeSpan.FromSeconds(1.5));

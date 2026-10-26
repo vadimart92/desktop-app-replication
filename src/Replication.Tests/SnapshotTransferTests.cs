@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 using Replication.Client;
 using Replication.Protocol;
@@ -118,7 +119,7 @@ public sealed class SnapshotTransferTests
         });
         await using Probe probe = Probe.Start(owner);
 
-        await probe.WaitForErrorAsync("хеш знімка не збігся");
+        await probe.WaitForErrorAsync("the snapshot hash does not match");
 
         probe.AssertNothingInstalled();
         Assert.That(Directory.GetFiles(probe.Dir, "*.part"), Is.Empty);
@@ -134,7 +135,7 @@ public sealed class SnapshotTransferTests
         });
         await using Probe probe = Probe.Start(owner);
 
-        await probe.WaitForErrorAsync("знімок обірвався");
+        await probe.WaitForErrorAsync("the snapshot was cut off");
 
         probe.AssertNothingInstalled();
         Assert.That(Directory.GetFiles(probe.Dir, "*.part"), Has.Length.EqualTo(1));
@@ -146,7 +147,7 @@ public sealed class SnapshotTransferTests
         await using FakeOwner owner = await FakeOwner.StartAsync(_ => Task.CompletedTask);
         await using Probe probe = Probe.Start(owner);
 
-        await probe.WaitForErrorAsync("знімок порожній");
+        await probe.WaitForErrorAsync("the snapshot is empty");
 
         probe.AssertNothingInstalled();
     }
@@ -272,8 +273,8 @@ public sealed class SnapshotTransferTests
         public static Probe Start(FakeOwner owner)
         {
             string dir = TestDb.NewDir();
-            ClientReplication replication = ClientNode.Create(Path.Combine(dir, "client.db"), new SyncLog());
-            var agent = new SyncAgent(replication.Store, owner.Address, "клієнт");
+            ClientReplication replication = ClientNode.Create(Path.Combine(dir, "client.db"));
+            var agent = new SyncAgent(replication.Store, NullLogger<SyncAgent>.Instance, owner.Address, "клієнт");
             agent.Start();
             agent.LinkEnabled = true;
             return new Probe(dir, replication, agent);

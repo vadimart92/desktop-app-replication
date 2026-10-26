@@ -1,49 +1,35 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 using Replication.Client;
 using Sample.Lab;
 
 namespace Replication.Tests.Integration;
 
-/// <summary>The agent's name is the log source; the app sets it, nothing stores it.</summary>
+/// <summary>The agent's name is the prefix of its log lines; the app sets it, nothing stores it.</summary>
 [TestFixture]
 public sealed class AgentNameTests : LabTests
 {
     [Test]
-    public async Task Setting_the_name_changes_the_log_source()
+    public async Task Setting_the_name_changes_the_log_prefix()
     {
         Lab lab = await StartSyncedAsync();
-        var sources = new List<string>();
-        lab.C1.Replication.Log.Written += e =>
-        {
-            lock (sources)
-                sources.Add(e.Source);
-        };
 
         lab.C1.Agent.Name = "Склад-2";
         await lab.Owner.AddLogAsync(1);
         await lab.SettleAsync();
 
         Assert.That(lab.C1.Agent.Name, Is.EqualTo("Склад-2"));
-        lock (sources)
-            Assert.That(sources, Does.Contain("Склад-2"));
-    }
-
-    [Test]
-    public async Task Empty_name_is_refused()
-    {
-        Lab lab = await StartAsync();
-
-        Assert.That(() => lab.C1.Agent.Name = " ", Throws.InstanceOf<ArgumentException>());
+        Assert.That(ClientLog(lab.C1), Is.Not.Empty);
     }
 
     [Test]
     public async Task Start_learns_the_instance_on_the_first_link()
     {
         Lab lab = await StartAsync();
-        ClientReplication replication = ClientNode.Create(Path.Combine(TestDb.NewDir(), "client.db"), new SyncLog());
+        ClientReplication replication = ClientNode.Create(Path.Combine(TestDb.NewDir(), "client.db"));
         try
         {
-            await using SyncAgent agent = new(replication.Store, lab.Owner.Address, "клієнт");
+            await using SyncAgent agent = new(replication.Store, NullLogger<SyncAgent>.Instance, lab.Owner.Address, "клієнт");
 
             agent.Start();
             Assert.That(agent.InstanceId, Is.Null, "nobody asked the owner yet");

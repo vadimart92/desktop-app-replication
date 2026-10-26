@@ -41,7 +41,7 @@ public sealed class ClientToOwnerTests : LabTests
         Assert.That(lab.C1.Outbox(), Is.Empty);
         Assert.That(Rows.Scalar(lab.Owner.DbPath, $"SELECT applied_seq FROM _sync_clients WHERE client_id = '{lab.C1.Replication.ClientId}'"), Is.EqualTo(1L));
         // No echo: the stream skipped the row for Клієнт 1, Клієнт 2 got it.
-        Assert.That(OwnerLogAbout(lab.C1), Has.Some.Contains($"пропущено як власні зміни: Item v{owner.Version}"));
+        Assert.That(OwnerLogAbout(lab.C1), Has.Some.Contains($"skipped as own changes: Item v{owner.Version}"));
         Assert.That(lab.C2.ReplicaRow("Item", stapler)["Price"], Is.EqualTo(150L));
         foreach (ClientNode c in lab.Clients)
             Assert.That(lab.Diff(c), Is.Empty, c.Label);
@@ -178,7 +178,7 @@ public sealed class ClientToOwnerTests : LabTests
         string result = await lab.C1.ArchiveAsync(("Item", "Факс"));
         await lab.SettleAsync();
 
-        Assert.That(result, Does.StartWith("перенесення в архів"));
+        Assert.That(result, Does.StartWith("archive:"));
         Assert.That(lab.OwnerHas("Item", fax), Is.False);
         RowData archived = Rows.One(lab.C1.DbPath, "Item", fax, SyncColumns.ArchiveOf(lab.C1.Instance));
         Assert.That(archived["Name"], Is.EqualTo("Факс"));

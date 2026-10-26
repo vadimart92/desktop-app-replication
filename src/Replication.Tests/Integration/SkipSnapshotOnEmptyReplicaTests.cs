@@ -31,7 +31,6 @@ public sealed class SkipSnapshotOnEmptyReplicaTests : LabTests
             Assert.That(Rows.All(lab.C2.DbPath, "Item", lab.C2.Instance), Has.Count.EqualTo(9));
             Assert.That(Rows.Scalar(lab.C2.DbPath, "SELECT COUNT(*) FROM _sync_instances WHERE snapshot_version IS NULL"), Is.EqualTo(1L), "no snapshot was installed");
             Assert.That(ClientLog(lab.C2), Has.None.Contains("→ Snapshot"));
-            Assert.That(OwnerLogAbout(lab.C2), Has.None.Contains("SnapshotRequired"));
         });
     }
 
@@ -45,8 +44,7 @@ public sealed class SkipSnapshotOnEmptyReplicaTests : LabTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(OwnerLogAbout(lab.C2), Has.Some.Contains("репліки нема → SnapshotRequired"));
-            Assert.That(ClientLog(lab.C2), Has.Some.Contains("→ Snapshot: репліки нема"));
+            Assert.That(ClientLog(lab.C2), Has.Some.Contains("→ Snapshot: no replica"));
             Assert.That(lab.Diff(lab.C2), Is.Empty);
         });
     }
@@ -88,7 +86,7 @@ public sealed class SkipSnapshotOnEmptyReplicaTests : LabTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(ClientLog(lab.C2), Has.Some.Contains("SkipSnapshotOnEmptyReplica, репліку очищено"));
+            Assert.That(ClientLog(lab.C2), Has.Some.Contains("SkipSnapshotOnEmptyReplica, replica cleared"));
             Assert.That(lab.C2.Outbox(), Is.Empty, "the queue went with the old replica");
             Assert.That(Inspect.OwnerItem(lab.Owner, "Палета")?.Price, Is.Not.EqualTo(470));
             Assert.That(ClientLog(lab.C2).Count(l => l.StartsWith("→ Snapshot", StringComparison.Ordinal)), Is.EqualTo(snapshots));

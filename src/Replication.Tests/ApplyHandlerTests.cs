@@ -13,13 +13,7 @@ public sealed class ApplyHandlerTests
     [Test]
     public async Task Children_of_a_create_rejected_as_unique_are_rejected_in_the_same_batch()
     {
-        var log = new SyncLog();
-        var entries = new List<SyncLogEntry>();
-        log.Written += e =>
-        {
-            lock (entries)
-                entries.Add(e);
-        };
+        using var log = new TestLog();
         try
         {
             await using Lab lab = await StartWithUniqueNamesAsync(log);
@@ -42,14 +36,9 @@ public sealed class ApplyHandlerTests
             Assert.That(Inspect.OwnerRows(lab.Owner, "Category"), Has.Exactly(1).Matches<RowView>(r => r.Label == "Офіс"));
             Assert.That(Inspect.OwnerHas(lab.Owner, "Діркопробивач"), Is.False);
             List<ClientNote> notes = lab.C1.Replication.Store.Notes();
-            Assert.That(notes, Has.Some.Matches<ClientNote>(n => n.Text.Contains("«Офіс»", StringComparison.Ordinal) && n.Text.Contains("вже є запис", StringComparison.Ordinal)));
-            Assert.That(notes, Has.Some.Matches<ClientNote>(n => n.Text.Contains("«Діркопробивач»", StringComparison.Ordinal) && n.Text.Contains("батьківський запис не збережено або видалено", StringComparison.Ordinal)));
-            lock (entries)
-            {
-                Assert.That(entries, Has.Some.Matches<SyncLogEntry>(e => e.Source == "owner" && e.Text.Contains("Rejected (unique)", StringComparison.Ordinal)
-                    && e.Text.Contains("Rejected (parent deleted)", StringComparison.Ordinal)));
-                Assert.That(entries, Has.None.Matches<SyncLogEntry>(e => e.Text.StartsWith("Apply: Unknown", StringComparison.Ordinal)));
-            }
+            Assert.That(notes, Has.Some.Matches<ClientNote>(n => n.Text.Contains("«Офіс»", StringComparison.Ordinal) && n.Text.Contains("already has a row", StringComparison.Ordinal)));
+            Assert.That(notes, Has.Some.Matches<ClientNote>(n => n.Text.Contains("«Діркопробивач»", StringComparison.Ordinal) && n.Text.Contains("the parent row is not saved or was deleted", StringComparison.Ordinal)));
+            Assert.That(log.OfAgent(lab.C1.Agent.Name), Has.None.Matches<string>(l => l.StartsWith("Apply: Unknown", StringComparison.Ordinal)));
 
             // The outbox is not blocked: a later edit reaches the owner.
             await lab.C1.SetPriceAsync("Степлер", 777);
@@ -58,11 +47,7 @@ public sealed class ApplyHandlerTests
         }
         finally
         {
-            lock (entries)
-            {
-                foreach (SyncLogEntry e in entries)
-                    TestContext.Out.WriteLine($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-            }
+            log.WriteTo(TestContext.Out);
         }
     }
 
@@ -85,8 +70,8 @@ public sealed class ApplyHandlerTests
 
         // The rejected create stays in the replica (9); the item gets the owner's row back, in its old category.
         await WaitForDiffAsync(lab, $"Category {Wire.Short(Wire.PkText(duplicate.Id))}: зайвий у репліці");
-        Assert.That(lab.C1.Replication.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.StartsWith("правку запису «Степлер» не збережено", StringComparison.Ordinal)
-            && n.Text.Contains("батьківський запис не збережено або видалено", StringComparison.Ordinal)));
+        Assert.That(lab.C1.Replication.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.StartsWith("the edit of «Степлер» is not saved", StringComparison.Ordinal)
+            && n.Text.Contains("the parent row is not saved or was deleted", StringComparison.Ordinal)));
     }
 
     [Test]
@@ -98,14 +83,14 @@ public sealed class ApplyHandlerTests
         await lab.C1.RenameCategoryAsync(store, "Офіс");
 
         await WaitForDiffAsync(lab);
-        Assert.That(lab.C1.Replication.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.StartsWith("правку запису «Офіс» не збережено", StringComparison.Ordinal)
-            && n.Text.Contains("вже є запис", StringComparison.Ordinal)));
+        Assert.That(lab.C1.Replication.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.StartsWith("the edit of «Офіс» is not saved", StringComparison.Ordinal)
+            && n.Text.Contains("already has a row", StringComparison.Ordinal)));
     }
 
     /// <summary>A lab with C1 synced, and a unique business column on the owner only (9): the client's replica has no such index.</summary>
-    private static async Task<Lab> StartWithUniqueNamesAsync(SyncLog? log = null)
+    private static async Task<Lab> StartWithUniqueNamesAsync(TestLog? log = null)
     {
-        Lab lab = await Lab.StartAsync(log: log);
+        Lab lab = await Lab.StartAsync(logging: log is null ? null : log.AddTo);
         await lab.SyncNowAsync(lab.C1);
         await lab.SettleAsync();
         OwnerSql.Exec(lab, "CREATE UNIQUE INDEX UX_Category_Name ON \"Category\"(\"Name\")");

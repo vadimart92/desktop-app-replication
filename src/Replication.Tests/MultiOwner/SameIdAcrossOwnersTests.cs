@@ -44,7 +44,7 @@ public sealed class SameIdAcrossOwnersTests
     /// <summary>Both owners hold a category with the same Id and different names; the client joins owner 1, then owner 2.</summary>
     private async Task<Guid> StartWithSharedCategoryAsync()
     {
-        _rig = await TwoOwnerRig.StartAsync(new SyncLog());
+        _rig = await TwoOwnerRig.StartAsync();
         var shared = Guid.NewGuid();
         foreach ((TestOwner owner, string name) in new[] { (_rig.A, "Спільна А"), (_rig.B, "Спільна Б") })
         {

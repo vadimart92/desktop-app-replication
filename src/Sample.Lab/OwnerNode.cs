@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Replication;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using Replication.Owner;
 using Sample.Domain;
@@ -17,14 +17,15 @@ public sealed class OwnerNode : IAsyncDisposable
     private static readonly string[] s_statuses = ["новий", "активний", "архів"];
     private readonly Random _rnd;
     private readonly OwnerSeed _seed;
+    private readonly ILogger<OwnerNode> _log;
     private int _logN;
 
-    private OwnerNode(string dbPath, OwnerStore store, OwnerHost host, SyncLog log, OwnerSeed seed)
+    private OwnerNode(string dbPath, OwnerStore store, OwnerHost host, OwnerSeed seed)
     {
         DbPath = dbPath;
         Store = store;
         Host = host;
-        Log = log;
+        _log = host.Loggers.CreateLogger<OwnerNode>();
         _seed = seed;
         _rnd = new Random(seed.RandomSeed);
     }
@@ -32,22 +33,22 @@ public sealed class OwnerNode : IAsyncDisposable
     public string DbPath { get; }
     public OwnerStore Store { get; }
     public OwnerHost Host { get; }
-    public SyncLog Log { get; }
     public string Address => Host.Address;
 
+    /// <param name="logging">Logging providers of the owner's host; none when null.</param>
     /// <param name="seed">Initial data of an empty database; <see cref="OwnerSeed.Default"/> when null.</param>
-    public static async Task<OwnerNode> StartAsync(string dbPath, SyncLog log, int port = 0, bool listenAnywhere = false, Action<OwnerOptions>? configure = null, OwnerSeed? seed = null)
+    public static async Task<OwnerNode> StartAsync(string dbPath, int port = 0, bool listenAnywhere = false, Action<OwnerOptions>? configure = null, OwnerSeed? seed = null, Action<ILoggingBuilder>? logging = null)
     {
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(dbPath))
             model = SyncModel.From(db);
-        var options = new OwnerOptions { Log = log };
+        var options = new OwnerOptions();
         configure?.Invoke(options);
-        OwnerHost host = await OwnerHost.StartAsync(dbPath, model, options, port, listenAnywhere);
+        OwnerHost host = await OwnerHost.StartAsync(dbPath, model, options, port, listenAnywhere, logging);
         bool empty;
         await using (SampleDbContext db = SampleDbContext.Open(dbPath))
             empty = !await db.Categories.AnyAsync();
-        var node = new OwnerNode(dbPath, host.Store, host, log, seed ?? OwnerSeed.Default);
+        var node = new OwnerNode(dbPath, host.Store, host, seed ?? OwnerSeed.Default);
         if (empty)
             await node.SeedAsync();
         return node;
@@ -55,7 +56,7 @@ public sealed class OwnerNode : IAsyncDisposable
 
     public SampleDbContext Db() => SampleDbContext.Open(DbPath);
 
-    private void Say(string text, SyncLogLevel level = SyncLogLevel.Info) => Log.Write("owner", "автоматика: " + text, level);
+    private void Say(string text, LogLevel level = LogLevel.Information) => _log.Log(level, "автоматика: {Text}", text);
 
     private T Pick<T>(IReadOnlyList<T> list) => list[_rnd.Next(list.Count)];
 
@@ -144,7 +145,7 @@ public sealed class OwnerNode : IAsyncDisposable
         await using SampleDbContext db = Db();
         Item it = await ItemAsync(db, name);
         await db.Items.Where(x => x.Id == it.Id).ExecuteDeleteAsync();
-        Say($"видалено «{name}» (ExecuteDelete), tombstone", SyncLogLevel.Warn);
+        Say($"видалено «{name}» (ExecuteDelete), tombstone", LogLevel.Warning);
     }
 
     /// <summary>The FK cascade in SQLite deletes the items; each gets its tombstone from the trigger.</summary>
@@ -155,7 +156,7 @@ public sealed class OwnerNode : IAsyncDisposable
         int n = await db.Items.CountAsync(x => x.CategoryId == cat.Id);
         db.Categories.Remove(cat);
         await db.SaveChangesAsync();
-        Say($"видалено категорію «{name}» з каскадом ({n} товарів), tombstones: {n + 1}", SyncLogLevel.Warn);
+        Say($"видалено категорію «{name}» з каскадом ({n} товарів), tombstones: {n + 1}", LogLevel.Warning);
     }
 
     public async Task AddLogAsync(int n)
@@ -213,16 +214,17 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         OwnerStore.PurgeResult r = Store.Purge();
         object floor = r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor;
-        Log.Write("owner", r.Tombstones > 0
-            ? $"очищення: видалено {r.Tombstones} tombstones (floor = MIN(acked_version) = {floor}), purged_version = {r.PurgedVersion}"
-            : $"очищення: нічого видаляти, floor = {floor}");
+        if (r.Tombstones > 0)
+            _log.LogInformation("очищення: видалено {Tombstones} tombstones (floor = MIN(acked_version) = {Floor}), purged_version = {PurgedVersion}", r.Tombstones, floor, r.PurgedVersion);
+        else
+            _log.LogInformation("очищення: нічого видаляти, floor = {Floor}", floor);
         return Task.FromResult(r);
     }
 
     public void AdvanceClock(TimeSpan by)
     {
         Store.AdvanceClock(by);
-        Log.Write("owner", $"годинник власника +{by.TotalDays:0.#} дн.");
+        _log.LogInformation("годинник власника +{Days} дн.", by.TotalDays.ToString("0.#"));
     }
 
     public ValueTask DisposeAsync() => Host.DisposeAsync();

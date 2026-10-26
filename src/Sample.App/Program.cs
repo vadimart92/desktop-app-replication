@@ -1,5 +1,5 @@
 using Avalonia;
-using Replication;
+using Microsoft.Extensions.Logging;
 using Sample.Lab;
 
 namespace Sample.App;
@@ -33,9 +33,11 @@ public static class Program
     /// <summary>The owner can run headless (design 2): the same application, no window, the gRPC server inside.</summary>
     private static async Task<int> RunHeadlessOwner(StartOptions o)
     {
-        var log = new SyncLog();
-        log.Written += e => Console.WriteLine($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        await using OwnerNode owner = await OwnerNode.StartAsync(o.DbPath, log, o.Port, o.ListenAnywhere);
+        await using OwnerNode owner = await OwnerNode.StartAsync(o.DbPath, o.Port, o.ListenAnywhere, logging: b => b.AddSimpleConsole(c =>
+        {
+            c.SingleLine = true;
+            c.TimestampFormat = "HH:mm:ss.fff ";
+        }));
         Console.WriteLine($"Власник працює: {owner.Address} (БД {owner.DbPath}). Ctrl+C для зупинки.");
         var done = new TaskCompletionSource();
         Console.CancelKeyPress += (_, e) =>

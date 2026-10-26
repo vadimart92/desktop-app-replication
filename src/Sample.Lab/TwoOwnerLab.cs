@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Replication;
 using Replication.Client;
 using Replication.Owner;
@@ -6,7 +7,7 @@ namespace Sample.Lab;
 
 /// <summary>
 /// Two owners with different data and one client connected to both: one database, one agent per owner (4).
-/// Each owner writes the log under its own name (<see cref="OwnerA"/>, <see cref="OwnerB"/>) instead of "owner".
+/// Each owner logs through its own host; the logging callback gets the owner's name (<see cref="OwnerA"/>, <see cref="OwnerB"/>).
 /// The links start off; both agents ask for catch-up instead of a snapshot (<see cref="AgentOptions.SkipSnapshotOnEmptyReplica"/>).
 /// </summary>
 public sealed class TwoOwnerLab : IAsyncDisposable
@@ -14,10 +15,10 @@ public sealed class TwoOwnerLab : IAsyncDisposable
     public const string OwnerA = "Власник 1";
     public const string OwnerB = "Власник 2";
 
-    private TwoOwnerLab(string dir, SyncLog log, OwnerNode a, OwnerNode b, ClientNode toA, ClientNode toB, LocalData local)
+    private TwoOwnerLab(string dir, ILoggerFactory loggers, OwnerNode a, OwnerNode b, ClientNode toA, ClientNode toB, LocalData local)
     {
         Dir = dir;
-        Log = log;
+        Loggers = loggers;
         A = a;
         B = b;
         ToA = toA;
@@ -26,7 +27,8 @@ public sealed class TwoOwnerLab : IAsyncDisposable
     }
 
     public string Dir { get; }
-    public SyncLog Log { get; }
+    /// <summary>Loggers of the client; each owner's host has its own.</summary>
+    public ILoggerFactory Loggers { get; }
 
     /// <summary>The first owner, seeded with <see cref="OwnerSeed.Default"/>.</summary>
     public OwnerNode A { get; }
@@ -47,37 +49,33 @@ public sealed class TwoOwnerLab : IAsyncDisposable
 
     /// <param name="configureOwner">Applied to both owners.</param>
     /// <param name="localSeed">The client's own data, written before it connects to any owner; none when null.</param>
-    public static async Task<TwoOwnerLab> StartAsync(string? dir = null, SyncLog? log = null, Action<OwnerOptions>? configureOwner = null, OwnerSeed? localSeed = null)
+    /// <param name="logging">Logging providers of the client; none when null.</param>
+    /// <param name="ownerLogging">Logging providers of each owner's host, by owner name; <paramref name="logging"/> when null.</param>
+    public static async Task<TwoOwnerLab> StartAsync(string? dir = null, Action<OwnerOptions>? configureOwner = null, OwnerSeed? localSeed = null,
+        Action<ILoggingBuilder>? logging = null, Action<string, ILoggingBuilder>? ownerLogging = null)
     {
         dir ??= Lab.NewDir();
         Directory.CreateDirectory(dir);
-        log ??= new SyncLog();
+        ILoggerFactory loggers = LoggerFactory.Create(b => logging?.Invoke(b));
+        ownerLogging ??= (_, b) => logging?.Invoke(b);
 
         async Task<OwnerNode> Owner(string name, string file, OwnerSeed seed) =>
-            await OwnerNode.StartAsync(Path.Combine(dir, file), Renamed(log, name), configure: o =>
+            await OwnerNode.StartAsync(Path.Combine(dir, file), configure: o =>
             {
                 o.OnlineInterval = TimeSpan.FromMilliseconds(300);
                 configureOwner?.Invoke(o);
-            }, seed: seed);
+            }, seed: seed, logging: b => ownerLogging(name, b));
 
         OwnerNode a = await Owner(OwnerA, "owner1.db", OwnerSeed.Default);
         OwnerNode b = await Owner(OwnerB, "owner2.db", OwnerSeed.Second);
         AgentOptions Opt() => new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6), SkipSnapshotOnEmptyReplica = true };
-        ClientReplication client = ClientNode.Create(Path.Combine(dir, "client.db"), log);
+        ClientReplication client = ClientNode.Create(Path.Combine(dir, "client.db"), loggers);
         var local = new LocalData(client);
         if (localSeed is not null)
             await local.SeedAsync(localSeed);
         ClientNode toA = ClientNode.Connect(client, $"Клієнт → {OwnerA}", a.Address, Opt(), OwnerA);
         ClientNode toB = ClientNode.Connect(client, $"Клієнт → {OwnerB}", b.Address, Opt(), OwnerB);
-        return new TwoOwnerLab(dir, log, a, b, toA, toB, local);
-    }
-
-    /// <summary>A log that forwards to <paramref name="log"/> with the source "owner" replaced by <paramref name="name"/>.</summary>
-    private static SyncLog Renamed(SyncLog log, string name)
-    {
-        var own = new SyncLog();
-        own.Written += e => log.Write(e.Source == "owner" ? name : e.Source, e.Text, e.Level);
-        return own;
+        return new TwoOwnerLab(dir, loggers, a, b, toA, toB, local);
     }
 
     public OwnerNode OwnerOf(ClientNode c) => Pairs.First(p => p.Client == c).Owner;
@@ -124,6 +122,7 @@ public sealed class TwoOwnerLab : IAsyncDisposable
         await ToA.Replication.DisposeAsync();
         await A.DisposeAsync();
         await B.DisposeAsync();
+        Loggers.Dispose();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
     }
 }

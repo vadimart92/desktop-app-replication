@@ -95,7 +95,7 @@ public sealed class FkClosureTests
         Assert.That(at, Is.All.GreaterThanOrEqualTo(0), apply);
         Assert.That(at[0], Is.LessThan(at[1]), apply);
         Assert.That(at[1], Is.LessThan(at[2]), apply);
-        Assert.That(at[2], Is.LessThan(apply.IndexOf("[масова]", StringComparison.Ordinal)), apply);
+        Assert.That(at[2], Is.LessThan(apply.IndexOf("[bulk]", StringComparison.Ordinal)), apply);
         await using GraphDbContext owner = pair.OwnerDb();
         Assert.That(await owner.Nodes.OrderBy(x => x.Name).Select(x => x.Name).ToListAsync(TestContext.CurrentContext.CancellationToken), Is.EqualTo(new[] { "A", "B", "C" }));
         Assert.That((await owner.Nodes.SingleAsync(x => x.Id == a.Id, TestContext.CurrentContext.CancellationToken)).ParentId, Is.EqualTo(b.Id));

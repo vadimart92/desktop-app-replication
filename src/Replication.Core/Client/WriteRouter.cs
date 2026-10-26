@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using static Replication.Model.Wire;
 
@@ -18,8 +19,9 @@ namespace Replication.Client;
 /// Register it after every other SaveChanges interceptor (after the application's own). EF tells no
 /// interceptor when one throws in SavingChanges, so an interceptor after the router that rejects the save would leave
 /// the router's write transaction, and with it the write lock on the client database, open until the next save on that context.
+/// Each outbox write is logged at Information as <c>[instance] …</c>.
 /// </remarks>
-public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
+public sealed class WriteRouter(SyncModel model, ILogger<WriteRouter> log) : SaveChangesInterceptor
 {
     private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
 
@@ -34,9 +36,6 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 
     /// <summary>Raised after the outbox change is written, with the instance it belongs to; the agent wakes and sends. When the application owns the outer transaction, this is before that transaction commits.</summary>
     public event Action<string>? OutboxChanged;
-
-    /// <summary>Raised with a description of each outbox write, for the sample's event log.</summary>
-    public event Action<string, string>? Routed;
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
@@ -309,7 +308,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
             foreach (ArchiveMove m in p.ArchiveMoves)
             {
                 if (ArchiveGuard.DeleteOrArchive(conn, tx, model, m.Instance, m.Table, m.Pk))
-                    Routed?.Invoke(m.Instance, $"{m.Table.Name} {Short(m.Pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
+                    log.LogInformation("[{Instance}] {Table} {Pk}: archived rows point to it, so the replica moved it to the archive and the delete goes to the owner", m.Instance, m.Table.Name, Short(m.Pk));
             }
 
             foreach (Change ch in p.Changes)
@@ -317,7 +316,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
                 if (ch.Kind is { } kind)
                 {
                     string what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, kind, ch.Columns, OutboxClass.Interactive);
-                    Routed?.Invoke(ch.Instance, $"черга: {ch.Table.Name} {Short(ch.Pk)} → {what}");
+                    log.LogInformation("[{Instance}] queue: {Table} {Pk} → {What}", ch.Instance, ch.Table.Name, Short(ch.Pk), what);
                 }
             }
             if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or null))

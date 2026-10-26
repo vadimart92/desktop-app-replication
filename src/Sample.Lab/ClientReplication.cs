@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
-using Replication;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Replication.Client;
 using Replication.Model;
 
@@ -11,9 +12,9 @@ namespace Sample.Lab;
 /// </summary>
 /// <example>
 /// <code>
-/// ServiceProvider services = ClientReplication.BuildServices("client.db", model, s => s.AddSampleDb("client.db", sp => [sp.GetRequiredService&lt;WriteRouter&gt;()]));
+/// ServiceProvider services = ClientReplication.BuildServices("client.db", model, s => s.AddSampleDb("client.db", sp => [sp.GetRequiredService&lt;WriteRouter&gt;()]), loggerFactory);
 /// services.MigrateSampleDb().InstallClientStore();
-/// var replication = new ClientReplication(services, log);
+/// var replication = new ClientReplication(services);
 /// SyncAgent agent = replication.Connect("http://10.0.0.5:5005", "Склад");
 /// agent.LinkEnabled = true;
 /// </code>
@@ -21,23 +22,18 @@ namespace Sample.Lab;
 public sealed class ClientReplication : IAsyncDisposable
 {
     private readonly List<SyncAgent> _agents = [];
-    private readonly SyncLog _log;
 
-    public ClientReplication(IServiceProvider services, SyncLog? log = null)
+    /// <summary>The agents log through the services' <see cref="ILoggerFactory"/>; nowhere without one.</summary>
+    public ClientReplication(IServiceProvider services)
     {
         Services = services;
-        _log = log ?? SyncLog.Null;
+        Loggers = services.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
         Store = services.GetRequiredService<ClientStore>();
         Router = services.GetRequiredService<WriteRouter>();
         Router.OutboxChanged += instance =>
         {
             foreach (SyncAgent a in Agents.Where(a => a.InstanceId == instance))
                 a.NotifyOutbox();
-        };
-        Router.Routed += (instance, text) =>
-        {
-            SyncAgent? agent = Agents.FirstOrDefault(a => a.InstanceId == instance);
-            _log.Write(agent?.Name ?? instance, text);
         };
     }
 
@@ -49,7 +45,7 @@ public sealed class ClientReplication : IAsyncDisposable
 
     public SyncModel Model => Store.Model;
 
-    public SyncLog Log => _log;
+    public ILoggerFactory Loggers { get; }
 
     public string ClientId => Store.ClientId;
 
@@ -63,9 +59,12 @@ public sealed class ClientReplication : IAsyncDisposable
     }
 
     /// <param name="configure">Registers the application's DbContext factory.</param>
-    public static ServiceProvider BuildServices(string dbPath, SyncModel model, Action<IServiceCollection>? configure = null)
+    /// <param name="loggers">Loggers of the router and the agents; none when null. The caller disposes them.</param>
+    public static ServiceProvider BuildServices(string dbPath, SyncModel model, Action<IServiceCollection>? configure = null, ILoggerFactory? loggers = null)
     {
         var services = new ServiceCollection();
+        if (loggers is not null)
+            services.AddSingleton(loggers);
         services.AddClientServices(dbPath, model);
         configure?.Invoke(services);
         return services.BuildServiceProvider();
@@ -77,7 +76,7 @@ public sealed class ClientReplication : IAsyncDisposable
     /// </summary>
     public SyncAgent Connect(string address, string name, AgentOptions? options = null)
     {
-        var agent = new SyncAgent(Store, address, name, options, _log);
+        var agent = new SyncAgent(Store, Loggers.CreateLogger<SyncAgent>(), address, name, options);
         lock (_agents)
             _agents.Add(agent);
         agent.Start();

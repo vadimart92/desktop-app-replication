@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Replication;
 using Replication.Model;
 using Sample.Domain;
@@ -12,6 +13,8 @@ namespace Sample.Lab;
 /// </summary>
 public sealed class LocalData(ClientReplication replication, string label = "Клієнт")
 {
+    private readonly ILogger<LocalData> _log = replication.Loggers.CreateLogger<LocalData>();
+
     /// <summary>What the lab client has before it connects to any owner: 1 category, 3 items, 2 log entries.</summary>
     public static readonly OwnerSeed Seed = new(0, ["Мої"],
     [
@@ -22,7 +25,7 @@ public sealed class LocalData(ClientReplication replication, string label = "К�
 
     public SampleDbContext Db() => Replication.Services.GetRequiredService<IDbContextFactory<SampleDbContext>>().CreateDbContext();
 
-    private void Say(string text) => Replication.Log.Write(label, "власні дані: " + text);
+    private void Say(string text) => _log.LogInformation("[{Agent}] власні дані: {Text}", label, text);
 
     private static IQueryable<T> Mine<T>(SampleDbContext db) where T : BaseEntity =>
         db.Set<T>().Where(x => EF.Property<string?>(x, SyncColumns.InstanceId) == null);

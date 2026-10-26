@@ -19,8 +19,7 @@ namespace Replication.Tests.Integration;
 [TestFixture]
 public sealed class SchemaMigrationTests
 {
-    private readonly List<string> _log = [];
-    private SyncLog _syncLog = null!;
+    private TestLog _log = null!;
     private string _dir = "";
     private string _ownerPath = "";
     private string _clientPath = "";
@@ -35,13 +34,7 @@ public sealed class SchemaMigrationTests
     [SetUp]
     public void SetUp()
     {
-        _log.Clear();
-        _syncLog = new SyncLog();
-        _syncLog.Written += e =>
-        {
-            lock (_log)
-                _log.Add($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        };
+        _log = new TestLog();
         _dir = TestDb.NewDir();
         _ownerPath = Path.Combine(_dir, "owner.db");
         _clientPath = Path.Combine(_dir, "client.db");
@@ -55,11 +48,8 @@ public sealed class SchemaMigrationTests
         if (_host is not null)
             await _host.DisposeAsync();
         SqliteConnection.ClearAllPools();
-        lock (_log)
-        {
-            foreach (string l in _log)
-                TestContext.Out.WriteLine(l);
-        }
+        _log.WriteTo(TestContext.Out);
+        _log.Dispose();
     }
 
     private sealed record V1(Product Lamp, Product Cable, Product Paint, Dictionary<Guid, long> Versions, long Head);
@@ -213,14 +203,14 @@ public sealed class SchemaMigrationTests
     {
         // The same port after a restart: the client keeps the owner's address.
         _host = await OwnerHost.StartAsync(_ownerPath, model,
-            new OwnerOptions { SchemaVersion = schema, Log = _syncLog, OnlineInterval = TimeSpan.FromMilliseconds(300) }, _port);
+            new OwnerOptions { SchemaVersion = schema, OnlineInterval = TimeSpan.FromMilliseconds(300) }, _port, logging: _log.AddTo);
         _owner = _host.Store;
         _port = _host.Port;
     }
 
     private void StartClient(SyncModel model, int schema)
     {
-        _client = new ClientReplication(ClientReplication.BuildServices(_clientPath, model).InstallClientStore(), _syncLog);
+        _client = new ClientReplication(ClientReplication.BuildServices(_clientPath, model, loggers: _log.Loggers).InstallClientStore());
         var options = new AgentOptions
         {
             SchemaVersion = schema,

@@ -1,6 +1,8 @@
 using Grpc.Core;
 using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Replication.Client;
 using Replication.Model;
 using Replication.Owner;
 using Replication.Protocol;
@@ -61,17 +63,45 @@ public sealed class SubscribeSessionTests
     }
 
     [Test]
+    public async Task Lagging_client_shows_catchup_then_online_and_ends_equal_to_the_owner()
+    {
+        await using Lab lab = await Lab.StartAsync(configureOwner: o =>
+        {
+            o.OnlineBatchRows = 10;
+            o.OnlineLagVersions = 20;
+            o.CatchupBatchRows = 10;
+        });
+        await lab.SyncNowAsync(lab.C1);
+        var states = new List<AgentState> { lab.C1.Agent.GetStatus().State };
+        lab.C1.Agent.StatusChanged += () =>
+        {
+            AgentState s = lab.C1.Agent.GetStatus().State;
+            lock (states)
+            {
+                if (states[^1] != s)
+                    states.Add(s);
+            }
+        };
+        // Slow catch-up batches, so more rows land while the client catches up.
+        lab.Owner.Store.Options.Faults.DelayStream(lab.C1.Replication.ClientId, TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(5));
+
+        SubscribeProtocolTests.InsertLogRows(lab, 100);
+        await Lab.WaitAsync(() => lab.C1.Agent.GetStatus().State == AgentState.Catchup, TimeSpan.FromSeconds(20), "Клієнт 1 не повернувся до досинхронізації");
+        SubscribeProtocolTests.InsertLogRows(lab, 50);
+        await lab.SettleAsync();
+
+        lock (states)
+            Assert.That(states, Is.EqualTo(new[] { AgentState.Online, AgentState.Catchup, AgentState.Online }));
+        Assert.That(Inspect.Diff(lab.Owner, lab.C1), Is.Empty);
+    }
+
+    [Test]
     public async Task Fault_right_after_the_handshake_still_unmarks_the_client()
     {
-        // A log subscriber is user code; the first accepted Start makes it throw once.
+        // A logging provider is user code; the owner's first accepted Start makes it throw once.
         int thrown = 0;
-        var log = new SyncLog();
-        log.Written += e =>
-        {
-            if (e.Source == "owner" && e.Text.Contains("Start прийнято") && Interlocked.Exchange(ref thrown, 1) == 0)
-                throw new InvalidOperationException("log subscriber failed");
-        };
-        await using Lab lab = await Lab.StartAsync(log: log);
+        var provider = new ThrowingLoggerProvider(m => m.Contains("Start accepted, head", StringComparison.Ordinal) && Interlocked.Exchange(ref thrown, 1) == 0);
+        await using Lab lab = await Lab.StartAsync(logging: b => b.AddProvider(provider));
         string c1 = lab.C1.Replication.ClientId;
 
         // The first session fails after registering the client; the reconnect goes online.
@@ -80,5 +110,23 @@ public sealed class SubscribeSessionTests
 
         lab.C1.Link = false;
         await Lab.WaitAsync(() => !lab.Owner.Store.IsSubscribed(c1), TimeSpan.FromSeconds(10), "Клієнт 1 лишився відміченим як підписаний");
+    }
+
+    /// <summary>Throws from <see cref="ILogger.Log"/> on a message that matches <paramref name="throwOn"/>.</summary>
+    private sealed class ThrowingLoggerProvider(Func<string, bool> throwOn) : ILoggerProvider, ILogger
+    {
+        public ILogger CreateLogger(string categoryName) => this;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (throwOn(formatter(state, exception)))
+                throw new InvalidOperationException("logging provider failed");
+        }
+
+        public void Dispose() { }
     }
 }

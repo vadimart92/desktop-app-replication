@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Grpc.Core;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using Replication.Protocol;
 using static Replication.Model.Wire;
@@ -17,6 +18,7 @@ internal sealed class SubscribeSession
     private readonly IAsyncStreamReader<SubscribeMessage> _in;
     private readonly IServerStreamWriter<ChangeMessage> _out;
     private readonly CancellationToken _ct;
+    private readonly ILogger _log;
     private readonly AsyncSignal _wake = new();
     private readonly ConcurrentQueue<RowRef> _needFull = new();
     private readonly Dictionary<string, CursorState> _mirror = new(StringComparer.Ordinal);
@@ -29,9 +31,10 @@ internal sealed class SubscribeSession
     private long _sentUpTo;
     private long _catchupHead;
 
-    public SubscribeSession(OwnerStore store, IAsyncStreamReader<SubscribeMessage> input, IServerStreamWriter<ChangeMessage> output, CancellationToken ct)
+    public SubscribeSession(OwnerStore store, IAsyncStreamReader<SubscribeMessage> input, IServerStreamWriter<ChangeMessage> output, ILogger<SubscribeSession> log, CancellationToken ct)
     {
         _store = store;
+        _log = log;
         _in = input;
         _out = output;
         _ct = ct;
@@ -39,8 +42,6 @@ internal sealed class SubscribeSession
 
     private OwnerOptions Opt => _store.Options;
     private SyncModel Model => _store.Model;
-
-    private void Log(string text, SyncLogLevel level = SyncLogLevel.Info) => Opt.Log.Write("owner", $"[{_who}] {text}", level);
 
     public async Task RunAsync()
     {
@@ -58,12 +59,12 @@ internal sealed class SubscribeSession
         if (await HandshakeAsync(conn, start) is not long head)
             return;
 
-        // The handshake marked the client subscribed: from here every exit, a throwing log subscriber included, unmarks it in finally.
+        // The handshake marked the client subscribed: from here every exit, a throwing logging provider included, unmarks it in finally.
         Task reader = Task.CompletedTask;
         Task main = Task.CompletedTask;
         try
         {
-            Log($"Start прийнято, голова {head}; курсори {string.Join(", ", _mirror.Select(x => $"{x.Key}={x.Value}"))}", SyncLogLevel.Ok);
+            _log.LogInformation("[{Client}] Start accepted, head {Head}; cursors {Cursors}", _who, head, string.Join(", ", _mirror.Select(x => $"{x.Key}={x.Value}")));
             _store.Committed += _wake.Set;
             reader = Task.Run(() => ReadLoopAsync(stop.Token));
             main = MainLoopAsync(conn, stop.Token);
@@ -91,7 +92,7 @@ internal sealed class SubscribeSession
     {
         if (start.SchemaVersion != Opt.SchemaVersion)
         {
-            Log($"Start: схема клієнта {start.SchemaVersion}, власника {Opt.SchemaVersion} → SchemaMismatch, потік закрито", SyncLogLevel.Warn);
+            _log.LogWarning("[{Client}] Start: client schema {ClientSchema}, owner schema {OwnerSchema} → SchemaMismatch, stream closed", _who, start.SchemaVersion, Opt.SchemaVersion);
             await SendAsync(new ChangeMessage { SchemaMismatch = new SchemaMismatch { OwnerSchemaVersion = Opt.SchemaVersion } }, _ct);
             return null;
         }
@@ -112,14 +113,14 @@ internal sealed class SubscribeSession
             static bool Empty(CursorState k) => k.Cursor == 0 && k.Ranges.Count == 0;
             (string Name, CursorState K) behind = states.FirstOrDefault(x => !Empty(x.K) && x.K.Cursor < purged);
             if (start.InstanceId != _store.InstanceId)
-                reason = "інший instance_id";
+                reason = "different instance_id";
             else if (behind.Name is not null)
-                reason = $"курсор {behind.Name} {behind.K.Cursor} < purged_version {purged}";
+                reason = $"cursor {behind.Name} {behind.K.Cursor} < purged_version {purged}";
             else if (minC > head)
-                reason = $"курсор {minC} > version {head}";
+                reason = $"cursor {minC} > version {head}";
             // A new replica takes a snapshot unless it asked for catch-up from zero; an owner without data has nothing to send in one.
             else if (!start.SkipSnapshotOnEmptyReplica && head > 0 && states.All(x => Empty(x.K)))
-                reason = "репліки нема";
+                reason = "no replica";
             if (reason is null)
             {
                 foreach ((string name, CursorState k) in states)
@@ -142,7 +143,7 @@ internal sealed class SubscribeSession
         if (reason is not null)
         {
             long size = _store.FileSizeBytes(conn);
-            Log($"Start: {reason} → SnapshotRequired, знімок ~{size / 1024} КБ, потік закрито", SyncLogLevel.Warn);
+            _log.LogWarning("[{Client}] Start: {Reason} → SnapshotRequired, snapshot ~{SizeKb} KB, stream closed", _who, reason, size / 1024);
             await SendAsync(new ChangeMessage
             {
                 SnapshotRequired = new SnapshotRequired { Reason = reason, SizeBytes = size, InstanceId = _store.InstanceId },
@@ -164,7 +165,7 @@ internal sealed class SubscribeSession
             {
                 case SubscribeMessage.BodyOneofCase.OpenTables:
                     _open = [.. m.OpenTables.Tables];
-                    Log($"OpenTables: {string.Join(", ", m.OpenTables.Tables)}");
+                    _log.LogInformation("[{Client}] OpenTables: {Tables}", _who, string.Join(", ", m.OpenTables.Tables));
                     _wake.Set();
                     break;
                 case SubscribeMessage.BodyOneofCase.Ack:
@@ -200,7 +201,7 @@ internal sealed class SubscribeSession
                 _online = true;
                 _sentUpTo = _catchupHead;
                 await SendAsync(new ChangeMessage { Progress = new Progress { Done = true, OwnerTimeUnix = _store.Now(conn) } }, ct);
-                Log($"досинхронізацію завершено, онлайн від v{_sentUpTo}", SyncLogLevel.Ok);
+                _log.LogInformation("[{Client}] catch-up done, online from v{Version}", _who, _sentUpTo);
                 continue;
             }
 
@@ -214,8 +215,37 @@ internal sealed class SubscribeSession
             if (wait > TimeSpan.Zero)
                 await Task.Delay(wait, ct);
             if (await OnlineStepAsync(conn, ct))
+            {
                 lastOnline = Stopwatch.GetTimestamp();
+                await FallBackIfLaggingAsync(conn, ct);
+            }
         }
+    }
+
+    /// <summary>
+    /// After an online step the stream is still far behind the head: back to catch-up, which resumes from the mirror's gaps.
+    /// Catch-up has to finish before online starts again, so this does not flap.
+    /// </summary>
+    private async Task FallBackIfLaggingAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        long head;
+        long remaining;
+        using (SqliteTransaction tx = conn.BeginTransaction(deferred: true))
+        {
+            head = _store.Head(conn, tx);
+            if (head - _sentUpTo <= Opt.OnlineLagVersions)
+            {
+                tx.Commit();
+                return;
+            }
+            remaining = Remaining(conn, tx, head);
+            tx.Commit();
+        }
+        _online = false;
+        // Tables are synced again only through TableSynced at the end of this catch-up.
+        _synced.Clear();
+        _log.LogWarning("[{Client}] online is {Lag} versions behind (v{SentUpTo} of v{Head}), falling back to catch-up, remaining {Remaining}", _who, head - _sentUpTo, _sentUpTo, head, remaining);
+        await SendAsync(new ChangeMessage { Progress = new Progress { Done = false, Remaining = remaining, OwnerTimeUnix = _store.Now(conn) } }, ct);
     }
 
     private IEnumerable<SyncTable> PriorityTables()
@@ -238,7 +268,7 @@ internal sealed class SubscribeSession
         }
         if (step is not { } s)
             return false;
-        Log(s.Log);
+        _log.LogInformation("[{Client}] {Step}", _who, s.Log);
         await SendAsync(s.Msg, ct);
         return true;
     }
@@ -255,7 +285,7 @@ internal sealed class SubscribeSession
                 if (_synced.Add(t.Name))
                 {
                     k.Reset(head);
-                    return (new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } }, $"TableSynced {t.Name}, курсор = {head}");
+                    return (new ChangeMessage { TableSynced = new TableSynced { Tbl = t.Name, Version = head } }, $"TableSynced {t.Name}, cursor = {head}");
                 }
                 // The table is synced, the head moved because of other tables: close empty ranges on the way.
                 foreach ((long Lo, long Hi) g in gaps)
@@ -316,9 +346,9 @@ internal sealed class SubscribeSession
                 batch.Rows.Add(OwnerReader.ToWire(t, it, cur0));
         }
         batch.Remaining = Remaining(conn, tx, head);
-        string log = $"Batch {t.Name}: {Describe(t, batch)}{(tail is null ? "" : $" + свіжий хвіст ({tailItems.Count})")}"
-            + (own.Count > 0 ? $"; пропущено як власні зміни: {string.Join(", ", own.Select(v => "v" + v))}" : "")
-            + $", закриває {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, лишилось {batch.Remaining}";
+        string log = $"Batch {t.Name}: {Describe(t, batch)}{(tail is null ? "" : $" + fresh tail ({tailItems.Count})")}"
+            + (own.Count > 0 ? $"; skipped as own changes: {string.Join(", ", own.Select(v => "v" + v))}" : "")
+            + $", covers {string.Join(" ", covers.Select(c => $"({c.Lo},{c.Hi}]"))}, remaining {batch.Remaining}";
         return (new ChangeMessage { Batch = batch }, log);
     }
 
@@ -373,11 +403,11 @@ internal sealed class SubscribeSession
                 logs.Add($"{t.Name} {Describe(t, batch)}");
             }
             if (own.Count > 0)
-                logs.Add($"пропущено як власні зміни: {string.Join(", ", own.Select(x => $"{x.Table.Name} v{x.Item.Version}"))}");
+                logs.Add($"skipped as own changes: {string.Join(", ", own.Select(x => $"{x.Table.Name} v{x.Item.Version}"))}");
             tx.Commit();
         }
         messages.Add(new ChangeMessage { Head = new Head { Version = upTo } });
-        Log($"онлайн: {(logs.Count > 0 ? string.Join("; ", logs) : "нових рядків нема")}; Head({upTo})");
+        _log.LogInformation("[{Client}] online: {Batches}; Head({Head})", _who, logs.Count > 0 ? string.Join("; ", logs) : "no new rows", upTo);
         foreach (ChangeMessage m in messages)
             await SendAsync(m, ct);
         foreach (CursorState k in _mirror.Values)
@@ -417,7 +447,7 @@ internal sealed class SubscribeSession
             if (batch.Rows.Count + batch.Tombstones.Count > 0)
             {
                 messages.Add(new ChangeMessage { Batch = batch });
-                Log($"NeedFull {t.Name}: повних рядків {batch.Rows.Count}, tombstones {batch.Tombstones.Count}");
+                _log.LogInformation("[{Client}] NeedFull {Table}: full rows {Rows}, tombstones {Tombstones}", _who, t.Name, batch.Rows.Count, batch.Tombstones.Count);
             }
         }
         foreach (ChangeMessage m in messages)
@@ -439,9 +469,9 @@ internal sealed class SubscribeSession
 
     private static string Describe(SyncTable table, Batch b)
     {
-        IEnumerable<string> parts = b.Rows.Select(r => r.Full ? $"v{r.Version} повний" : $"v{r.Version} [{string.Join(", ", table.ColumnsOf(r.Mask))}]")
+        IEnumerable<string> parts = b.Rows.Select(r => r.Full ? $"v{r.Version} full" : $"v{r.Version} [{string.Join(", ", table.ColumnsOf(r.Mask))}]")
             .Concat(b.Tombstones.Select(t => $"v{t.Version} ✕"));
         string s = string.Join(", ", parts);
-        return s.Length == 0 ? "рядків нема" : s;
+        return s.Length == 0 ? "no rows" : s;
     }
 }

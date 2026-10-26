@@ -50,7 +50,7 @@ public sealed class ColumnMaskTests : LabTests
         long v = lab.OwnerRow("Item", lab.ItemId("Степлер")).Version;
 
         Assert.That(OwnerLogAbout(lab.C1), Has.Some.Contains($"Item v{v} [ModifiedOn, Price]"));
-        Assert.That(OwnerLogAbout(lab.C1), Has.None.Contains($"v{v} повний"));
+        Assert.That(OwnerLogAbout(lab.C1), Has.None.Contains($"v{v} full"));
         Assert.That(lab.C1.ReplicaRow("Item", lab.ItemId("Степлер"))["Price"], Is.EqualTo(150L));
         foreach (ClientNode c in lab.Clients)
             Assert.That(lab.Diff(c), Is.Empty);
