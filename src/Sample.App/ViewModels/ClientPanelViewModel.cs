@@ -81,7 +81,6 @@ public sealed partial class ClientPanelViewModel : ObservableObject
     public ObservableCollection<RowView> Items { get; } = [];
     public ObservableCollection<RowView> Categories { get; } = [];
     public ObservableCollection<RowView> Log { get; } = [];
-    public ObservableCollection<string> Notes { get; } = [];
 
     partial void OnSelectedTabChanged(int value)
     {
@@ -108,7 +107,6 @@ public sealed partial class ClientPanelViewModel : ObservableObject
             Items.SyncTo(Rows("Item"));
             Categories.SyncTo(Rows("Category"));
             Log.SyncTo(Rows("Log", 30));
-            Notes.SyncTo([.. First.Replication.Store.Notes(limit: 20).Select(n => $"{n.At.ToLocalTime():HH:mm:ss} {n.Text}")]);
         }
         catch (Exception e)
         {

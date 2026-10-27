@@ -52,9 +52,9 @@ public sealed class IgnoredReplyTests
         Assert.That(pair.Agent.GetStatus().State, Is.EqualTo(AgentState.Online));
     }
 
-    /// <summary>The note the client writes when the owner answers Ignored: the rows went through the reply, not through a tombstone.</summary>
+    /// <summary>The note the client logs when the owner answers Ignored: the rows went through the reply, not through a tombstone.</summary>
     private static void AssertIgnoredPathTaken(GraphPair pair) =>
-        Assert.That(pair.Client.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.Contains("it was deleted on the instance", StringComparison.Ordinal)));
+        Assert.That(pair.Lines, Has.Some.Contains("it was deleted on the instance"));
 
     /// <summary>
     /// The owner deletes rows while the client's stream is held, then the client patches one of them: the reply

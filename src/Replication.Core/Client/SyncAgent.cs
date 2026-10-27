@@ -5,7 +5,6 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Replication.Model;
 using Replication.Protocol;
 using static Replication.Model.Wire;
@@ -535,7 +534,7 @@ public sealed class SyncAgent : IAsyncDisposable
         string? text = null;
         try
         {
-            w = new ReplicaWriter(_store.Model, _instance!);
+            w = new ReplicaWriter(_store.Model, _instance!, _log, Name);
             // The cursors change on a copy that is published only after the commit (6.4, 14).
             Dictionary<string, CursorState> next;
             lock (_cursorsLock)
@@ -597,8 +596,6 @@ public sealed class SyncAgent : IAsyncDisposable
         }
         if (text is not null)
             Log(LogLevel.Information, text);
-        foreach (string n in w.Notes)
-            Log(LogLevel.Error, n);
         if (w.NeedFull.Count > 0)
             _log.LogWarning("[{Agent}] partial rows without a row in the replica: {Rows}, asking for full ones via NeedFull", Name, w.NeedFull.Count);
         if (m.Progress?.Done == true)
@@ -724,7 +721,7 @@ public sealed class SyncAgent : IAsyncDisposable
         var logs = new List<(LogLevel Level, string Text)>();
         try
         {
-            w = new ReplicaWriter(_store.Model, _instance!);
+            w = new ReplicaWriter(_store.Model, _instance!, _log, Name);
             using SqliteTransaction tx = _conn.BeginTransaction();
             var versions = new List<string>();
             foreach (ActionResult r in reply.Results)
@@ -739,17 +736,17 @@ public sealed class SyncAgent : IAsyncDisposable
                 {
                     case ResultStatus.Rejected when e.Kind == OutboxKind.Patch && t is not null && e.Pk is not null:
                         // The owner keeps its row as it was: the edit goes, and the owner's full row comes back (8.4, 9).
-                        w.Note(_conn, tx, $"the edit of {LabelOf()} is not saved ({RejectedWhy(r.Reason)}), the row returns to its state on the instance");
+                        Log(LogLevel.Warning, $"the edit of {LabelOf()} is not saved ({RejectedWhy(r.Reason)}), the row returns to its state on the instance");
                         w.Revert(_conn, tx, t, e.Pk);
                         break;
                     case ResultStatus.Rejected when r.Reason == ApplyReasons.Unique:
-                        w.Note(_conn, tx, $"{LabelOf()} not saved: {RejectedWhy(r.Reason)}");
+                        Log(LogLevel.Warning, $"{LabelOf()} not saved: {RejectedWhy(r.Reason)}");
                         break;
                     case ResultStatus.Rejected when t is not null && e.Pk is not null:
                     {
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
-                        w.Note(_conn, tx, $"not saved: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({RejectedWhy(r.Reason)})");
+                        Log(LogLevel.Warning, $"not saved: {string.Join(", ", gone.Count > 0 ? gone : [LabelOf()])} ({RejectedWhy(r.Reason)})");
                         break;
                     }
                     case ResultStatus.Ignored when t is not null && e.Pk is not null:
@@ -758,7 +755,7 @@ public sealed class SyncAgent : IAsyncDisposable
                         string label = LabelOf();
                         var gone = new List<string>();
                         w.RemoveWithChildren(_conn, tx, t, e.Pk, gone);
-                        w.Note(_conn, tx, $"the edit of {label} is lost: it was deleted on the instance");
+                        Log(LogLevel.Warning, $"the edit of {label} is lost: it was deleted on the instance");
                         break;
                     }
                     case ResultStatus.Applied or ResultStatus.Skipped:
@@ -776,7 +773,7 @@ public sealed class SyncAgent : IAsyncDisposable
                                     _conn.Exec("UPDATE _sync_outbox SET sent = 2, expected_version = @v WHERE id = @id", tx, ("@v", r.Version), ("@id", e.Id));
                                 break;
                             case OutboxKind.PredicateDelete when KeptAfterBulkDelete(tx, r) is > 0 and int kept:
-                                w.Note(_conn, tx, $"{kept} not deleted: changed or created on the instance after you saw the data; they stay and arrive with the stream");
+                                Log(LogLevel.Warning, $"{kept} not deleted: changed or created on the instance after you saw the data; they stay and arrive with the stream");
                                 break;
                             case OutboxKind.Archive when r.Changed.Count + r.Children.Count > 0:
                                 ArchiveLeftovers(tx, w, r, e, logs);
@@ -799,8 +796,6 @@ public sealed class SyncAgent : IAsyncDisposable
         }
         foreach ((LogLevel level, string text) in logs)
             Log(level, text);
-        foreach (string n in w.Notes)
-            Log(LogLevel.Error, n);
         if (w.TouchedTables.Count > 0)
             DataChanged?.Invoke(w.TouchedTables);
         StatusChanged?.Invoke();
@@ -1020,7 +1015,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 if (_state != AgentState.Online || pending > 0)
                 {
                     text = "archiving is available when the instance is online, fully caught up and the queue is empty";
-                    ClientStore.Note(_conn, null, _instance, text);
+                    Log(LogLevel.Warning, text);
                     return text;
                 }
             }
@@ -1141,7 +1136,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 _archiveRetry.Remove(rt);
                 if (rt.Tries >= 3)
                 {
-                    ClientStore.Note(_conn, null, _instance!, $"{ClientStore.Label(_conn, null, _store.Model[rt.Table], rt.Pk)} stayed on the owner: automation keeps changing it");
+                    Log(LogLevel.Warning, $"{ClientStore.Label(_conn, null, _store.Model[rt.Table], rt.Pk)} stayed on the owner: automation keeps changing it");
                     continue;
                 }
                 return rt;

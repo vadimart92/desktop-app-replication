@@ -117,7 +117,7 @@ public sealed class HookUpTests
             first = new ClientReplication(ClientReplication.BuildServices(path, model).InstallClientStore());
 
             Assert.That(first.ClientId, Does.StartWith("cl-"));
-            Assert.That(Tables(path), Is.SupersetOf(new[] { "_sync_local", "_sync_instances", "_sync_cursors", "_sync_ranges", "_sync_outbox", "_sync_notes" }));
+            Assert.That(Tables(path), Is.SupersetOf(new[] { "_sync_local", "_sync_instances", "_sync_cursors", "_sync_ranges", "_sync_outbox" }));
             // Replica versions mirror the owner's, so the client has no sync triggers (5.4).
             foreach (SyncTable t in model.Tables)
                 Assert.That(Rows.Triggers(path, t.Name), Is.Empty);

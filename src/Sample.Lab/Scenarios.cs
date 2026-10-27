@@ -113,7 +113,7 @@ public static class Scenarios
                 Gone(l, "Маркери");
                 Gone(l, "Маркери (12 шт)");
                 Gone(l, "Скотч");
-                Check(HasNote(l.C1, "is lost"), "Клієнт 1 не отримав повідомлення про втрачену правку");
+                Check(HasNote(l, l.C1, "is lost"), "Клієнт 1 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask;
             }),
 
@@ -143,7 +143,7 @@ public static class Scenarios
                 Check(Inspect.OwnerHas(l.Owner, "Дрон"), "«Дрон» не доїхав до власника");
                 Gone(l, "Сканер");
                 Gone(l, "Факс");
-                Check(HasNote(l.C1, "not saved"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
+                Check(HasNote(l, l.C1, "not saved"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
                 return Task.CompletedTask;
             }),
 
@@ -336,7 +336,7 @@ public static class Scenarios
                 Gone(l, "Каталог 2019");
                 Check(Inspect.OwnerHas(l.Owner, "Архівна шафа") && Inspect.ClientHas(l.C1, "Архівна шафа"), "«Архівна шафа» мала лишитись і приїхати до Клієнта 1");
                 Check(Inspect.OwnerItem(l.Owner, "Степлер") is { Price: 135 }, "правка ціни «Степлера» не доїхала");
-                Check(HasNote(l.C1, "not deleted"), "Клієнт 1 не отримав повідомлення про невидалений запис");
+                Check(HasNote(l, l.C1, "not deleted"), "Клієнт 1 не отримав повідомлення про невидалений запис");
                 return Task.CompletedTask;
             }),
 
@@ -542,7 +542,7 @@ public static class Scenarios
             {
                 foreach (string n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" })
                     Gone(l, n);
-                Check(HasNote(l.C2, "is lost"), "Клієнт 2 не отримав повідомлення про втрачену правку");
+                Check(HasNote(l, l.C2, "is lost"), "Клієнт 2 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask;
             }),
 
@@ -597,8 +597,7 @@ public static class Scenarios
             Check(!Inspect.ClientHas(c, name), $"«{name}» лишився в репліці {c.Label}");
     }
 
-    private static bool HasNote(ClientNode c, string fragment) =>
-        c.Replication.Store.Notes().Any(n => n.Text.Contains(fragment, StringComparison.Ordinal));
+    private static bool HasNote(Lab l, ClientNode c, string fragment) => l.Notes.Has(c.Label, fragment);
 
     public static Scenario Find(string id) => All.First(s => s.Id == id);
 }

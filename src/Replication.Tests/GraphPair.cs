@@ -85,8 +85,11 @@ internal sealed class GraphPair : IAsyncDisposable
     public SyncAgent Agent => Client.Agents[0];
     public string Instance => Agent.InstanceId ?? throw new InvalidOperationException("репліки ще нема");
 
+    /// <summary>The log lines of the client's agent.</summary>
+    public IReadOnlyList<string> Lines => _log.OfAgent(Label);
+
     /// <summary>The "→ Apply:" log lines of the client: one per sent batch.</summary>
-    public IReadOnlyList<string> Applies => [.. _log.OfAgent(Label).Where(l => l.StartsWith("→ Apply:", StringComparison.Ordinal))];
+    public IReadOnlyList<string> Applies => [.. Lines.Where(l => l.StartsWith("→ Apply:", StringComparison.Ordinal))];
 
     public static async Task<GraphPair> StartAsync(Action<GraphDbContext>? seedOwner = null)
     {

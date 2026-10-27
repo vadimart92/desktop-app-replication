@@ -91,15 +91,6 @@
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
-        <Expander Header="Відкинуті дії і повідомлення">
-          <ItemsControl ItemsSource="{Binding Notes}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="x:String">
-                <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="IndianRed" FontSize="12" />
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </Expander>
       </StackPanel>
 
       <TabControl SelectedIndex="{Binding SelectedTab}">

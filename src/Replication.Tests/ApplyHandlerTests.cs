@@ -35,9 +35,9 @@ public sealed class ApplyHandlerTests
             Assert.That(status.LastError, Is.Null);
             Assert.That(Inspect.OwnerRows(lab.Owner, "Category"), Has.Exactly(1).Matches<RowView>(r => r.Label == "Офіс"));
             Assert.That(Inspect.OwnerHas(lab.Owner, "Діркопробивач"), Is.False);
-            List<ClientNote> notes = lab.C1.Replication.Store.Notes();
-            Assert.That(notes, Has.Some.Matches<ClientNote>(n => n.Text.Contains("«Офіс»", StringComparison.Ordinal) && n.Text.Contains("already has a row", StringComparison.Ordinal)));
-            Assert.That(notes, Has.Some.Matches<ClientNote>(n => n.Text.Contains("«Діркопробивач»", StringComparison.Ordinal) && n.Text.Contains("the parent row is not saved or was deleted", StringComparison.Ordinal)));
+            List<string> notes = lab.Notes.Of(lab.C1.Label);
+            Assert.That(notes, Has.Some.Matches<string>(n => n.Contains("«Офіс»", StringComparison.Ordinal) && n.Contains("already has a row", StringComparison.Ordinal)));
+            Assert.That(notes, Has.Some.Matches<string>(n => n.Contains("«Діркопробивач»", StringComparison.Ordinal) && n.Contains("the parent row is not saved or was deleted", StringComparison.Ordinal)));
             Assert.That(log.OfAgent(lab.C1.Agent.Name), Has.None.Matches<string>(l => l.StartsWith("Apply: Unknown", StringComparison.Ordinal)));
 
             // The outbox is not blocked: a later edit reaches the owner.
@@ -70,8 +70,8 @@ public sealed class ApplyHandlerTests
 
         // The rejected create stays in the replica (9); the item gets the owner's row back, in its old category.
         await WaitForDiffAsync(lab, $"Category {Wire.Short(Wire.PkText(duplicate.Id))}: зайвий у репліці");
-        Assert.That(lab.C1.Replication.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.StartsWith("the edit of «Степлер» is not saved", StringComparison.Ordinal)
-            && n.Text.Contains("the parent row is not saved or was deleted", StringComparison.Ordinal)));
+        Assert.That(lab.Notes.Of(lab.C1.Label), Has.Some.Matches<string>(n => n.StartsWith("the edit of «Степлер» is not saved", StringComparison.Ordinal)
+            && n.Contains("the parent row is not saved or was deleted", StringComparison.Ordinal)));
     }
 
     [Test]
@@ -83,8 +83,8 @@ public sealed class ApplyHandlerTests
         await lab.C1.RenameCategoryAsync(store, "Офіс");
 
         await WaitForDiffAsync(lab);
-        Assert.That(lab.C1.Replication.Store.Notes(), Has.Some.Matches<ClientNote>(n => n.Text.StartsWith("the edit of «Офіс» is not saved", StringComparison.Ordinal)
-            && n.Text.Contains("already has a row", StringComparison.Ordinal)));
+        Assert.That(lab.Notes.Of(lab.C1.Label), Has.Some.Matches<string>(n => n.StartsWith("the edit of «Офіс» is not saved", StringComparison.Ordinal)
+            && n.Contains("already has a row", StringComparison.Ordinal)));
     }
 
     /// <summary>A lab with C1 synced, and a unique business column on the owner only (9): the client's replica has no such index.</summary>

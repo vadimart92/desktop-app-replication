@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using Replication.Protocol;
 using static Replication.Model.Wire;
@@ -11,14 +12,13 @@ namespace Replication.Client;
 /// reads by Id only, and <c>InstallSnapshot</c> deletes rows of other instances by Id). Idempotent and order-independent: an older version never
 /// overwrites a newer one, and the outbox protects local edits.
 /// </summary>
-internal sealed class ReplicaWriter(SyncModel model, string instance)
+/// <param name="log">Logger of the agent; lines carry its <paramref name="agent"/> name.</param>
+internal sealed class ReplicaWriter(SyncModel model, string instance, ILogger log, string agent)
 {
     public string Instance { get; } = instance;
 
     /// <summary>Rows to request in full: partial rows that arrived for a row the replica does not have (7), reverted local edits (<see cref="Revert"/>) and archive leftovers.</summary>
     public List<RowRef> NeedFull { get; } = [];
-
-    public List<string> Notes { get; } = [];
 
     public HashSet<string> TouchedTables { get; } = [];
 
@@ -115,7 +115,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         {
             // A parent that archived rows point to goes to the archive instead (11.6).
             if (ArchiveGuard.DeleteOrArchive(c, tx, model, Instance, t, pk))
-                Note(c, tx, $"{label} was deleted on the instance; archived rows point to it, so it was moved to the archive", info: true);
+                log.LogInformation("[{Agent}] {Label} was deleted on the instance; archived rows point to it, so it was moved to the archive", agent, label);
             n = 1;
         }
         if (e is { Kind: OutboxKind.Patch or OutboxKind.Create })
@@ -124,7 +124,10 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             var gone = new List<string>();
             // Creates that depend on it (8.4); the row itself is not its own child.
             RemoveChildren(c, tx, t, pk, gone, [(t.Name, pk)]);
-            Note(c, tx, $"the edit of {label} is lost: it was deleted on the instance{(gone.Count > 0 ? $"; dependent rows not saved: {string.Join(", ", gone)}" : "")}");
+            if (gone.Count > 0)
+                log.LogWarning("[{Agent}] the edit of {Label} is lost: it was deleted on the instance; dependent rows not saved: {Gone}", agent, label, string.Join(", ", gone));
+            else
+                log.LogWarning("[{Agent}] the edit of {Label} is lost: it was deleted on the instance", agent, label);
         }
         return n;
     }
@@ -175,12 +178,6 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             foreach (string id in ClientStore.ChildIds(c, tx, Instance, child, fk, pk))
                 RemoveWithChildren(c, tx, child, id, gone, seen);
         }
-    }
-
-    public void Note(SqliteConnection c, SqliteTransaction tx, string text, bool info = false)
-    {
-        ClientStore.Note(c, tx, Instance, text, info);
-        Notes.Add(text);
     }
 
     /// <summary>

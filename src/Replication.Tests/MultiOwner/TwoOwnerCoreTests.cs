@@ -10,7 +10,7 @@ namespace Replication.Tests.MultiOwner;
 /// <summary>
 /// One client, two owners with different data (4), built from Replication.Core and Sample.Domain only (no Sample.Lab).
 /// Every check reads the database files with raw SQL: the client's rows per <c>InstanceId</c>, <c>_sync_instances</c>,
-/// <c>_sync_cursors</c>, <c>_sync_outbox</c>, <c>_sync_notes</c>; on the owners the rows, <c>_sync_meta</c>,
+/// <c>_sync_cursors</c>, <c>_sync_outbox</c>; on the owners the rows, <c>_sync_meta</c>,
 /// <c>_sync_tombstones</c>, <c>_sync_clients</c> and <c>_sync_client_cursors</c>. Clients join by catch-up from zero cursors
 /// (<c>skip_snapshot_on_empty_replica</c>), no snapshots. The order of steps comes from the agents' <c>DataChanged</c> and state changes.
 /// </summary>

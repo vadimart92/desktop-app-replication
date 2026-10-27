@@ -15,10 +15,11 @@ public sealed class Lab : IAsyncDisposable
     private readonly ILogger<Lab> _log;
     private int _scheduled;
 
-    private Lab(string dir, ILoggerFactory loggers, OwnerNode owner, ClientNode c1, ClientNode c2)
+    private Lab(string dir, ILoggerFactory loggers, LogCapture notes, OwnerNode owner, ClientNode c1, ClientNode c2)
     {
         Dir = dir;
         Loggers = loggers;
+        Notes = notes;
         _log = loggers.CreateLogger<Lab>();
         Owner = owner;
         C1 = c1;
@@ -28,6 +29,8 @@ public sealed class Lab : IAsyncDisposable
     public string Dir { get; }
     /// <summary>Loggers of the clients and the scenarios; the owner's host has its own.</summary>
     public ILoggerFactory Loggers { get; }
+    /// <summary>What the clients' agents logged, for the scenario checks.</summary>
+    public LogCapture Notes { get; }
     public OwnerNode Owner { get; }
     public ClientNode C1 { get; }
     public ClientNode C2 { get; }
@@ -44,7 +47,12 @@ public sealed class Lab : IAsyncDisposable
     {
         dir ??= NewDir();
         Directory.CreateDirectory(dir);
-        ILoggerFactory loggers = LoggerFactory.Create(b => logging?.Invoke(b));
+        var notes = new LogCapture();
+        ILoggerFactory loggers = LoggerFactory.Create(b =>
+        {
+            b.AddProvider(notes);
+            logging?.Invoke(b);
+        });
         OwnerNode owner = await OwnerNode.StartAsync(Path.Combine(dir, "owner.db"), configure: o =>
         {
             o.OnlineInterval = TimeSpan.FromMilliseconds(300);
@@ -53,7 +61,7 @@ public sealed class Lab : IAsyncDisposable
         AgentOptions Opt() => new AgentOptions { AckInterval = TimeSpan.FromMilliseconds(300), ApplyTimeout = TimeSpan.FromSeconds(15), LagWarningWindow = TimeSpan.FromSeconds(6) };
         ClientNode c1 = ClientNode.Connect(ClientNode.Create(Path.Combine(dir, "client1.db"), loggers), "Клієнт 1", owner.Address, Opt());
         ClientNode c2 = ClientNode.Connect(ClientNode.Create(Path.Combine(dir, "client2.db"), loggers), "Клієнт 2", owner.Address, Opt());
-        return new Lab(dir, loggers, owner, c1, c2);
+        return new Lab(dir, loggers, notes, owner, c1, c2);
     }
 
     public void Say(string text, LogLevel level = LogLevel.Information) => _log.Log(level, "{Text}", text);

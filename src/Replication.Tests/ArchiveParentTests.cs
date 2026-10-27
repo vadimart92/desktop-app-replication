@@ -70,7 +70,7 @@ public sealed class ArchiveParentTests
         await lab.SyncNowAsync(lab.C1);
         await lab.SettleAsync();
         AssertArchiveIntact(lab);
-        Assert.That(lab.C1.Replication.Store.Notes(), Has.None.Matches<ClientNote>(n => n.Text.Contains(" not deleted:", StringComparison.Ordinal)));
+        Assert.That(lab.Notes.Of(lab.C1.Label), Has.None.Matches<string>(n => n.Contains(" not deleted:", StringComparison.Ordinal)));
     }
 
     [Test]

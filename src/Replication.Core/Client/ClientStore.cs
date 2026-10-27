@@ -33,11 +33,9 @@ public sealed record OutboxEntry(
     long Id, string Instance, long? Seq, string Table, string? Pk, OutboxKind Kind, OutboxClass Class,
     IReadOnlyList<string> Columns, string? Predicate, long? ExpectedVersion, OutboxSendState Sent);
 
-public sealed record ClientNote(long Id, string Instance, DateTimeOffset At, string Text, bool Info);
-
 /// <summary>
 /// The client database: one file for all instances, rows tagged by <c>InstanceId</c> (5.4), plus cursors,
-/// received ranges, the outbox and notes. The outbox lives next to the data, so an edit and its outbox row commit together.
+/// received ranges and the outbox. The outbox lives next to the data, so an edit and its outbox row commit together.
 /// </summary>
 public sealed class ClientStore
 {
@@ -120,13 +118,7 @@ public sealed class ClientStore
               UNIQUE (instance, tbl, pk),
               UNIQUE (instance, seq)
             );
-            CREATE TABLE IF NOT EXISTS _sync_notes (
-              id       INTEGER PRIMARY KEY AUTOINCREMENT,
-              instance TEXT    NOT NULL,
-              at       INTEGER NOT NULL,
-              text     TEXT    NOT NULL,
-              info     INTEGER NOT NULL DEFAULT 0
-            );
+            DROP TABLE IF EXISTS _sync_notes;
             """, tx);
         if (c.Scalar<string>("SELECT value FROM _sync_local WHERE key = 'client_id'", tx) is null)
             c.Exec("INSERT INTO _sync_local(key, value) VALUES ('client_id', @id)", tx, ("@id", "cl-" + Guid.NewGuid().ToString("N")[..12]));
@@ -276,19 +268,6 @@ public sealed class ClientStore
                 AND NOT EXISTS (SELECT 1 FROM {Q(t.Name)} x WHERE x.Id = _sync_outbox.pk AND x.InstanceId = @i)
                 """, tx, ("@i", instance), ("@t", t.Name));
         }
-    }
-
-    // Notes.
-
-    public static void Note(SqliteConnection c, SqliteTransaction? tx, string instance, string text, bool info = false) =>
-        c.Exec("INSERT INTO _sync_notes(instance, at, text, info) VALUES (@i, @a, @t, @f)", tx,
-            ("@i", instance), ("@a", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("@t", text), ("@f", info ? 1 : 0));
-
-    public List<ClientNote> Notes(string? instance = null, int limit = 50)
-    {
-        using SqliteConnection c = Open();
-        return c.Query("SELECT id, instance, at, text, info FROM _sync_notes WHERE @i IS NULL OR instance = @i ORDER BY id DESC LIMIT @n", null,
-            r => new ClientNote(r.GetInt64(0), r.GetString(1), DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(2)), r.GetString(3), r.GetInt64(4) != 0), ("@i", instance), ("@n", limit));
     }
 
     // Rows.
