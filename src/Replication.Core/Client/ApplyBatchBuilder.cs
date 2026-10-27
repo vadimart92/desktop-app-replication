@@ -11,14 +11,15 @@ namespace Replication.Client;
 /// </summary>
 internal static class ApplyBatchBuilder
 {
-    public static (ApplyRequest? Request, Dictionary<long, OutboxEntry> Sent) Build(
+    /// <returns>More: the budget left pending entries out, so the next batch can go at once.</returns>
+    public static (ApplyRequest? Request, Dictionary<long, OutboxEntry> Sent, bool More) Build(
         SqliteConnection c, SyncModel model, string clientId, string instance, Func<int> applyBudget)
     {
         using SqliteTransaction tx = c.BeginTransaction();
         List<OutboxEntry> all = ClientStore.Entries(c, tx, instance, pendingOnly: true)
             .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();
         if (all.Count == 0)
-            return (null, []);
+            return (null, [], false);
         var unsentCreates = new Dictionary<(string Table, string Pk), OutboxEntry>();
         foreach (OutboxEntry x in all)
         {
@@ -62,6 +63,7 @@ internal static class ApplyBatchBuilder
                 break;
             Add(e);
         }
+        bool more = all.Any(e => !visited.Contains(e.Id));
 
         long next = c.Scalar<long>("SELECT next_seq FROM _sync_instances WHERE instance = @i", tx, ("@i", instance));
         var sent = new Dictionary<long, OutboxEntry>();
@@ -80,7 +82,7 @@ internal static class ApplyBatchBuilder
 
         var req = new ApplyRequest { ClientId = clientId };
         req.Actions.AddRange(batch.Select(e => actions[e.Id]).OfType<Protocol.Action>().OrderBy(a => a.Seq));
-        return (req.Actions.Count > 0 ? req : null, sent);
+        return (req.Actions.Count > 0 ? req : null, sent, more);
     }
 
     /// <summary>Values are read from the replica at send time, so the latest state goes and edits collapse by themselves (5.4).</summary>

@@ -161,13 +161,6 @@ internal sealed class TestClient : IAsyncDisposable
         _services = services;
         _loggers = loggers;
         Store = services.GetRequiredService<ClientStore>();
-        WriteRouter router = services.GetRequiredService<WriteRouter>();
-        // The router commits an outbox row for an instance: wake that instance's agent.
-        router.OutboxChanged += instance =>
-        {
-            foreach (SyncAgent a in Agents.Where(a => a.InstanceId == instance))
-                a.NotifyOutbox();
-        };
     }
 
     public string DbPath { get; }

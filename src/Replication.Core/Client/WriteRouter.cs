@@ -35,9 +35,6 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         IReadOnlyList<Change> Changes, IReadOnlyList<ArchiveMove> ArchiveMoves,
         bool OpenedConnection, IDbContextTransaction? OwnTransaction);
 
-    /// <summary>Raised after the outbox change is written, with the instance it belongs to; the agent wakes and sends. When the application owns the outer transaction, this is before that transaction commits.</summary>
-    public event Action<string>? OutboxChanged;
-
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
         if (eventData.Context is { } ctx && AbortLeftoverAndCollect(ctx) is { } p)
@@ -342,7 +339,5 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
             if (p.OpenedConnection)
                 ctx.Database.CloseConnection();
         }
-        foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
-            OutboxChanged?.Invoke(inst);
     }
 }

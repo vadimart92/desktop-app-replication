@@ -69,7 +69,6 @@ public sealed class SyncAgent : IAsyncDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly SqliteConnection _conn;
     private readonly AsyncSignal _linkSignal = new();
-    private readonly AsyncSignal _outboxSignal = new();
     private readonly CancellationTokenSource _life = new();
     private readonly List<RowRef> _needFull = [];
     private readonly List<ArchiveRetry> _archiveRetry = [];
@@ -199,13 +198,6 @@ public sealed class SyncAgent : IAsyncDisposable
             m.OpenTables.Tables.AddRange(open);
             _ = w(m);
         }
-    }
-
-    /// <summary>Wakes the sender after the WriteRouter committed an outbox row.</summary>
-    public void NotifyOutbox()
-    {
-        _outboxSignal.Set();
-        StatusChanged?.Invoke();
     }
 
     private void TouchReceived() => _lastReceivedMs = NowMs();
@@ -641,32 +633,35 @@ public sealed class SyncAgent : IAsyncDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            await _outboxSignal.WaitAsync(TimeSpan.FromMilliseconds(500), ct);
+            bool more = false;
             try
             {
-                while (await SendOnceAsync(client, ct))
-                {
-                }
-                if (_state == AgentState.Online)
+                // A full batch means the outbox has more: the next one goes at once. A partial or empty one waits a second.
+                more = await SendOnceAsync(client, ct);
+                if (!more && _state == AgentState.Online)
                     await RetryArchiveAsync();
             }
             catch (RpcException e) when (!ct.IsCancellationRequested)
             {
                 _log.LogWarning("[{Agent}] Apply: {Status}, will retry later", Name, e.StatusCode);
-                await Task.Delay(1000, ct);
             }
+            if (!more)
+                await Task.Delay(1000, ct);
         }
     }
 
     private int ApplyBudget() =>
         _applyRate <= 0 ? 64 * 1024 : (int)Math.Clamp(_applyRate * Options.ApplyTargetTime.TotalSeconds, Options.ApplyMinBytes, Options.ApplyMaxBytes);
 
-    /// <summary>Sends one batch: retries first, then interactive actions, then bulk ones, closed over FK dependencies.</summary>
+    /// <summary>
+    /// Sends one batch: retries first, then interactive actions, then bulk ones, closed over FK dependencies.
+    /// True when the batch was full and the outbox has more; false when it was partial or empty, or the reply did not come.
+    /// </summary>
     private async Task<bool> SendOnceAsync(Sync.SyncClient client, CancellationToken ct)
     {
-        (ApplyRequest? req, Dictionary<long, OutboxEntry> sent) = await BuildBatchAsync();
+        (ApplyRequest? req, Dictionary<long, OutboxEntry> sent, bool more) = await BuildBatchAsync();
         if (req is null)
-            return false;
+            return sent.Count > 0 && more;
         int size = req.CalculateSize();
         Log(LogLevel.Information, $"→ Apply: {string.Join("; ", req.Actions.Select(a => Describe(a, sent)))}");
         Stopwatch sw = Stopwatch.StartNew();
@@ -686,12 +681,11 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             LoseNextApplyReply = false;
             _log.LogError("[{Agent}] ✕ ApplyReply lost in the network; the actions stay queued with sent = 1", Name);
-            // The timeout before a retry.
-            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            // The loop's one-second wait is the timeout before a retry.
             return false;
         }
         await ProcessReplyAsync(reply, sent);
-        return true;
+        return more;
     }
 
     private static string Describe(Protocol.Action a, IReadOnlyDictionary<long, OutboxEntry> bySeq)
@@ -705,17 +699,17 @@ public sealed class SyncAgent : IAsyncDisposable
         };
     }
 
-    private async Task<(ApplyRequest?, Dictionary<long, OutboxEntry>)> BuildBatchAsync()
+    private async Task<(ApplyRequest?, Dictionary<long, OutboxEntry>, bool More)> BuildBatchAsync()
     {
         await _gate.WaitAsync();
         try
         {
             if (_instance is null)
-                return (null, []);
-            (ApplyRequest? req, Dictionary<long, OutboxEntry> sent) = ApplyBatchBuilder.Build(_conn, _store.Model, _store.ClientId, _instance, ApplyBudget);
+                return (null, [], false);
+            (ApplyRequest? req, Dictionary<long, OutboxEntry> sent, bool more) = ApplyBatchBuilder.Build(_conn, _store.Model, _store.ClientId, _instance, ApplyBudget);
             if (sent.Count > 0)
                 StatusChanged?.Invoke();
-            return (req, sent);
+            return (req, sent, more);
         }
         finally
         {
@@ -1001,7 +995,7 @@ public sealed class SyncAgent : IAsyncDisposable
             _gate.Release();
         }
         DataChanged?.Invoke(_store.Model.Tables.Select(x => x.Name).ToList());
-        NotifyOutbox();
+        StatusChanged?.Invoke();
         return count;
     }
 
@@ -1078,7 +1072,7 @@ public sealed class SyncAgent : IAsyncDisposable
         }
         Log(LogLevel.Information, text);
         DataChanged?.Invoke(_store.Model.Tables.Select(x => x.Name).ToList());
-        NotifyOutbox();
+        StatusChanged?.Invoke();
         return text;
     }
 

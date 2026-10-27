@@ -30,11 +30,6 @@ public sealed class ClientReplication : IAsyncDisposable
         Loggers = services.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance;
         Store = services.GetRequiredService<ClientStore>();
         Router = services.GetRequiredService<WriteRouter>();
-        Router.OutboxChanged += instance =>
-        {
-            foreach (SyncAgent a in Agents.Where(a => a.InstanceId == instance))
-                a.NotifyOutbox();
-        };
     }
 
     public IServiceProvider Services { get; }

@@ -54,7 +54,7 @@ Wrong / stale:
 - `ReplicaWriter.cs:17` `NeedFull` doc incomplete (`Revert`:191, `ArchiveLeftovers`:1091).
 - `ReplicaWriter.cs:96-100` NULL-InstanceId row with same Id also triggers NeedFull; undocumented. `:8-12` "every statement carries InstanceId" vs unfiltered SELECT and `InstallSnapshot` deleting by Id.
 - `SyncAgent.cs:57` "one per owner instance": per address, instance dynamic. `:136` HasPendingArchiveWork says outbox rows, is in-memory `_archiveRetry`.
-- `WriteRouter.cs:35` OutboxChanged "after commit" false when app owns outer tx. `:228` `ModifiedProperties` yields all properties.
+- `WriteRouter.cs:228` `ModifiedProperties` yields all properties.
 - `SnapshotStore.cs:31-33` "same operation" registration is separate steps (small purge window).
 - `ApplyBatchBuilder.cs:99` omitted action: seq assigned + sent=1, may stall if highest seq / all omitted.
 - `TriggerSql.cs:53` vs `SyncAgent.cs:788`/`ApplyHandler.cs:147` "no echo": second consecutive patch from same client resets SyncOrigin to NULL -> echo. Logic vs comment mismatch; trigger line uncommented.
