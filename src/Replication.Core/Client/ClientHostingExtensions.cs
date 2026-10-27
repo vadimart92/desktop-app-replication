@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Replication.Model;
 
 namespace Replication.Client;
@@ -15,7 +14,7 @@ public static class ClientHostingExtensions
     public static IServiceCollection AddClientServices(this IServiceCollection services, string dbPath, SyncModel model) =>
         services
             .AddSingleton(new ClientStore(dbPath, model))
-            .AddSingleton(sp => new WriteRouter(model, sp.GetService<ILoggerFactory>()?.CreateLogger<WriteRouter>() ?? NullLogger<WriteRouter>.Instance));
+            .AddSingleton(sp => new WriteRouter(model));
 
     /// <summary>Call after the application's own migrations.</summary>
     public static IServiceProvider InstallClientStore(this IServiceProvider services)

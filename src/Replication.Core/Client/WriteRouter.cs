@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
@@ -21,7 +22,7 @@ namespace Replication.Client;
 /// the router's write transaction, and with it the write lock on the client database, open until the next save on that context.
 /// Each outbox write is logged at Information as <c>[instance] …</c>.
 /// </remarks>
-public sealed class WriteRouter(SyncModel model, ILogger<WriteRouter> log) : SaveChangesInterceptor
+public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 {
     private readonly ConditionalWeakTable<DbContext, Pending> _pending = new();
 
@@ -301,6 +302,9 @@ public sealed class WriteRouter(SyncModel model, ILogger<WriteRouter> log) : Sav
         if (!_pending.TryGetValue(ctx, out Pending? p))
             return;
         _pending.Remove(ctx);
+
+        ILogger<WriteRouter> log = ctx.GetService<ILoggerFactory>().CreateLogger<WriteRouter>();
+
         var conn = (SqliteConnection)ctx.Database.GetDbConnection();
         var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
         try
