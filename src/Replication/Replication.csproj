@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Replication.Core</PackageId>
+    <PackageId>Replication</PackageId>
     <Version>1.0.0</Version>
     <RootNamespace>Replication</RootNamespace>
     <Description>Replication core: owner (gRPC server, triggers, tombstones) and client (replica, outbox, sync agent). No UI dependencies.</Description>

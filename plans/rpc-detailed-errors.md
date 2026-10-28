@@ -9,7 +9,7 @@ hosts can turn it off. Tests assert on detail text (`SubscribeSessionTests`: `Ma
 
 ## Findings that shape the plan
 - `AddGrpc` is called only by hosts, never by the library. `OwnerHostingExtensions.ConfigureSyncGrpcServiceOptions`
-  (`Replication.Core/Owner/OwnerHostingExtensions.cs`) sets only per-service options, and `EnableDetailedErrors`
+  (`Replication/Owner/OwnerHostingExtensions.cs`) sets only per-service options, and `EnableDetailedErrors`
   is a global `GrpcServiceOptions` setting, so it cannot go there.
 - The two repo hosts are `Sample.Lab/OwnerHost.cs` and `Replication.Tests/MultiOwner/TwoOwnerRig.cs` (the `AddGrpc(o => ...)` call in each).
   Both use `WebApplication.CreateSlimBuilder()`, whose environment defaults to Production.
@@ -18,7 +18,7 @@ hosts can turn it off. Tests assert on detail text (`SubscribeSessionTests`: `Ma
 ## Changes
 1. `AddGrpc(o => ...)` in `Sample.Lab/OwnerHost.cs` and `Replication.Tests/MultiOwner/TwoOwnerRig.cs`: leave `EnableDetailedErrors = true`.
    Add a one-line comment: lab/test rig, tests assert on error detail; a real host should use `builder.Environment.IsDevelopment()`.
-2. `Replication.Core/Owner/OwnerHostingExtensions.cs`: add an XML doc note on `ConfigureSyncGrpcServiceOptions`
+2. `Replication/Owner/OwnerHostingExtensions.cs`: add an XML doc note on `ConfigureSyncGrpcServiceOptions`
    saying `EnableDetailedErrors` is the host's choice, is not required by the client, and only affects the
    `LastError` text. No code change in the library.
 3. Real-project host (outside this repo) uses:

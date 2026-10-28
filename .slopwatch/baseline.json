@@ -16,7 +16,7 @@
     {
       "hash": "205003d37c95762c",
       "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Owner/OwnerHost.cs",
+      "filePath": "src/Replication/Owner/OwnerHost.cs",
       "lineNumber": 92,
       "codeSnippet": "catch (OperationCanceledException) { }",
       "message": "Empty catch block swallows exceptions without handling",
@@ -25,7 +25,7 @@
     {
       "hash": "cf9784b4bad91791",
       "ruleId": "SW003",
-      "filePath": "src/Replication.Core/Owner/OwnerHost.cs",
+      "filePath": "src/Replication/Owner/OwnerHost.cs",
       "lineNumber": 103,
       "codeSnippet": "catch { }",
       "message": "Empty catch block swallows exceptions without handling",

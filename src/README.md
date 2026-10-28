@@ -4,7 +4,7 @@
 
 | Проєкт | Що це |
 |---|---|
-| `Replication.Core` | Ядро реплікації, яке можна скопіювати у свій проєкт. Без залежності від Avalonia. Власник (тригери, gRPC-сервіс `SyncGrpcService`, Apply, знімок, очищення tombstones) і клієнт (одна БД з `InstanceId`, `_sync_outbox`, `WriteRouter`, `SyncAgent`), gRPC-контракт `Protos/sync.proto`. |
+| `Replication` | Ядро реплікації, яке можна скопіювати у свій проєкт. Без залежності від Avalonia. Власник (тригери, gRPC-сервіс `SyncGrpcService`, Apply, знімок, очищення tombstones) і клієнт (одна БД з `InstanceId`, `_sync_outbox`, `WriteRouter`, `SyncAgent`), gRPC-контракт `Protos/sync.proto`. |
 | `Sample.Domain` | Модель прикладу: `BaseEntity` (Id, CreatedOn, ModifiedOn) і `Category`, `Item`, `LogEntry`, `StockObject` (з комплексним типом `ObjectSettings`). Сутності нічого не знають про синк. |
 | `Sample.Lab` | «Лабораторія»: власник і два клієнти в одному процесі, кожен зі своїм SQLite-файлом, справжній gRPC через localhost. Тут же 18 сценаріїв з демо-сторінки (вільний режим без кроків і 17 зі кроками). `TwoOwnerLab`: два власники з різними початковими даними і один клієнт, під'єднаний до обох. У `Net/` лічильник байтів на дроті й емуляція мережі для клієнтів лабораторії. |
 | `Sample.App` | Avalonia-додаток: лабораторія, окремо власник (з вікном або headless) і окремо клієнт. |
@@ -58,7 +58,7 @@ dotnet tool restore && dotnet slopwatch analyze -d .. --fail-on warning
 
 ## Як підключити ядро у свій проєкт
 
-1. Скопіювати `Replication.Core` (або послатися на нього).
+1. Скопіювати `Replication` (або послатися на нього).
 2. У `OnModelCreating` того самого DbContext, що на власнику і на клієнті, останнім рядком:
 
    ```csharp

@@ -4,7 +4,7 @@
     <AvaloniaVersion>12.1.3</AvaloniaVersion>
     <GrpcVersion>2.84.0</GrpcVersion>
   </PropertyGroup>
-  <ItemGroup Label="Replication.Core">
+  <ItemGroup Label="Replication">
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Grpc.AspNetCore" Version="$(GrpcVersion)" />
     <PackageVersion Include="Grpc.Net.Client" Version="$(GrpcVersion)" />

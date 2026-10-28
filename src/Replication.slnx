@@ -1,5 +1,5 @@
 <Solution>
-  <Project Path="Replication.Core/Replication.Core.csproj" />
+  <Project Path="Replication/Replication.csproj" />
   <Project Path="Replication.Tests/Replication.Tests.csproj" />
   <Project Path="Sample.App/Sample.App.csproj" />
   <Project Path="Sample.Domain/Sample.Domain.csproj" />
