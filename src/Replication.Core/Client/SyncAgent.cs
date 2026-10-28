@@ -18,9 +18,14 @@ public enum AgentState
     Snapshot,
     Catchup,
     Online,
+
+    /// <summary>The owner runs another schema version, or an older protocol without Identity: one side needs an update.</summary>
     SchemaMismatch,
 
-    /// <summary>Another agent of this client already serves the owner's instance (the same owner, maybe at another address).</summary>
+    /// <summary>
+    /// Another agent of this client already serves the owner's instance (the same owner, maybe at another address),
+    /// or the owner's snapshot shares Ids with an instance another agent serves.
+    /// </summary>
     Duplicate
 }
 
@@ -29,6 +34,9 @@ public sealed class AgentOptions
     public int SchemaVersion { get; set; } = 1;
     public TimeSpan AckInterval { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan ApplyTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Pause between Apply rounds when the outbox has nothing more to send right away.</summary>
+    public TimeSpan ApplyInterval { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan ReconnectMin { get; set; } = TimeSpan.FromMilliseconds(500);
     public TimeSpan ReconnectMax { get; set; } = TimeSpan.FromSeconds(30);
 
@@ -151,6 +159,7 @@ public sealed class SyncAgent : IAsyncDisposable
         }
     }
 
+    /// <summary>A hint that the status may have changed; it fires per batch, so a UI should throttle it or read <see cref="GetStatus"/> on a timer.</summary>
     public event System.Action? StatusChanged;
 
     /// <summary>Rows of these tables changed in the replica (a batch, a reply, a snapshot).</summary>
@@ -336,7 +345,7 @@ public sealed class SyncAgent : IAsyncDisposable
         });
     }
 
-    /// <summary>One link: throws when it breaks; returns the state the link is turned off in (SchemaMismatch, Duplicate).</summary>
+    /// <summary>One link: throws when it breaks; returns the state the link is turned off in (SchemaMismatch, also for an owner without Identity; Duplicate).</summary>
     private async Task<AgentState> SessionAsync(CancellationToken ct)
     {
         using GrpcChannel channel = CreateChannel();
@@ -345,7 +354,18 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             ct.ThrowIfCancellationRequested();
             SetState(AgentState.Connecting);
-            IdentityReply owner = await client.IdentityAsync(new IdentityRequest(), cancellationToken: ct);
+            IdentityReply owner;
+            try
+            {
+                owner = await client.IdentityAsync(new IdentityRequest(), cancellationToken: ct);
+            }
+            catch (RpcException e) when (e.StatusCode == StatusCode.Unimplemented)
+            {
+                // An owner older than Identity: a retry gets the same answer until the owner is updated.
+                _lastError = "the owner does not answer Identity: update the owner";
+                _log.LogWarning("[{Agent}] {Error}. Sync stopped, the queue is kept", Name, _lastError);
+                return AgentState.SchemaMismatch;
+            }
             TouchReceived();
             if (!await AdoptInstanceAsync(owner.InstanceId, ct))
                 return AgentState.Duplicate;
@@ -389,7 +409,19 @@ public sealed class SyncAgent : IAsyncDisposable
                 _log.LogWarning("[{Agent}] ← SnapshotRequired: {Reason}, snapshot ~{SizeKb} KB", Name, sr.Reason, sr.SizeBytes / 1024);
                 // Another owner answered since Identity: the next round adopts it, the replica of this one stays.
                 if (sr.InstanceId == _instance)
-                    await RefillAsync(client, sr.Reason, ct);
+                {
+                    try
+                    {
+                        await RefillAsync(client, sr.Reason, ct);
+                    }
+                    catch (InstanceHeldException e)
+                    {
+                        // Two live owners with shared Ids: retrying would download the same snapshot again.
+                        _lastError = e.Message;
+                        _log.LogError("[{Agent}] {Error}: the snapshot is not installed", Name, _lastError);
+                        return AgentState.Duplicate;
+                    }
+                }
                 // A new Identity and Start with the fresh replica.
                 continue;
             }
@@ -633,7 +665,7 @@ public sealed class SyncAgent : IAsyncDisposable
             bool more = false;
             try
             {
-                // A full batch means the outbox has more: the next one goes at once. A partial or empty one waits a second.
+                // A full batch means the outbox has more: the next one goes at once. A partial or empty one waits ApplyInterval.
                 more = await SendOnceAsync(client, ct);
                 if (!more && _state == AgentState.Online)
                     await RetryArchiveAsync();
@@ -643,7 +675,7 @@ public sealed class SyncAgent : IAsyncDisposable
                 _log.LogWarning("[{Agent}] Apply: {Status}, will retry later", Name, e.StatusCode);
             }
             if (!more)
-                await Task.Delay(1000, ct);
+                await Task.Delay(Options.ApplyInterval, ct);
         }
     }
 
@@ -678,7 +710,7 @@ public sealed class SyncAgent : IAsyncDisposable
         {
             LoseNextApplyReply = false;
             _log.LogError("[{Agent}] ✕ ApplyReply lost in the network; the actions stay queued with sent = 1", Name);
-            // The loop's one-second wait is the timeout before a retry.
+            // The loop's ApplyInterval wait is the timeout before a retry.
             return false;
         }
         await ProcessReplyAsync(reply, sent);
@@ -822,27 +854,28 @@ public sealed class SyncAgent : IAsyncDisposable
         await _gate.WaitAsync(ct);
         try
         {
-            (string inst, int dropped) = ReplicaWriter.InstallSnapshot(_store, path);
-            // NOTE: the snapshot's instance is taken as is: there is no _store.Claim here and no check against the instance adopted at the handshake.
-            _instance = inst;
+            // Another owner may answer at the address since the handshake: its snapshot is refused, the next round adopts it with a claim.
+            SnapshotInstall done = ReplicaWriter.InstallSnapshot(_store, path, _instance!, this);
             long cursor;
             lock (_cursorsLock)
             {
-                _cursors = _store.LoadCursors(_conn, inst);
+                _cursors = _store.LoadCursors(_conn, _instance!);
                 cursor = _cursors.Values.First().Cursor;
             }
 
-            _log.LogInformation("[{Agent}] snapshot verified and merged in one transaction: rows with InstanceId = {InstanceId} replaced, cursors = {Cursor}", Name, inst, cursor);
-            if (dropped > 0)
-                _log.LogError("[{Agent}] the queue of the old replica is dropped: {Dropped} actions not sent", Name, dropped);
+            _log.LogInformation("[{Agent}] snapshot verified and merged in one transaction: rows with InstanceId = {InstanceId} replaced, cursors = {Cursor}", Name, _instance, cursor);
+            if (done.Dropped > 0)
+                _log.LogError("[{Agent}] the queue of the old replica is dropped: {Dropped} actions not sent", Name, done.Dropped);
+            foreach ((string old, int dropped) in done.Replaced)
+                _log.LogError("[{Agent}] the replica of instance {Old} is replaced by the snapshot of {InstanceId}: {Dropped} actions not sent", Name, old, _instance, dropped);
         }
         finally
         {
             _gate.Release();
+            File.Delete(path);
+            _download = null;
+            _snapshotProgress = null;
         }
-        File.Delete(path);
-        _download = null;
-        _snapshotProgress = null;
         DataChanged?.Invoke(_store.Model.Tables.Select(t => t.Name).ToList());
         StatusChanged?.Invoke();
     }
@@ -858,13 +891,9 @@ public sealed class SyncAgent : IAsyncDisposable
         try
         {
             using SqliteTransaction tx = _conn.BeginTransaction();
-            dropped = (int)_conn.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent < 2", tx, ("@i", _instance));
-            _conn.Exec("DELETE FROM _sync_outbox WHERE instance = @i", tx, ("@i", _instance));
+            dropped = ReplicaWriter.DropReplica(_conn, tx, _store.Model, _instance!);
             foreach (SyncTable t in _store.Model.Tables)
-            {
-                _conn.Exec($"DELETE FROM {Q(t.Name)} WHERE InstanceId = @i", tx, ("@i", _instance));
                 ClientStore.SaveCursor(_conn, tx, _instance!, t.Name, new CursorState(0));
-            }
             ClientStore.SaveInstance(_conn, tx, _instance!, null);
             tx.Commit();
             lock (_cursorsLock)

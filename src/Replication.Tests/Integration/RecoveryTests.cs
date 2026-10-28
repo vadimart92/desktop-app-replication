@@ -146,7 +146,7 @@ public sealed class RecoveryTests
     }
 
     [Test]
-    public async Task Owner_restored_from_a_backup_gets_a_new_instance_and_the_client_takes_a_snapshot_beside_the_old_replica()
+    public async Task Owner_restored_from_a_backup_gets_a_new_instance_and_the_client_takes_a_snapshot_that_replaces_the_old_replica()
     {
         await StartOwnerAsync();
         StartClient();
@@ -172,9 +172,11 @@ public sealed class RecoveryTests
         await SettleAsync();
 
         Assert.That(_client.Instance, Is.EqualTo(_owner.Store.InstanceId));
-        Assert.That(Rows.All(ClientPath, "Item", oldInstance).Keys.Intersect(Rows.All(OwnerPath, "Item").Keys), Is.Empty, "the snapshot of the restored owner took over the rows with its Ids");
+        Assert.That(Rows.All(ClientPath, "Item", oldInstance), Is.Empty, "the snapshot of the restored owner replaced the old replica");
+        Assert.That(Rows.Scalar(ClientPath, "SELECT COUNT(*) FROM _sync_instances"), Is.EqualTo(1L));
+        Assert.That(Rows.Scalar(ClientPath, $"SELECT COUNT(*) FROM _sync_cursors WHERE instance = '{oldInstance}'"), Is.EqualTo(0L));
         Assert.That(Inspect.OwnerItem(_owner, "Степлер")?.Price, Is.Not.EqualTo(150), "the offline edit belonged to the old replica and is never sent");
-        Assert.That(_client.Replication.Store.Entries(oldInstance), Has.Count.EqualTo(1), "kept with the old replica");
+        Assert.That(_client.Replication.Store.Entries(oldInstance), Is.Empty, "dropped with the old replica");
         Assert.That(_client.Outbox(), Is.Empty);
         Assert.That(Inspect.Diff(_owner, _client), Is.Empty);
     }

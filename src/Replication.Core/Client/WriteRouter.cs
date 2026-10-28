@@ -20,7 +20,8 @@ namespace Replication.Client;
 /// Register it after every other SaveChanges interceptor (after the application's own). EF tells no
 /// interceptor when one throws in SavingChanges, so an interceptor after the router that rejects the save would leave
 /// the router's write transaction, and with it the write lock on the client database, open until the next save on that context.
-/// Each outbox write is logged at Information as <c>[instance] …</c>.
+/// Each outbox write is logged at Information as <c>[instance] …</c>, through the DbContext's <c>ILoggerFactory</c>: the
+/// application's one with AddDbContext, or the one given to UseLoggerFactory; otherwise the lines go nowhere.
 /// </remarks>
 public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 {
@@ -153,6 +154,14 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         HashSet<(string Name, string)> deleted = entries.Where(e => e.State == EntityState.Deleted && model.ForType(e.Metadata.ClrType) is not null)
             .Select(e => (model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
             .ToHashSet();
+        // Parents by key: from this save, and from the database once per parent (many rows usually point to a few parents).
+        Dictionary<(SyncTable, Guid), string?> inSave = [];
+        foreach (EntityEntry e in entries)
+        {
+            if (e.State != EntityState.Deleted && model.ForType(e.Metadata.ClrType) is { } t && e.Property(SyncColumns.Key).CurrentValue is Guid k)
+                inSave[(t, k)] = (string?)e.Property(SyncColumns.InstanceId).CurrentValue;
+        }
+        Dictionary<(SyncTable, Guid), (bool, string?)> inDb = [];
         var changes = new List<Change>();
         var moves = new List<ArchiveMove>();
         bool opened = false;
@@ -167,7 +176,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
                 StoreObjectIdentifier store = StoreObjectIdentifier.Table(t.Name, null);
                 // Local rows too: no source may point into another one (5.4).
                 if (e.State is EntityState.Added or EntityState.Modified)
-                    CheckSources(ctx, entries, t, e, instance, store);
+                    CheckSources(ctx, inSave, inDb, t, e, instance, store);
                 if (!SyncColumns.IsRemote(instance))
                     continue;
                 string pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
@@ -252,7 +261,8 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
     /// A row may point only to rows of its own source (5.4): local rows (<c>InstanceId</c> NULL) to local rows, a replica's
     /// rows to that instance's rows. An owner's delete then never reaches another source's rows, by cascade or by orphaning.
     /// </summary>
-    private void CheckSources(DbContext ctx, List<EntityEntry> entries, SyncTable t, EntityEntry e, string? instance, StoreObjectIdentifier store)
+    private void CheckSources(DbContext ctx, Dictionary<(SyncTable, Guid), string?> inSave, Dictionary<(SyncTable, Guid), (bool, string?)> inDb,
+        SyncTable t, EntityEntry e, string? instance, StoreObjectIdentifier store)
     {
         bool moved = e.State == EntityState.Modified && e.Property(SyncColumns.InstanceId).IsModified;
         foreach (SyncForeignKey fk in t.ForeignKeys)
@@ -261,7 +271,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
             if (p.CurrentValue is not Guid pid || (e.State == EntityState.Modified && !p.IsModified && !moved) || !model.TryGet(fk.ParentTable, out SyncTable? pt))
                 continue;
             // A parent the database does not have is left to the FK constraint.
-            if (ParentInstance(ctx, entries, pt, pid) is (true, var parent) && !SyncColumns.MayReference(instance, parent))
+            if (ParentInstance(ctx, inSave, inDb, pt, pid) is (true, var parent) && !SyncColumns.MayReference(instance, parent))
             {
                 throw new InvalidOperationException(
                     $"{t.Name} {PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!)} ({SourceText(instance)}) cannot point to {pt.Name} {PkText(pid)} ({SourceText(parent)}): a row may point only to rows of its own source");
@@ -272,21 +282,21 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
     // Display text for errors only: the client's own data has InstanceId NULL, there is no "local" value in the database.
     private static string SourceText(string? instance) => string.IsNullOrEmpty(instance) ? "local" : instance;
 
-    /// <summary>The parent's <c>InstanceId</c>: from this save when the parent is in it, otherwise from the database.</summary>
-    private (bool Found, string? Instance) ParentInstance(DbContext ctx, List<EntityEntry> entries, SyncTable parent, Guid id)
+    /// <summary>The parent's <c>InstanceId</c>: from this save when the parent is in it, otherwise from the database (looked up once per save).</summary>
+    private static (bool Found, string? Instance) ParentInstance(DbContext ctx, Dictionary<(SyncTable, Guid), string?> inSave,
+        Dictionary<(SyncTable, Guid), (bool, string?)> inDb, SyncTable parent, Guid id)
     {
-        foreach (EntityEntry pe in entries)
-        {
-            if (pe.State != EntityState.Deleted && model.ForType(pe.Metadata.ClrType) == parent && pe.Property(SyncColumns.Key).CurrentValue is Guid k && k == id)
-                return (true, (string?)pe.Property(SyncColumns.InstanceId).CurrentValue);
-        }
+        if (inSave.TryGetValue((parent, id), out string? saved))
+            return (true, saved);
+        if (inDb.TryGetValue((parent, id), out (bool, string?) known))
+            return known;
         ctx.Database.OpenConnection();
         try
         {
             var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
             using SqliteCommand cmd = ((SqliteConnection)ctx.Database.GetDbConnection()).Cmd($"SELECT InstanceId FROM {Q(parent.Name)} WHERE Id = @id", tx, ("@id", PkText(id)));
             using SqliteDataReader r = cmd.ExecuteReader();
-            return r.Read() ? (true, r.IsDBNull(0) ? null : r.GetString(0)) : (false, null);
+            return inDb[(parent, id)] = r.Read() ? (true, r.IsDBNull(0) ? null : r.GetString(0)) : (false, null);
         }
         finally
         {

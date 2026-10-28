@@ -118,7 +118,6 @@ public sealed class ClientStore
               UNIQUE (instance, tbl, pk),
               UNIQUE (instance, seq)
             );
-            DROP TABLE IF EXISTS _sync_notes;
             """, tx);
         if (c.Scalar<string>("SELECT value FROM _sync_local WHERE key = 'client_id'", tx) is null)
             c.Exec("INSERT INTO _sync_local(key, value) VALUES ('client_id', @id)", tx, ("@id", "cl-" + Guid.NewGuid().ToString("N")[..12]));

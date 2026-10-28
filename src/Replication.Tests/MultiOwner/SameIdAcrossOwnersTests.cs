@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Replication.Client;
 using Replication.Model;
 using Sample.Domain;
 
@@ -41,8 +42,24 @@ public sealed class SameIdAcrossOwnersTests
         Assert.That(inReplicaOfB, Is.Zero, "Id is the only key on the client; Ids must not repeat across owners");
     }
 
+    [Test]
+    public async Task Snapshot_that_shares_ids_with_an_instance_another_agent_serves_is_refused_and_the_link_stops_as_Duplicate()
+    {
+        Guid shared = await StartWithSharedCategoryAsync(joinB: false);
+        SyncAgent toB = _rig!.Client.Connect(_rig.B, snapshot: true);
+
+        toB.LinkEnabled = true;
+        await Wait.UntilAsync(() => toB.GetStatus().State == AgentState.Duplicate, TimeSpan.FromSeconds(30), "the snapshot of owner 2 was not refused");
+
+        Assert.That(toB.LinkEnabled, Is.False, "no retry: the same snapshot would be refused again");
+        Assert.That(toB.GetStatus().LastError, Does.StartWith($"the snapshot shares Ids with instance {_rig.ToA.InstanceId}"));
+
+        Assert.That(Sql.Scalar<string>(_rig.ClientPath, "SELECT Name FROM Category WHERE Id = @i", ("@i", Wire.PkText(shared))), Is.EqualTo("Спільна А"));
+        Assert.That(Sql.Scalar<long>(_rig.ClientPath, "SELECT COUNT(*) FROM _sync_instances WHERE snapshot_version IS NOT NULL AND instance = @b", ("@b", toB.InstanceId)), Is.Zero);
+    }
+
     /// <summary>Both owners hold a category with the same Id and different names; the client joins owner 1, then owner 2.</summary>
-    private async Task<Guid> StartWithSharedCategoryAsync()
+    private async Task<Guid> StartWithSharedCategoryAsync(bool joinB = true)
     {
         _rig = await TwoOwnerRig.StartAsync();
         var shared = Guid.NewGuid();
@@ -54,8 +71,11 @@ public sealed class SameIdAcrossOwnersTests
         }
         await TwoOwnerRig.SyncNowAsync(_rig.ToA);
         await _rig.SettleAsync();
-        await TwoOwnerRig.SyncNowAsync(_rig.ToB);
-        await _rig.SettleAsync();
+        if (joinB)
+        {
+            await TwoOwnerRig.SyncNowAsync(_rig.ToB);
+            await _rig.SettleAsync();
+        }
         return shared;
     }
 }

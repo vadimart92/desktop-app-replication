@@ -15,6 +15,9 @@ internal static class ApplyBatchBuilder
     public static (ApplyRequest? Request, Dictionary<long, OutboxEntry> Sent, bool More) Build(
         SqliteConnection c, SyncModel model, string clientId, string instance, Func<int> applyBudget)
     {
+        // A read before the write transaction: an empty outbox does not take the write lock the app's saves need.
+        if (c.Scalar<long>("SELECT EXISTS(SELECT 1 FROM _sync_outbox WHERE instance = @i AND sent IN (0, 1))", null, ("@i", instance)) == 0)
+            return (null, [], false);
         using SqliteTransaction tx = c.BeginTransaction();
         List<OutboxEntry> all = ClientStore.Entries(c, tx, instance, pendingOnly: true)
             .OrderBy(e => e.Seq is null ? 1 : 0).ThenBy(e => e.Seq ?? 0).ThenBy(e => (int)e.Class).ThenBy(e => e.Id).ToList();

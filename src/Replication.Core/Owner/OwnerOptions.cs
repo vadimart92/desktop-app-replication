@@ -28,7 +28,10 @@ public sealed class OwnerOptions
     /// <summary>A client seen within this window holds back <c>SyncBase</c> (5.2).</summary>
     public TimeSpan ActivityWindow { get; set; } = TimeSpan.FromHours(24);
 
-    /// <summary>Tombstones and silent clients are forgotten after this (10.2).</summary>
+    /// <summary>
+    /// Tombstones and silent clients are forgotten after this (10.2). A client offline for longer finds its cursor below
+    /// <c>purged_version</c> and gets a snapshot, which drops its unsent outbox. Only the time offline counts, not the number of changes.
+    /// </summary>
     public TimeSpan Retention { get; set; } = TimeSpan.FromDays(30);
 
     public TimeSpan PurgeInterval { get; set; } = TimeSpan.FromHours(1);

@@ -202,15 +202,15 @@ internal sealed class TestClient : IAsyncDisposable
         return new TestClient(dbPath, services, loggers);
     }
 
-    /// <summary>A new agent for <paramref name="owner"/> with the link off; catch-up instead of a snapshot, Item open.</summary>
-    public SyncAgent Connect(TestOwner owner)
+    /// <summary>A new agent for <paramref name="owner"/> with the link off; catch-up instead of a snapshot unless <paramref name="snapshot"/>, Item open.</summary>
+    public SyncAgent Connect(TestOwner owner, bool snapshot = false)
     {
         var options = new AgentOptions
         {
             AckInterval = TimeSpan.FromMilliseconds(300),
             ApplyTimeout = TimeSpan.FromSeconds(15),
             LagWarningWindow = TimeSpan.FromSeconds(6),
-            SkipSnapshotOnEmptyReplica = true,
+            SkipSnapshotOnEmptyReplica = !snapshot,
         };
         var agent = new SyncAgent(Store, _loggers?.CreateLogger<SyncAgent>() ?? NullLogger<SyncAgent>.Instance, owner.Address, AgentName(owner), options);
         agent.SetOpenTables(["Item"]);

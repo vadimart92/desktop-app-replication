@@ -142,6 +142,25 @@ public sealed class SnapshotTransferTests
     }
 
     [Test]
+    public async Task Snapshot_of_another_instance_than_the_adopted_one_is_not_installed_and_the_part_file_is_dropped()
+    {
+        // A real owner's snapshot: its _sync_meta names that owner, not the instance the fake owner said at Identity.
+        await using Lab lab = await StartLabAsync();
+        List<SnapshotChunk> real = await DownloadAsync(lab, "", 0);
+        await using FakeOwner owner = await FakeOwner.StartAsync(async w =>
+        {
+            foreach (SnapshotChunk ch in real)
+                await w.WriteAsync(ch);
+        });
+        await using Probe probe = Probe.Start(owner);
+
+        await probe.WaitForErrorAsync($"the snapshot is of instance {lab.Owner.Store.InstanceId}, the agent serves {FakeOwner.Instance}");
+
+        probe.AssertNothingInstalled();
+        Assert.That(Directory.GetFiles(probe.Dir, "*.part"), Is.Empty);
+    }
+
+    [Test]
     public async Task Download_with_no_chunks_at_all_is_an_error_and_nothing_is_installed()
     {
         await using FakeOwner owner = await FakeOwner.StartAsync(_ => Task.CompletedTask);

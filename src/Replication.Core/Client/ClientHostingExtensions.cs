@@ -9,7 +9,8 @@ public static class ClientHostingExtensions
 {
     /// <summary>
     /// Registers <see cref="ClientStore"/> and <see cref="WriteRouter"/>; pass the router to the client DbContext explicitly.
-    /// The router logs through the registered <see cref="ILoggerFactory"/>, if any.
+    /// The router logs through the DbContext's <see cref="ILoggerFactory"/>: the application's one when the context comes from
+    /// AddDbContext, or the one given to UseLoggerFactory; otherwise its lines go nowhere.
     /// </summary>
     public static IServiceCollection AddClientServices(this IServiceCollection services, string dbPath, SyncModel model) =>
         services
