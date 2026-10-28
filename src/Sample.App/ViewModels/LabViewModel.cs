@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using Replication;
 using Sample.Lab;
 
@@ -53,6 +54,9 @@ public sealed partial class LabViewModel : ObservableObject
     [ObservableProperty]
     private string _labDir = "";
 
+    [ObservableProperty]
+    private int _selectedTab;
+
     public LabViewModel()
     {
         _selectedScenario = Scenarios.All[0];
@@ -64,6 +68,15 @@ public sealed partial class LabViewModel : ObservableObject
     public IReadOnlyList<Scenario> ScenarioList => Scenarios.All;
     public LogFeed Feed { get; } = new LogFeed();
     public ObservableCollection<StepView> Steps { get; } = [];
+
+    /// <summary>The second tab: one client on two owners.</summary>
+    public TwoOwnerLabViewModel TwoOwners { get; } = new TwoOwnerLabViewModel();
+
+    partial void OnSelectedTabChanged(int value)
+    {
+        if (value == 1)
+            _ = TwoOwners.EnsureStartedAsync();
+    }
 
     partial void OnSelectedScenarioChanged(Scenario value) => _ = StartScenarioAsync(value);
 
@@ -86,14 +99,12 @@ public sealed partial class LabViewModel : ObservableObject
             if (old is not null)
                 await old.DisposeAsync();
             Feed.Clear();
-            var log = new SyncLog();
-            Feed.Attach(log);
-            Sample.Lab.Lab lab = await Task.Run(() => Sample.Lab.Lab.StartAsync(log: log));
+            Sample.Lab.Lab lab = await Task.Run(() => Sample.Lab.Lab.StartAsync(logging: b => b.AddProvider(new LogFeedLoggerProvider(Feed))));
             _lab = lab;
             LabDir = lab.Dir;
             var c1 = new ClientPanelViewModel(lab.C1);
             var c2 = new ClientPanelViewModel(lab.C2);
-            Owner = new OwnerPanelViewModel(lab.Owner) { Meters = [.. lab.Clients.Select(c => c.Agent.Meter)] };
+            Owner = new OwnerPanelViewModel(lab.Owner) { Meters = [.. lab.Clients.Select(c => c.Meter)] };
             Client1 = c1;
             Client2 = c2;
             _runner = new ScenarioRunner(lab, scenario);
@@ -203,18 +214,16 @@ public sealed partial class OwnerWindowViewModel : ObservableObject
 
     public OwnerWindowViewModel(StartOptions o)
     {
-        var log = new SyncLog();
-        Feed.Attach(log);
-        _ = StartAsync(o, log);
+        _ = StartAsync(o);
     }
 
     public LogFeed Feed { get; } = new LogFeed();
 
-    private async Task StartAsync(StartOptions o, SyncLog log)
+    private async Task StartAsync(StartOptions o)
     {
         try
         {
-            OwnerNode node = await Task.Run(() => OwnerNode.StartAsync(o.DbPath, log, o.Port, o.ListenAnywhere));
+            OwnerNode node = await Task.Run(() => OwnerNode.StartAsync(o.DbPath, o.Port, o.ListenAnywhere, logging: b => b.AddProvider(new LogFeedLoggerProvider(Feed))));
             Owner = new OwnerPanelViewModel(node);
             State = $"gRPC-сервер на порту {node.Host.Port}, БД {node.DbPath}";
             var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, (_, _) => Owner.Refresh());
@@ -238,11 +247,18 @@ public sealed partial class ClientWindowViewModel : ObservableObject
 
     public ClientWindowViewModel(StartOptions o)
     {
-        var log = new SyncLog();
-        Feed.Attach(log);
+        Start(o);
+    }
+
+    public LogFeed Feed { get; } = new LogFeed();
+
+    private void Start(StartOptions o)
+    {
         try
         {
-            ClientNode node = ClientNode.Create(o.Name, o.DbPath, o.Connect, log);
+            // Lives as long as the window, that is the process.
+            ILoggerFactory loggers = LoggerFactory.Create(b => b.AddProvider(new LogFeedLoggerProvider(Feed)));
+            ClientNode node = ClientNode.Connect(ClientNode.Create(o.DbPath, loggers), o.Name, o.Connect);
             node.Link = true;
             Client = new ClientPanelViewModel(node);
             State = $"підключення до {o.Connect}, БД {node.DbPath}";
@@ -254,6 +270,4 @@ public sealed partial class ClientWindowViewModel : ObservableObject
             State = "не вдалося запустити: " + e.Message;
         }
     }
-
-    public LogFeed Feed { get; } = new LogFeed();
 }

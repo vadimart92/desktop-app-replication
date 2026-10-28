@@ -14,17 +14,8 @@ public sealed class ArchiveRetryTests
     [TestCase(16)]
     public async Task User_archive_during_an_archive_retry_converges(int clicks)
     {
-        var log = new SyncLog();
-        var c1 = new List<string>();
-        log.Written += e =>
-        {
-            if (e.Source == "Клієнт 1")
-            {
-                lock (c1)
-                    c1.Add(e.Text);
-            }
-        };
-        await using Lab lab = await Lab.StartAsync(log: log);
+        using var log = new TestLog();
+        await using Lab lab = await Lab.StartAsync(logging: log.AddTo);
         var run = new ScenarioRunner(lab, Scenarios.Find("archive"));
         await run.SetupAsync();
         await lab.SettleAsync();
@@ -46,7 +37,6 @@ public sealed class ArchiveRetryTests
 
         foreach (ClientNode c in lab.Clients.Where(c => c.Link))
             Assert.That(Inspect.Diff(lab.Owner, c), Is.Empty);
-        lock (c1)
-            Assert.That(c1, Has.None.Matches<string>(l => l.StartsWith("зв'язок обірвався", StringComparison.Ordinal)));
+        Assert.That(log.OfAgent(lab.C1.Agent.Name), Has.None.Matches<string>(l => l.StartsWith("link lost", StringComparison.Ordinal)));
     }
 }

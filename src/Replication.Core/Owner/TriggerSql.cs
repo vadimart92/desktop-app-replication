@@ -42,6 +42,8 @@ internal static class TriggerSql
             """;
 
         // WHEN keeps the trigger from firing on its own version/base/mask update.
+        // SyncOrigin: an UPDATE that does not change it is a change by the owner, so the origin resets to NULL; a writer that sets a new
+        // origin (ApplyHandler) keeps it. ApplyHandler clears an origin equal to its own first, so every client write is a change here.
         yield return $"""
             CREATE TRIGGER "_sync_{t.Name}_upd" AFTER UPDATE ON {table}
             WHEN NEW.SyncVersion = OLD.SyncVersion BEGIN

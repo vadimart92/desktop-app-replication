@@ -57,6 +57,7 @@ internal sealed class ApplyHandler(OwnerStore store)
         {
             if (!Model.TryGet(a.Tbl, out SyncTable? t))
             {
+                // Unknown table: an Archive action is skipped silently (no result unless it is a retry); anything else is rejected.
                 if (a.Kind is not ActionKind.Archive)
                     Res(a, ResultStatus.Rejected, ApplyReasons.UnknownTable);
                 else if (a.Seq <= applied)
@@ -198,8 +199,19 @@ internal sealed class ApplyHandler(OwnerStore store)
         return reply;
     }
 
+    /// <summary>
+    /// The update trigger resets SyncOrigin to NULL when a write leaves it unchanged (a change by the owner). A write by the client
+    /// that already is the row's origin would look the same, so the origin is cleared first and then set: both writes see a change.
+    /// </summary>
+    private static void ClearSameOrigin(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, string? origin)
+    {
+        if (origin is not null)
+            c.Exec($"UPDATE {Q(t.Name)} SET SyncOrigin = NULL WHERE Id = @id AND SyncOrigin = @o", tx, ("@id", pk), ("@o", origin));
+    }
+
     private static void Upsert(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, Protocol.Action a, string origin)
     {
+        ClearSameOrigin(c, tx, t, pk, origin);
         List<string> cols = a.Columns.Where(t.HasColumn).ToList();
         string names = string.Concat(cols.Select(x => ", " + Q(x)));
         string pars = string.Concat(cols.Select((_, i) => $", @v{i}"));
@@ -214,6 +226,7 @@ internal sealed class ApplyHandler(OwnerStore store)
 
     private static void Patch(SqliteConnection c, SqliteTransaction tx, SyncTable t, string pk, Protocol.Action a, string? origin)
     {
+        ClearSameOrigin(c, tx, t, pk, origin);
         List<string> cols = a.Columns.Where(t.HasColumn).ToList();
         string set = string.Concat(cols.Select((x, i) => $"{Q(x)} = @v{i}, "));
         using SqliteCommand cmd = c.Cmd($"UPDATE {Q(t.Name)} SET {set}SyncOrigin = @o WHERE Id = @id", tx, ("@id", pk), ("@o", origin));

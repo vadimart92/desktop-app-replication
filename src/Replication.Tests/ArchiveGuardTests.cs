@@ -29,7 +29,7 @@ public sealed class ArchiveGuardTests
         var root = new Node { Name = "Корінь" };
         var leaf = new Node { Name = "Лист", ParentId = root.Id };
         await using GraphPair pair = await GraphPair.StartAsync(owner => GraphPair.SeedTree(owner, root, leaf));
-        Assert.That(await pair.Agent.ArchiveAsync([("Node", leaf.Id)]), Does.StartWith("перенесення в архів"));
+        Assert.That(await pair.Agent.ArchiveAsync([("Node", leaf.Id)]), Does.StartWith("archive:"));
         await pair.SyncAsync();
 
         Assert.That(await pair.Agent.DeleteWhereAsync("Node", new Predicate("Name", "Корінь")), Is.EqualTo(1));

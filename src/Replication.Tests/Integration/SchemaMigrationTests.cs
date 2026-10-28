@@ -19,8 +19,7 @@ namespace Replication.Tests.Integration;
 [TestFixture]
 public sealed class SchemaMigrationTests
 {
-    private readonly List<string> _log = [];
-    private SyncLog _syncLog = null!;
+    private TestLog _log = null!;
     private string _dir = "";
     private string _ownerPath = "";
     private string _clientPath = "";
@@ -35,13 +34,7 @@ public sealed class SchemaMigrationTests
     [SetUp]
     public void SetUp()
     {
-        _log.Clear();
-        _syncLog = new SyncLog();
-        _syncLog.Written += e =>
-        {
-            lock (_log)
-                _log.Add($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        };
+        _log = new TestLog();
         _dir = TestDb.NewDir();
         _ownerPath = Path.Combine(_dir, "owner.db");
         _clientPath = Path.Combine(_dir, "client.db");
@@ -55,17 +48,18 @@ public sealed class SchemaMigrationTests
         if (_host is not null)
             await _host.DisposeAsync();
         SqliteConnection.ClearAllPools();
-        lock (_log)
-        {
-            foreach (string l in _log)
-                TestContext.Out.WriteLine(l);
-        }
+        _log.WriteTo(TestContext.Out);
+        _log.Dispose();
     }
 
-    [Test]
-    public async Task Sync_goes_on_after_a_migration_that_rebuilds_a_table_and_adds_a_column_and_a_table()
+    private sealed record V1(Product Lamp, Product Cable, Product Paint, Dictionary<Guid, long> Versions, long Head);
+
+    /// <summary>
+    /// Version 1 of the application, replicating. The owner holds a partial change (Name only) the client has not received,
+    /// the client is offline with an edit in its outbox.
+    /// </summary>
+    private async Task<V1> ArrangeVersion1Async()
     {
-        // Version 1 of the application, replicating.
         Migrate(_ownerPath, 1);
         var shelf = new Shelf { Name = "Склад" };
         var lamp = new Product { Name = "Лампа", Price = 100, ShelfId = shelf.Id };
@@ -84,8 +78,7 @@ public sealed class SchemaMigrationTests
         await SettleAsync();
         Assert.That(Rows.Diff(v1, _ownerPath, _clientPath, Instance), Is.Empty);
 
-        // Before the upgrade the owner holds a partial change the client has not received: the mask names Name in
-        // the version-1 column order (Name, Price, ShelfId). The client has an edit in its outbox.
+        // The mask of the partial change names Name in the version-1 column order (Name, Price, ShelfId).
         await OwnerEditAsync(1, lamp.Id, p => p.Price = 110);
         await SettleAsync();
         long received = Rows.One(_ownerPath, "Product", lamp.Id).Version;
@@ -98,62 +91,95 @@ public sealed class SchemaMigrationTests
         await ClientEditAsync(1, cable.Id, p => p.Price = 999);
         Assert.That(_client!.Store.Entries(Instance).Select(e => (e.Kind, string.Join(",", e.Columns))), Is.EqualTo(new[] { (OutboxKind.Patch, "Price") }));
 
-        // The owner upgrades: the migration rebuilds Product, which drops its triggers and keeps every SyncVersion.
-        Dictionary<Guid, long> versions = Rows.All(_ownerPath, "Product").ToDictionary(x => x.Key, x => x.Value.Version);
-        long head = (long)Rows.Scalar(_ownerPath, "SELECT version FROM _sync_meta")!;
+        return new V1(lamp, cable, paint, Rows.All(_ownerPath, "Product").ToDictionary(x => x.Key, x => x.Value.Version),
+            (long)Rows.Scalar(_ownerPath, "SELECT version FROM _sync_meta")!);
+    }
+
+    /// <summary>The owner upgrades: the migration rebuilds Product, which drops its triggers and keeps every SyncVersion; then Install on start.</summary>
+    private async Task<SyncModel> UpgradeOwnerAsync(V1 before, bool checkRebuild)
+    {
         await _host!.DisposeAsync();
         _host = null;
         Migrate(_ownerPath, 2);
-        Assert.That(Rows.Triggers(_ownerPath, "Product"), Is.Empty, "the rebuild drops the triggers");
-        Assert.That(Rows.All(_ownerPath, "Product").ToDictionary(x => x.Key, x => x.Value.Version), Is.EqualTo(versions));
-
-        // Install after the migration, as on every start: triggers for every table, the new one too, and no new versions.
+        if (checkRebuild)
+        {
+            Assert.That(Rows.Triggers(_ownerPath, "Product"), Is.Empty, "the rebuild drops the triggers");
+            Assert.That(Rows.All(_ownerPath, "Product").ToDictionary(x => x.Key, x => x.Value.Version), Is.EqualTo(before.Versions));
+        }
         SyncModel v2 = ModelOf(2);
         await StartOwnerAsync(v2, schema: 2);
+        return v2;
+    }
+
+    [Test]
+    public async Task Owner_install_after_a_table_rebuild_restores_triggers_and_remaps_the_partial_mask_without_new_versions()
+    {
+        V1 v1 = await ArrangeVersion1Async();
+
+        SyncModel v2 = await UpgradeOwnerAsync(v1, checkRebuild: true);
+
+        // Triggers for every table, the new one too, and no new versions.
         foreach (string table in new[] { "Shelf", "Product", "Tag" })
             Assert.That(Rows.Triggers(_ownerPath, table), Is.EqualTo(new[] { $"_sync_{table}_del", $"_sync_{table}_ins", $"_sync_{table}_upd" }), table);
-        Assert.That(Rows.Scalar(_ownerPath, "SELECT version FROM _sync_meta"), Is.EqualTo(head));
+        Assert.That(Rows.Scalar(_ownerPath, "SELECT version FROM _sync_meta"), Is.EqualTo(v1.Head));
         // The new column sorts first, so the partial change keeps naming Name in the new column order (5.2).
-        Assert.That(Rows.One(_ownerPath, "Product", lamp.Id).Mask, Is.EqualTo(v2["Product"].MaskOf(["Name"])));
-        Assert.That(Rows.One(_ownerPath, "Product", paint.Id).Mask, Is.EqualTo(v2["Product"].FullMask), "an untouched insert stays a full row");
+        Assert.That(Rows.One(_ownerPath, "Product", v1.Lamp.Id).Mask, Is.EqualTo(v2["Product"].MaskOf(["Name"])));
+        Assert.That(Rows.One(_ownerPath, "Product", v1.Paint.Id).Mask, Is.EqualTo(v2["Product"].FullMask), "an untouched insert stays a full row");
+    }
 
-        // The client still runs version 1: SchemaMismatch, nothing sent, the outbox kept (6.2).
+    [Test]
+    public async Task Client_on_the_old_schema_gets_SchemaMismatch_turns_its_link_off_and_keeps_its_outbox()
+    {
+        V1 v1 = await ArrangeVersion1Async();
+        await UpgradeOwnerAsync(v1, checkRebuild: false);
+
         Agent.LinkEnabled = true;
         await Lab.WaitAsync(() => Agent.GetStatus().State == AgentState.SchemaMismatch, TimeSpan.FromSeconds(30), "no SchemaMismatch");
-        Assert.That(Rows.One(_ownerPath, "Product", cable.Id)["Price"], Is.EqualTo(200L));
-        Assert.That(_client.Store.Entries(Instance), Has.Count.EqualTo(1));
+
+        Assert.That(Agent.LinkEnabled, Is.False, "the agent turns its link off on SchemaMismatch");
+        Assert.That(Rows.One(_ownerPath, "Product", v1.Cable.Id)["Price"], Is.EqualTo(200L), "nothing was sent");
+        Assert.That(_client!.Store.Entries(Instance), Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Sync_goes_on_after_both_sides_migrate_and_the_new_column_and_table_replicate_both_ways()
+    {
+        V1 v1 = await ArrangeVersion1Async();
+        SyncModel v2 = await UpgradeOwnerAsync(v1, checkRebuild: false);
+        Agent.LinkEnabled = true;
+        await Lab.WaitAsync(() => Agent.GetStatus().State == AgentState.SchemaMismatch, TimeSpan.FromSeconds(30), "no SchemaMismatch");
 
         // The client upgrades and restarts: same migration, Install, and it carries on from its cursors.
-        await _client.DisposeAsync();
+        await _client!.DisposeAsync();
         _client = null;
         Migrate(_clientPath, 2);
         StartClient(v2, schema: 2);
         await SettleAsync();
-        Assert.That(Rows.One(_ownerPath, "Product", cable.Id)["Price"], Is.EqualTo(999L), "the queued edit reached the owner");
-        Assert.That(Rows.One(_clientPath, "Product", lamp.Id, Instance)["Name"], Is.EqualTo("Лампа LED"), "the partial change arrived as Name");
+        Assert.That(Rows.One(_ownerPath, "Product", v1.Cable.Id)["Price"], Is.EqualTo(999L), "the queued edit reached the owner");
+        Assert.That(Rows.One(_clientPath, "Product", v1.Lamp.Id, Instance)["Name"], Is.EqualTo("Лампа LED"), "the partial change arrived as Name");
         Assert.That(Rows.Diff(v2, _ownerPath, _clientPath, Instance), Is.Empty);
 
         // The new column and the new table replicate both ways.
-        await OwnerEditAsync(2, paint.Id, p => p.Discount = 15);
-        Assert.That(Rows.One(_ownerPath, "Product", paint.Id).Mask, Is.EqualTo(v2["Product"].MaskOf(["Discount"])));
-        var fresh = new Tag { Label = "новинка", ProductId = lamp.Id };
+        await OwnerEditAsync(2, v1.Paint.Id, p => p.Discount = 15);
+        Assert.That(Rows.One(_ownerPath, "Product", v1.Paint.Id).Mask, Is.EqualTo(v2["Product"].MaskOf(["Discount"])));
+        var fresh = new Tag { Label = "новинка", ProductId = v1.Lamp.Id };
         await using (ShopDbContext db = ShopDbContext.Open(_ownerPath, 2))
         {
             db.Tags().Add(fresh);
             await db.SaveChangesAsync();
         }
-        await ClientEditAsync(2, lamp.Id, p => p.Discount = 5);
-        var hit = new Tag { Label = "хіт", ProductId = cable.Id };
-        await using (ShopDbContext db = ShopDbContext.Open(_clientPath, 2, _client!.Interceptors()))
+        await ClientEditAsync(2, v1.Lamp.Id, p => p.Discount = 5);
+        var hit = new Tag { Label = "хіт", ProductId = v1.Cable.Id };
+        await using (ShopDbContext db = ShopDbContext.Open(_clientPath, 2, _client!.Router))
         {
             db.Tags().Add(hit).SetInstance(Instance);
             await db.SaveChangesAsync();
         }
         await SettleAsync();
 
-        Assert.That(Rows.One(_clientPath, "Product", paint.Id, Instance)["Discount"], Is.EqualTo(15L));
+        Assert.That(Rows.One(_clientPath, "Product", v1.Paint.Id, Instance)["Discount"], Is.EqualTo(15L));
         Assert.That(Rows.One(_clientPath, "Tag", fresh.Id, Instance)["Label"], Is.EqualTo("новинка"));
-        Assert.That(Rows.One(_ownerPath, "Product", lamp.Id)["Discount"], Is.EqualTo(5L));
+        Assert.That(Rows.One(_ownerPath, "Product", v1.Lamp.Id)["Discount"], Is.EqualTo(5L));
         RowData hitOnOwner = Rows.One(_ownerPath, "Tag", hit.Id);
         Assert.That(hitOnOwner["Label"], Is.EqualTo("хіт"));
         Assert.That(hitOnOwner.Origin, Is.EqualTo(_client.ClientId));
@@ -175,17 +201,16 @@ public sealed class SchemaMigrationTests
 
     private async Task StartOwnerAsync(SyncModel model, int schema)
     {
-        _owner = new OwnerStore(_ownerPath, model, new OwnerOptions { SchemaVersion = schema, Log = _syncLog, OnlineInterval = TimeSpan.FromMilliseconds(300) });
-        _owner.Install();
         // The same port after a restart: the client keeps the owner's address.
-        _host = await OwnerHost.StartAsync(_owner, _port);
+        _host = await OwnerHost.StartAsync(_ownerPath, model,
+            new OwnerOptions { SchemaVersion = schema, OnlineInterval = TimeSpan.FromMilliseconds(300) }, _port, logging: _log.AddTo);
+        _owner = _host.Store;
         _port = _host.Port;
     }
 
     private void StartClient(SyncModel model, int schema)
     {
-        _client = new ClientReplication(_clientPath, model, _syncLog);
-        _client.Install();
+        _client = new ClientReplication(ClientReplication.BuildServices(_clientPath, model, loggers: _log.Loggers).InstallClientStore());
         var options = new AgentOptions
         {
             SchemaVersion = schema,
@@ -193,7 +218,7 @@ public sealed class SchemaMigrationTests
             ReconnectMin = TimeSpan.FromMilliseconds(200),
             ReconnectMax = TimeSpan.FromSeconds(1),
         };
-        _client.Connect($"http://127.0.0.1:{_port}", "Склад", options, "клієнт").LinkEnabled = true;
+        _client.Connect($"http://127.0.0.1:{_port}", "клієнт", options).LinkEnabled = true;
     }
 
     private async Task GoOfflineAsync()
@@ -221,7 +246,7 @@ public sealed class SchemaMigrationTests
 
     private async Task ClientEditAsync(int schema, Guid id, Action<Product> change)
     {
-        await using ShopDbContext db = ShopDbContext.Open(_clientPath, schema, _client!.Interceptors());
+        await using ShopDbContext db = ShopDbContext.Open(_clientPath, schema, _client!.Router);
         change(await db.Products.SingleAsync(x => x.Id == id && EF.Property<string>(x, SyncColumns.InstanceId) == Instance));
         await db.SaveChangesAsync();
     }

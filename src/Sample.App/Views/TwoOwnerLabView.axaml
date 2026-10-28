@@ -1,0 +1,40 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sample.App.ViewModels"
+             xmlns:v="using:Sample.App.Views"
+             x:Class="Sample.App.Views.TwoOwnerLabView"
+             x:DataType="vm:TwoOwnerLabViewModel">
+  <Grid RowDefinitions="Auto,*,5,220">
+    <!-- intro and controls -->
+    <Border Grid.Row="0" Classes="panel">
+      <Grid ColumnDefinitions="Auto,*">
+        <StackPanel Grid.Column="0" Spacing="6" Width="380" Margin="0,0,12,0">
+          <WrapPanel>
+            <Button Content="перевірити" Command="{Binding VerifyCommand}" Margin="0,0,6,4"
+                    ToolTip.Tip="Дочекатися, поки все доїде, і порівняти кожну підключену репліку з її власником" />
+            <Button Content="заново" Command="{Binding RestartCommand}" Margin="0,0,6,4"
+                    ToolTip.Tip="Нові БД: порожній клієнт, власники з початковими даними, зв'язки вимкнені" />
+          </WrapPanel>
+          <TextBlock Text="{Binding State}" Classes="muted" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding Verdict}" TextWrapping="Wrap" FontWeight="SemiBold" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Spacing="4">
+          <TextBlock Text="{Binding Intro}" TextWrapping="Wrap" FontSize="13" />
+          <TextBlock Classes="muted" Text="{Binding LabDir, StringFormat='Файли БД: {0}'}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- owner 1, the client (one database with a replica of each owner), owner 2 -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,*,*">
+      <ScrollViewer Grid.Column="0"><v:OwnerPanel DataContext="{Binding OwnerA}" /></ScrollViewer>
+      <ScrollViewer Grid.Column="1"><v:ClientPanel DataContext="{Binding Client}" /></ScrollViewer>
+      <ScrollViewer Grid.Column="2"><v:OwnerPanel DataContext="{Binding OwnerB}" /></ScrollViewer>
+    </Grid>
+
+    <GridSplitter Grid.Row="2" ResizeDirection="Rows" />
+    <Border Grid.Row="3" Classes="panel">
+      <v:LogView DataContext="{Binding Feed}" />
+    </Border>
+  </Grid>
+</UserControl>

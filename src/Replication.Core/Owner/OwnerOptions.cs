@@ -10,10 +10,19 @@ public sealed class OwnerOptions
     /// <summary>Rows per catch-up batch. The design sizes a batch at ~64 KB or more (6.4); the sample lowers it to show ranges.</summary>
     public int CatchupBatchRows { get; set; } = 500;
 
-    /// <summary>Rows per online batch.</summary>
-    public int OnlineBatchRows { get; set; } = 2000;
+    /// <summary>Rows per online batch. A step cut at this size goes on at once, without waiting for a poll or <see cref="OnlineInterval"/>.</summary>
+    public int OnlineBatchRows { get; set; } = 500;
 
-    /// <summary>Online batches are sent at most this often, gathering what appeared meanwhile (6.4, "gluing small batches").</summary>
+    /// <summary>
+    /// An online stream that is still more than this many versions behind the head after a step falls back to catch-up:
+    /// open tables first, newest first, with <c>remaining</c> reported.
+    /// </summary>
+    public long OnlineLagVersions { get; set; } = 1200;
+
+    /// <summary>
+    /// Online batches are sent at most this often, gathering what appeared meanwhile (6.4, "gluing small batches").
+    /// A step cut at <see cref="OnlineBatchRows"/> is followed by the next one at once: a full batch needs no gluing.
+    /// </summary>
     public TimeSpan OnlineInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>How often <c>PRAGMA data_version</c> is polled for new commits (6.4, "online").</summary>
@@ -22,7 +31,10 @@ public sealed class OwnerOptions
     /// <summary>A client seen within this window holds back <c>SyncBase</c> (5.2).</summary>
     public TimeSpan ActivityWindow { get; set; } = TimeSpan.FromHours(24);
 
-    /// <summary>Tombstones and silent clients are forgotten after this (10.2).</summary>
+    /// <summary>
+    /// Tombstones and silent clients are forgotten after this (10.2). A client offline for longer finds its cursor below
+    /// <c>purged_version</c> and gets a snapshot, which drops its unsent outbox. Only the time offline counts, not the number of changes.
+    /// </summary>
     public TimeSpan Retention { get; set; } = TimeSpan.FromDays(30);
 
     public TimeSpan PurgeInterval { get; set; } = TimeSpan.FromHours(1);
@@ -33,13 +45,6 @@ public sealed class OwnerOptions
 
     /// <summary>Where VACUUM INTO writes snapshot files. Defaults to a folder next to the database.</summary>
     public string? SnapshotDirectory { get; set; }
-
-    /// <summary>HTTP/2 windows: at least bandwidth × RTT, ~1 MB for 2 Mbit/s and 3 s (6.1).</summary>
-    public int Http2StreamWindowBytes { get; set; } = 1024 * 1024;
-
-    public int Http2ConnectionWindowBytes { get; set; } = 2 * 1024 * 1024;
-
-    public SyncLog Log { get; set; } = SyncLog.Null;
 
     /// <summary>Fault injection for demos and tests. Not used in production paths unless set.</summary>
     public OwnerFaults Faults { get; } = new OwnerFaults();

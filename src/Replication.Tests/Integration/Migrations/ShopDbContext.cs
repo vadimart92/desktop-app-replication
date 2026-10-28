@@ -8,7 +8,7 @@ namespace Replication.Tests.Integration.Migrations;
 
 public abstract class ShopEntity
 {
-    public Guid Id { get; set; } = Guid.CreateVersion7();
+    public Guid Id { get; set; } = Guid.NewGuid();
 }
 
 public sealed class Shelf : ShopEntity

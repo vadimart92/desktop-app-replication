@@ -29,6 +29,7 @@ public static class Wire
         string s => new Value { S = s },
         byte[] bytes => new Value { B = ByteString.CopyFrom(bytes) },
         Guid g => new Value { S = PkText(g) },
+        // Anything else (e.g. DateTime, decimal) goes as an invariant-culture string: no timezone or precision is carried beyond that text.
         _ => new Value { S = Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture) },
     };
 
@@ -41,7 +42,7 @@ public static class Wire
         _ => DBNull.Value,
     };
 
-    /// <summary>The tail of a GUID for logs: v7 GUIDs share their leading (time) digits.</summary>
+    /// <summary>The tail of a GUID for logs</summary>
     public static string Short(string pk) => pk.Length > 8 ? pk[^8..] : pk;
 
     public static string Q(string identifier) => "\"" + identifier.Replace("\"", "\"\"") + "\"";

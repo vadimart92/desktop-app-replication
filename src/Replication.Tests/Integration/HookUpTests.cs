@@ -6,6 +6,7 @@ using Replication.Client;
 using Replication.Model;
 using Replication.Owner;
 using Sample.Domain;
+using Sample.Lab;
 
 namespace Replication.Tests.Integration;
 
@@ -50,7 +51,7 @@ public sealed class HookUpTests
         using SampleDbContext db = SampleDbContext.Open(":memory:");
         SyncModel model = SyncModel.From(db);
 
-        Assert.That(model.Tables.Select(t => t.Name), Is.EqualTo(new[] { "Category", "Item", "Log" }));
+        Assert.That(model.Tables.Select(t => t.Name), Is.EqualTo(new[] { "Category", "Item", "Log", "StockObject" }));
         SyncTable item = model["Item"];
         // Bit i of SyncMask is Columns[i]: the key and the service columns are not data columns.
         Assert.That(item.Columns, Is.EqualTo(new[] { "CategoryId", "CreatedOn", "ModifiedOn", "Name", "Price", "Status" }));
@@ -73,7 +74,18 @@ public sealed class HookUpTests
         string path = Path.Combine(TestDb.NewDir(), "owner.db");
         SyncModel model = CreateDatabase(path);
         var store = new OwnerStore(path, model);
+        try
+        {
+            AssertOwnerInstall(path, model, store);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+        }
+    }
 
+    private static void AssertOwnerInstall(string path, SyncModel model, OwnerStore store)
+    {
         store.Install();
 
         string instance = store.InstanceId;
@@ -83,7 +95,7 @@ public sealed class HookUpTests
             Assert.That(Rows.Triggers(path, t.Name), Is.EqualTo(new[] { $"_sync_{t.Name}_del", $"_sync_{t.Name}_ins", $"_sync_{t.Name}_upd" }));
         Assert.That(Rows.Scalar(path, "PRAGMA journal_mode"), Is.EqualTo("wal"));
         // No client yet: no floor holds the base back (5.2).
-        Assert.That(Rows.Scalar(path, $"SELECT COUNT(*) FROM _sync_floor WHERE floor = {OwnerStore.NoFloor}"), Is.EqualTo(3L));
+        Assert.That(Rows.Scalar(path, $"SELECT COUNT(*) FROM _sync_floor WHERE floor = {OwnerStore.NoFloor}"), Is.EqualTo(4L));
         // The version file outside the database guards against a restored backup (5.3).
         Assert.That(File.ReadAllText(path + ".syncstate"), Is.EqualTo($"{instance} 0"));
 
@@ -91,28 +103,36 @@ public sealed class HookUpTests
         Assert.That(store.InstanceId, Is.EqualTo(instance));
         foreach (SyncTable t in model.Tables)
             Assert.That(Rows.Triggers(path, t.Name), Has.Count.EqualTo(3));
-        SqliteConnection.ClearAllPools();
     }
 
     [Test]
-    public void Client_install_creates_the_client_tables_and_keeps_its_client_id_across_restarts()
+    public async Task Client_install_creates_the_client_tables_and_keeps_its_client_id_across_restarts()
     {
         string path = Path.Combine(TestDb.NewDir(), "client.db");
         SyncModel model = CreateDatabase(path);
-        var first = new ClientReplication(path, model);
+        ClientReplication? first = null;
+        ClientReplication? second = null;
+        try
+        {
+            first = new ClientReplication(ClientReplication.BuildServices(path, model).InstallClientStore());
 
-        first.Install();
+            Assert.That(first.ClientId, Does.StartWith("cl-"));
+            Assert.That(Tables(path), Is.SupersetOf(new[] { "_sync_local", "_sync_instances", "_sync_cursors", "_sync_ranges", "_sync_outbox" }));
+            // Replica versions mirror the owner's, so the client has no sync triggers (5.4).
+            foreach (SyncTable t in model.Tables)
+                Assert.That(Rows.Triggers(path, t.Name), Is.Empty);
 
-        Assert.That(first.ClientId, Does.StartWith("cl-"));
-        Assert.That(Tables(path), Is.SupersetOf(new[] { "_sync_local", "_sync_instances", "_sync_cursors", "_sync_ranges", "_sync_outbox", "_sync_notes" }));
-        // Replica versions mirror the owner's, so the client has no sync triggers (5.4).
-        foreach (SyncTable t in model.Tables)
-            Assert.That(Rows.Triggers(path, t.Name), Is.Empty);
-
-        var second = new ClientReplication(path, model);
-        second.Install();
-        Assert.That(second.ClientId, Is.EqualTo(first.ClientId));
-        SqliteConnection.ClearAllPools();
+            second = new ClientReplication(ClientReplication.BuildServices(path, model).InstallClientStore());
+            Assert.That(second.ClientId, Is.EqualTo(first.ClientId));
+        }
+        finally
+        {
+            if (second is not null)
+                await second.DisposeAsync();
+            if (first is not null)
+                await first.DisposeAsync();
+            SqliteConnection.ClearAllPools();
+        }
     }
 
     private static SyncModel CreateDatabase(string path)

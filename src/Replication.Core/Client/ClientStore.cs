@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Data.Sqlite;
 using Replication.Model;
 using static Replication.Model.Wire;
@@ -32,11 +33,9 @@ public sealed record OutboxEntry(
     long Id, string Instance, long? Seq, string Table, string? Pk, OutboxKind Kind, OutboxClass Class,
     IReadOnlyList<string> Columns, string? Predicate, long? ExpectedVersion, OutboxSendState Sent);
 
-public sealed record ClientNote(long Id, string Instance, DateTimeOffset At, string Text, bool Info);
-
 /// <summary>
 /// The client database: one file for all instances, rows tagged by <c>InstanceId</c> (5.4), plus cursors,
-/// received ranges, the outbox and notes. The outbox lives next to the data, so an edit and its outbox row commit together.
+/// received ranges and the outbox. The outbox lives next to the data, so an edit and its outbox row commit together.
 /// </summary>
 public sealed class ClientStore
 {
@@ -57,6 +56,14 @@ public sealed class ClientStore
     public string ConnectionString { get; }
     public string ClientId { get; private set; } = "";
 
+    /// <summary>The agent that serves each instance: two agents on one replica would race on its rows, cursors and outbox (4).</summary>
+    private readonly ConcurrentDictionary<string, SyncAgent> _holders = new(StringComparer.Ordinal);
+
+    /// <summary>Gives <paramref name="instance"/> to <paramref name="agent"/>; returns the agent that holds it, <paramref name="agent"/> itself on success.</summary>
+    internal SyncAgent Claim(string instance, SyncAgent agent) => _holders.GetOrAdd(instance, agent);
+
+    internal void Release(string instance, SyncAgent agent) => _holders.TryRemove(new KeyValuePair<string, SyncAgent>(instance, agent));
+
     /// <param name="foreignKeys">The agent applies batches with FK off: children may arrive before parents (7).</param>
     public SqliteConnection Open(bool foreignKeys = true)
     {
@@ -73,14 +80,13 @@ public sealed class ClientStore
         c.Exec("PRAGMA journal_mode = WAL;");
         using SqliteTransaction tx = c.BeginTransaction();
         c.Exec("""
+            -- Key/value settings of this client (e.g. client_id), not "local rows" of the replica (those have InstanceId NULL).
             CREATE TABLE IF NOT EXISTS _sync_local (
               key   TEXT PRIMARY KEY,
               value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS _sync_instances (
-              address          TEXT PRIMARY KEY,   -- ip:port of the owner
-              instance         TEXT,               -- instance_id of the owner, NULL before the first snapshot
-              name             TEXT NOT NULL,
+              instance         TEXT PRIMARY KEY,   -- instance_id of the owner; the row appears when the agent adopts the instance (before any snapshot)
               snapshot_version INTEGER,
               next_seq         INTEGER NOT NULL DEFAULT 1
             );
@@ -112,13 +118,6 @@ public sealed class ClientStore
               UNIQUE (instance, tbl, pk),
               UNIQUE (instance, seq)
             );
-            CREATE TABLE IF NOT EXISTS _sync_notes (
-              id       INTEGER PRIMARY KEY AUTOINCREMENT,
-              instance TEXT    NOT NULL,
-              at       INTEGER NOT NULL,
-              text     TEXT    NOT NULL,
-              info     INTEGER NOT NULL DEFAULT 0
-            );
             """, tx);
         if (c.Scalar<string>("SELECT value FROM _sync_local WHERE key = 'client_id'", tx) is null)
             c.Exec("INSERT INTO _sync_local(key, value) VALUES ('client_id', @id)", tx, ("@id", "cl-" + Guid.NewGuid().ToString("N")[..12]));
@@ -128,14 +127,13 @@ public sealed class ClientStore
 
     // Instances.
 
-    public void EnsureInstance(string address, string name)
-    {
-        using SqliteConnection c = Open();
-        c.Exec("INSERT INTO _sync_instances(address, name) VALUES (@a, @n) ON CONFLICT(address) DO UPDATE SET name = @n", null, ("@a", address), ("@n", name));
-    }
+    public static bool HasInstance(SqliteConnection c, string instance, SqliteTransaction? tx = null) =>
+        c.Scalar<long>("SELECT COUNT(*) FROM _sync_instances WHERE instance = @i", tx, ("@i", instance)) > 0;
 
-    public static string? InstanceOf(SqliteConnection c, string address, SqliteTransaction? tx = null) =>
-        c.Scalar<string>("SELECT instance FROM _sync_instances WHERE address = @a", tx, ("@a", address));
+    /// <summary>The replica of an owner exists from here on; <c>next_seq</c> of an existing row is kept.</summary>
+    public static void SaveInstance(SqliteConnection c, SqliteTransaction tx, string instance, long? snapshotVersion) =>
+        c.Exec("INSERT INTO _sync_instances(instance, snapshot_version) VALUES (@i, @v) ON CONFLICT(instance) DO UPDATE SET snapshot_version = @v",
+            tx, ("@i", instance), ("@v", snapshotVersion));
 
     // Cursors.
 
@@ -218,7 +216,7 @@ public sealed class ClientStore
         if (e.Sent is OutboxSendState.DeleteConfirmed || e.Kind is OutboxKind.Delete)
         {
             // The row is gone locally.
-            return "вже видалено";
+            return "already deleted";
         }
 
         var newCls = (OutboxClass)Math.Min((int)e.Class, (int)cls);
@@ -233,7 +231,7 @@ public sealed class ClientStore
                 if (e.Sent == OutboxSendState.Waiting)
                 {
                     Remove(c, tx, e.Id);
-                    return "створення і видалення схлопнулись: власник нічого не дізнається";
+                    return "create and delete collapsed: the owner learns nothing";
                 }
                 nk = OutboxKind.Delete;
                 break;
@@ -245,14 +243,14 @@ public sealed class ClientStore
                 nk = OutboxKind.Delete;
                 break;
             default:
-                return "без змін";
+                return "no change";
         }
         string what = nc.Count > 0 ? $"{nk} {string.Join(", ", nc)}" : $"{nk}";
         if (e.Sent == OutboxSendState.InFlight)
         {
             Remove(c, tx, e.Id);
             Insert(c, tx, instance, table, pk, nk, newCls, nc);
-            return $"дія #{e.Seq} уже в дорозі: рядок черги замінено новим ({what})";
+            return $"action #{e.Seq} is already on the way: the queue row is replaced by a new one ({what})";
         }
         c.Exec("UPDATE _sync_outbox SET kind = @k, columns = @cols, cls = @c WHERE id = @id", tx,
             ("@k", (int)nk), ("@cols", string.Join(',', nc)), ("@c", (int)newCls), ("@id", e.Id));
@@ -269,19 +267,6 @@ public sealed class ClientStore
                 AND NOT EXISTS (SELECT 1 FROM {Q(t.Name)} x WHERE x.Id = _sync_outbox.pk AND x.InstanceId = @i)
                 """, tx, ("@i", instance), ("@t", t.Name));
         }
-    }
-
-    // Notes.
-
-    public static void Note(SqliteConnection c, SqliteTransaction? tx, string instance, string text, bool info = false) =>
-        c.Exec("INSERT INTO _sync_notes(instance, at, text, info) VALUES (@i, @a, @t, @f)", tx,
-            ("@i", instance), ("@a", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()), ("@t", text), ("@f", info ? 1 : 0));
-
-    public List<ClientNote> Notes(string? instance = null, int limit = 50)
-    {
-        using SqliteConnection c = Open();
-        return c.Query("SELECT id, instance, at, text, info FROM _sync_notes WHERE @i IS NULL OR instance = @i ORDER BY id DESC LIMIT @n", null,
-            r => new ClientNote(r.GetInt64(0), r.GetString(1), DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(2)), r.GetString(3), r.GetInt64(4) != 0), ("@i", instance), ("@n", limit));
     }
 
     // Rows.

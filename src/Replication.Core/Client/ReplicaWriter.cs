@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using Replication.Protocol;
 using static Replication.Model.Wire;
@@ -6,18 +7,18 @@ using static Replication.Model.Wire;
 namespace Replication.Client;
 
 /// <summary>
-/// Applies what the owner sends to the rows of one instance (7). Every statement carries <c>InstanceId = X</c>,
-/// so <c>local</c> rows and archives are never touched. Idempotent and order-independent: an older version never
+/// Applies what the owner sends to the rows of one instance (7). Writes carry <c>InstanceId = X</c>,
+/// so the client's own rows (<c>InstanceId</c> NULL) and archives are never touched (exceptions: the NeedFull probe in <c>ApplyRow</c>
+/// reads by Id only, and <c>InstallSnapshot</c> deletes rows of other instances by Id). Idempotent and order-independent: an older version never
 /// overwrites a newer one, and the outbox protects local edits.
 /// </summary>
-internal sealed class ReplicaWriter(SyncModel model, string instance)
+/// <param name="log">Logger of the agent; lines carry its <paramref name="agent"/> name.</param>
+internal sealed class ReplicaWriter(SyncModel model, string instance, ILogger log, string agent)
 {
     public string Instance { get; } = instance;
 
-    /// <summary>Partial rows that arrived for a row the replica does not have (7).</summary>
+    /// <summary>Rows to request in full: partial rows that arrived for a row the replica does not have (7), reverted local edits (<see cref="Revert"/>) and archive leftovers.</summary>
     public List<RowRef> NeedFull { get; } = [];
-
-    public List<string> Notes { get; } = [];
 
     public HashSet<string> TouchedTables { get; } = [];
 
@@ -96,6 +97,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             if (n == 0 && c.Scalar<string>($"SELECT InstanceId FROM {table} WHERE Id = @id", tx, ("@id", pk)) is null)
             {
                 // The owner believed we have the row: ask for it in full, never invent it.
+                // Also taken when a row with this Id exists with InstanceId NULL (own row): the probe is null in both cases.
                 NeedFull.Add(Ref(t.Name, pk));
             }
 
@@ -113,7 +115,7 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         {
             // A parent that archived rows point to goes to the archive instead (11.6).
             if (ArchiveGuard.DeleteOrArchive(c, tx, model, Instance, t, pk))
-                Note(c, tx, $"{label} видалено на інстансі; на нього посилаються архівні записи, тому він перенесений в архів", info: true);
+                log.LogInformation("[{Agent}] {Label} was deleted on the instance; archived rows point to it, so it was moved to the archive", agent, label);
             n = 1;
         }
         if (e is { Kind: OutboxKind.Patch or OutboxKind.Create })
@@ -122,7 +124,10 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
             var gone = new List<string>();
             // Creates that depend on it (8.4); the row itself is not its own child.
             RemoveChildren(c, tx, t, pk, gone, [(t.Name, pk)]);
-            Note(c, tx, $"правку запису {label} втрачено: його видалено на інстансі{(gone.Count > 0 ? $"; не збережено залежні: {string.Join(", ", gone)}" : "")}");
+            if (gone.Count > 0)
+                log.LogWarning("[{Agent}] the edit of {Label} is lost: it was deleted on the instance; dependent rows not saved: {Gone}", agent, label, string.Join(", ", gone));
+            else
+                log.LogWarning("[{Agent}] the edit of {Label} is lost: it was deleted on the instance", agent, label);
         }
         return n;
     }
@@ -175,12 +180,6 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
         }
     }
 
-    public void Note(SqliteConnection c, SqliteTransaction tx, string text, bool info = false)
-    {
-        ClientStore.Note(c, tx, Instance, text, info);
-        Notes.Add(text);
-    }
-
     /// <summary>
     /// Drops a local edit the owner rejected while keeping its own row: the row loses its version and asks for the
     /// owner's full row, which then overwrites it (7, 9).
@@ -197,97 +196,90 @@ internal sealed class ReplicaWriter(SyncModel model, string instance)
 
     /// <summary>
     /// Merges a downloaded snapshot into the single client database (6.3, 10.3): rows of the instance are replaced in one
-    /// transaction and the outbox carries over with the values saved before the delete. A patch or delete for a row that
-    /// is not in the snapshot is dropped with a note (9.1).
+    /// transaction. The snapshot is the owner's whole database, so the outbox of the instance is dropped with the old rows:
+    /// pending actions were made against a state the snapshot replaces. The cursors of every table become the snapshot's
+    /// version V without ranges: the owner registered this client at V when it made the snapshot, so catch-up goes on from there.
+    /// The <c>_sync_instances</c> row of the instance stays, as next_seq must keep growing past the owner's applied_seq.
+    /// Another instance whose rows have the same Ids is an older life of this owner (restored from a backup, 5.3): its whole
+    /// replica goes as well (rows, cursors, ranges, outbox and its <c>_sync_instances</c> row). Archives stay.
+    /// Only agents that have connected hold a claim, so the replica of a live owner whose agent has not connected yet is not protected;
+    /// two live owners with shared Ids are not supported.
     /// </summary>
-    public static (string Instance, int Carried, List<string> Notes) InstallSnapshot(ClientStore store, string address, string path)
+    /// <param name="agent">The installing agent: it holds the claim on an old instance while its replica is dropped.</param>
+    /// <exception cref="IOException">The snapshot is of another instance than <paramref name="expected"/>; nothing is changed.</exception>
+    /// <exception cref="InstanceHeldException">The snapshot shares Ids with an instance another agent serves; nothing is changed.</exception>
+    public static SnapshotInstall InstallSnapshot(ClientStore store, string path, string expected, SyncAgent agent)
     {
         using SqliteConnection c = store.Open(foreignKeys: false);
         c.Exec("ATTACH DATABASE @p AS snap", null, ("@p", path));
+        var claimed = new List<string>();
         try
         {
             using SqliteTransaction tx = c.BeginTransaction();
             string newInst = c.Scalar<string>("SELECT instance_id FROM snap._sync_meta", tx)!;
+            if (newInst != expected)
+                throw new IOException($"the snapshot is of instance {newInst}, the agent serves {expected}");
             long v = c.Scalar<long>("SELECT version FROM snap._sync_meta", tx);
-            string oldInst = ClientStore.InstanceOf(c, address, tx) ?? newInst;
-            var w = new ReplicaWriter(store.Model, newInst);
-            List<OutboxEntry> entries = ClientStore.Entries(c, tx, oldInst, pendingOnly: true);
-            c.Exec("DELETE FROM _sync_outbox WHERE instance = @i AND sent = 2", tx, ("@i", oldInst));
+            // Its _sync_instances row stays: next_seq must keep growing, the owner remembers applied_seq of this client.
+            int dropped = DropReplica(c, tx, store.Model, newInst);
+
+            var replaced = new List<(string Instance, int Dropped)>();
+            foreach (string old in store.Model.Tables.SelectMany(t => c.Query(
+                    $"SELECT DISTINCT InstanceId FROM main.{Q(t.Name)} WHERE InstanceId IS NOT NULL AND InstanceId <> @new AND InstanceId NOT LIKE '%:archive' AND Id IN (SELECT Id FROM snap.{Q(t.Name)})",
+                    tx, r => r.GetString(0), [("@new", newInst)])).Distinct().ToList())
+            {
+                // The claim keeps agents off the old instance until the transaction ends.
+                if (store.Claim(old, agent) is var holder && holder != agent)
+                    throw new InstanceHeldException(old, holder);
+                claimed.Add(old);
+                replaced.Add((old, DropReplica(c, tx, store.Model, old)));
+                c.Exec("DELETE FROM _sync_instances WHERE instance = @old", tx, ("@old", old));
+            }
 
             foreach (SyncTable t in store.Model.Tables)
             {
                 string table = Q(t.Name);
                 string cols = string.Concat(t.Columns.Select(x => ", " + Q(x)));
-                c.Exec($"DROP TABLE IF EXISTS temp.\"_keep_{t.Name}\"", tx);
-                c.Exec($"""
-                    CREATE TEMP TABLE "_keep_{t.Name}" AS SELECT * FROM main.{table}
-                    WHERE InstanceId = @old AND Id IN (SELECT pk FROM _sync_outbox WHERE instance = @old AND tbl = @t AND kind IN (1, 2))
-                    """, tx, ("@old", oldInst), ("@t", t.Name));
-                c.Exec($"DELETE FROM main.{table} WHERE InstanceId IN (@old, @new)", tx, ("@old", oldInst), ("@new", newInst));
                 // INSERT OR IGNORE: an archived row with the same Id keeps its place in the archive.
+                // Likewise a snapshot row whose Id collides with an own row (InstanceId NULL) is dropped: Id is the only key and own data wins.
                 c.Exec($"INSERT OR IGNORE INTO main.{table} (Id, InstanceId, SyncVersion{cols}) SELECT Id, @new, SyncVersion{cols} FROM snap.{table}", tx, ("@new", newInst));
             }
 
-            int carried = 0;
-            foreach (OutboxEntry e in entries)
-            {
-                if (!store.Model.TryGet(e.Table, out SyncTable? t))
-                    continue;
-                string table = Q(t.Name);
-                string keep = $"temp.\"_keep_{t.Name}\"";
-                switch (e.Kind)
-                {
-                    case OutboxKind.Create:
-                        string cols = string.Concat(t.Columns.Select(x => ", " + Q(x)));
-                        c.Exec($"INSERT OR REPLACE INTO main.{table} (Id, InstanceId, SyncVersion{cols}) SELECT Id, @new, 0{cols} FROM {keep} WHERE Id = @id", tx, ("@new", newInst), ("@id", e.Pk));
-                        carried++;
-                        break;
-                    case OutboxKind.Patch:
-                        if (c.Scalar<long>($"SELECT COUNT(*) FROM main.{table} WHERE Id = @id AND InstanceId = @new", tx, ("@id", e.Pk), ("@new", newInst)) == 0)
-                        {
-                            ClientStore.Remove(c, tx, e.Id);
-                            w.Note(c, tx, $"правку запису {Short(e.Pk!)} втрачено: його видалено на інстансі");
-                            break;
-                        }
-                        string set = string.Join(", ", e.Columns.Where(t.HasColumn).Select(x => $"{Q(x)} = (SELECT {Q(x)} FROM {keep} k WHERE k.Id = @id)"));
-                        if (set.Length > 0)
-                            c.Exec($"UPDATE main.{table} SET {set} WHERE Id = @id AND InstanceId = @new", tx, ("@id", e.Pk), ("@new", newInst));
-                        carried++;
-                        break;
-                    case OutboxKind.Delete:
-                        if (c.Exec($"DELETE FROM main.{table} WHERE Id = @id AND InstanceId = @new", tx, ("@id", e.Pk), ("@new", newInst)) == 0)
-                        {
-                            // Nothing to delete on the owner either.
-                            ClientStore.Remove(c, tx, e.Id);
-                        }
-
-                        carried++;
-                        break;
-                    case OutboxKind.PredicateDelete when Predicate.Parse(e.Predicate) is { } p:
-                        (string where, (string, object?)[] args) = p.ToSql(t);
-                        c.Exec($"DELETE FROM main.{table} WHERE InstanceId = @new AND SyncVersion <= @V AND {where}", tx, [("@new", newInst), ("@V", e.ExpectedVersion), .. args]);
-                        carried++;
-                        break;
-                }
-            }
-            foreach (SyncTable t in store.Model.Tables)
-                c.Exec($"DROP TABLE IF EXISTS temp.\"_keep_{t.Name}\"", tx);
-
-            if (oldInst != newInst)
-            {
-                c.Exec("UPDATE _sync_outbox SET instance = @new WHERE instance = @old", tx, ("@new", newInst), ("@old", oldInst));
-                c.Exec("DELETE FROM _sync_cursors WHERE instance = @old; DELETE FROM _sync_ranges WHERE instance = @old;", tx, ("@old", oldInst));
-            }
-            c.Exec("DELETE FROM _sync_ranges WHERE instance = @new", tx, ("@new", newInst));
             foreach (SyncTable t in store.Model.Tables)
                 ClientStore.SaveCursor(c, tx, newInst, t.Name, new CursorState(v));
-            c.Exec("UPDATE _sync_instances SET instance = @new, snapshot_version = @v WHERE address = @a", tx, ("@new", newInst), ("@v", v), ("@a", address));
+            ClientStore.SaveInstance(c, tx, newInst, v);
             tx.Commit();
-            return (newInst, carried, w.Notes);
+            return new SnapshotInstall(dropped, replaced);
         }
         finally
         {
+            foreach (string old in claimed)
+                store.Release(old, agent);
             c.Exec("DETACH DATABASE snap");
         }
     }
+
+    /// <summary>
+    /// Deletes the replica of <paramref name="instance"/>: rows, cursors, ranges and outbox; its archive and its
+    /// <c>_sync_instances</c> row stay. Returns the number of outbox actions not sent.
+    /// </summary>
+    internal static int DropReplica(SqliteConnection c, SqliteTransaction tx, SyncModel model, string instance)
+    {
+        int dropped = (int)c.Scalar<long>("SELECT COUNT(*) FROM _sync_outbox WHERE instance = @i AND sent < 2", tx, ("@i", instance));
+        c.Exec("DELETE FROM _sync_outbox WHERE instance = @i; DELETE FROM _sync_cursors WHERE instance = @i; DELETE FROM _sync_ranges WHERE instance = @i;", tx, ("@i", instance));
+        foreach (SyncTable t in model.Tables)
+            c.Exec($"DELETE FROM main.{Q(t.Name)} WHERE InstanceId = @i", tx, ("@i", instance));
+        return dropped;
+    }
+}
+
+/// <summary>What a snapshot install dropped: the outbox actions of its instance, and the old instances replaced with their outbox actions.</summary>
+internal sealed record SnapshotInstall(int Dropped, IReadOnlyList<(string Instance, int Dropped)> Replaced);
+
+/// <summary>A snapshot shares Ids with <see cref="Instance"/>, which <see cref="Holder"/> serves: two live owners with shared Ids.</summary>
+internal sealed class InstanceHeldException(string instance, SyncAgent holder)
+    : Exception($"the snapshot shares Ids with instance {instance}, which agent «{holder.Name}» serves")
+{
+    public string Instance { get; } = instance;
+    public SyncAgent Holder { get; } = holder;
 }

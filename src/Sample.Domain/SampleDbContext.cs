@@ -11,6 +11,7 @@ public sealed class SampleDbContext(DbContextOptions<SampleDbContext> options) :
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Item> Items => Set<Item>();
     public DbSet<LogEntry> Log => Set<LogEntry>();
+    public DbSet<StockObject> StockObjects => Set<StockObject>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -26,6 +27,11 @@ public sealed class SampleDbContext(DbContextOptions<SampleDbContext> options) :
             e.HasOne(x => x.Category).WithMany(x => x.Items).HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.Cascade);
         });
         b.Entity<LogEntry>(e => e.ToTable("Log"));
+        b.Entity<StockObject>(e =>
+        {
+            e.ToTable("StockObject");
+            e.Property(x => x.Name).IsRequired();
+        });
 
         // The only line the replication needs in the model: every BaseEntity is replicated.
         b.UseReplication(t => typeof(BaseEntity).IsAssignableFrom(t));
@@ -33,12 +39,15 @@ public sealed class SampleDbContext(DbContextOptions<SampleDbContext> options) :
 
     public static SampleDbContext Open(string path, params IInterceptor[] interceptors)
     {
-        DbContextOptions<SampleDbContext> options = new DbContextOptionsBuilder<SampleDbContext>()
-            .UseSqlite($"Data Source={path};Pooling=True;Default Timeout=30")
-            .AddInterceptors([new StampInterceptor(), .. interceptors])
-            .Options;
-        return new SampleDbContext(options);
+        var options = new DbContextOptionsBuilder<SampleDbContext>();
+        Configure(options, path, interceptors);
+        return new SampleDbContext(options.Options);
     }
+
+    internal static void Configure(DbContextOptionsBuilder options, string path, params IInterceptor[] interceptors) =>
+        options
+            .UseSqlite($"Data Source={path};Pooling=True;Default Timeout=30")
+            .AddInterceptors([new StampInterceptor(), .. interceptors]);
 }
 
 /// <summary>Sets CreatedOn / ModifiedOn, as an application usually does.</summary>

@@ -6,7 +6,7 @@ namespace Replication.Tests.Integration;
 
 /// <summary>
 /// Conflicts (9): in one column the change that reached the owner last wins, other columns keep the owner's values,
-/// and a delete wins over everything. The user learns what was dropped from the client's notes.
+/// and a delete wins over everything. The user learns what was dropped from the client's log.
 /// </summary>
 [TestFixture]
 public sealed class ConflictTests : LabTests
@@ -50,7 +50,7 @@ public sealed class ConflictTests : LabTests
         Assert.That(lab.OwnerHas("Item", markers), Is.False, "the edit does not bring the row back (9.1)");
         Assert.That(lab.C1.ReplicaHas("Item", markers), Is.False);
         Assert.That(lab.C1.Outbox(), Is.Empty);
-        Assert.That(lab.C1.Replication.Store.Notes().Select(n => n.Text), Has.Some.Contains("«Маркери»"));
+        Assert.That(lab.Notes.Of(lab.C1.Label), Has.Some.Contains("«Маркери»"));
         foreach (ClientNode c in lab.Clients)
             Assert.That(lab.Diff(c), Is.Empty, c.Label);
     }
@@ -88,7 +88,7 @@ public sealed class ConflictTests : LabTests
 
         Assert.That(lab.OwnerHas("Item", scanner), Is.False);
         Assert.That(lab.C1.ReplicaHas("Item", scanner), Is.False);
-        Assert.That(lab.C1.Replication.Store.Notes().Select(n => n.Text), Has.Some.Contains("«Сканер»"));
+        Assert.That(lab.Notes.Of(lab.C1.Label), Has.Some.Contains("«Сканер»"));
         // The chain with a live parent goes through in the same batch (8.4).
         Assert.That(lab.OwnerHas("Category", news) && lab.OwnerHas("Item", drone), Is.True);
         Assert.That(lab.C1.Outbox(), Is.Empty);
@@ -96,8 +96,9 @@ public sealed class ConflictTests : LabTests
             Assert.That(lab.Diff(c), Is.Empty, c.Label);
     }
 
+    // Sequential on purpose: nothing here races, so no conflict rule applies; the concurrent cases are the tests above.
     [Test]
-    public async Task Two_clients_editing_the_same_row_in_turn_end_with_the_owners_state()
+    public async Task Edits_to_different_columns_of_one_row_by_two_clients_in_turn_all_reach_the_owner_without_conflict()
     {
         Lab lab = await StartSyncedAsync();
         Guid pallet = lab.ItemId("Палета");

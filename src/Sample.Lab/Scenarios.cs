@@ -1,6 +1,6 @@
+using Microsoft.Extensions.Logging;
 using Replication;
 using Replication.Client;
-using Replication.Net;
 
 namespace Sample.Lab;
 
@@ -113,7 +113,7 @@ public static class Scenarios
                 Gone(l, "Маркери");
                 Gone(l, "Маркери (12 шт)");
                 Gone(l, "Скотч");
-                Check(HasNote(l.C1, "втрачено"), "Клієнт 1 не отримав повідомлення про втрачену правку");
+                Check(HasNote(l, l.C1, "is lost"), "Клієнт 1 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask;
             }),
 
@@ -143,7 +143,7 @@ public static class Scenarios
                 Check(Inspect.OwnerHas(l.Owner, "Дрон"), "«Дрон» не доїхав до власника");
                 Gone(l, "Сканер");
                 Gone(l, "Факс");
-                Check(HasNote(l.C1, "не збережено"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
+                Check(HasNote(l, l.C1, "not saved"), "Клієнт 1 не отримав повідомлення про відкинутий «Сканер»");
                 return Task.CompletedTask;
             }),
 
@@ -169,7 +169,7 @@ public static class Scenarios
             async l =>
             {
                 await BothSynced(l);
-                l.C1.Agent.Network.Latency = TimeSpan.FromMilliseconds(1500);
+                l.C1.Network.Latency = TimeSpan.FromMilliseconds(1500);
             },
             [
                 new ScenarioStep("Змінити ціну «Стрейч-плівки», а поки Apply летить, змінити назву", "Затримка Клієнта 1 тут 1,5 с в кожен бік. Рядок черги з sent = 1 видаляється, вставляється новий без seq з колонками Price, Name. Відповідь на першу відправку прибирає тільки seq ≤ applied_up_to_seq, нова правка їде наступною пачкою.",
@@ -265,7 +265,7 @@ public static class Scenarios
             ]),
 
         new Scenario("lag", "Відставання понад 30 днів",
-            "Tombstones чистяться після підтвердження всіма клієнтами або за терміном. Клієнт, що відстав, бере знімок і не губить черги.",
+            "Tombstones чистяться після підтвердження всіма клієнтами або за терміном. Клієнт, що відстав, бере знімок, який замінює його репліку разом з неушкодженою чергою дій: вона відкидається.",
             async l =>
             {
                 l.Owner.Store.Options.SnapshotChunkBytes = 4096;
@@ -287,15 +287,15 @@ public static class Scenarios
                         l.Owner.AdvanceClock(TimeSpan.FromDays(31));
                         await l.Owner.PurgeAsync();
                     }),
-                new ScenarioStep("Увімкнути зв'язок Клієнта 2", "Start: курсор < purged_version, тому власник відповідає SnapshotRequired і закриває потік. Агент спершу відправляє чергу (ціна «Палети»), потім завантажує знімок шматками по 4 КБ. Посеред завантаження користувач перейменовує папір у старій репліці: дія стає в чергу і переноситься в нову репліку разом зі значенням.",
+                new ScenarioStep("Увімкнути зв'язок Клієнта 2", "Start: курсор < purged_version, тому власник відповідає SnapshotRequired і закриває потік. Агент завантажує знімок шматками по 4 КБ, чергу не відправляє. Знімок замінює репліку, а черга дій старої репліки (ціна «Палети» і перейменування паперу посеред завантаження) відкидається.",
                     l =>
                     {
-                        l.C2.Agent.Network.DownBitsPerSecond = 200_000;
+                        l.C2.Network.DownBitsPerSecond = 200_000;
                         l.C2.Link = true;
                         l.When(() => l.C2.Agent.GetStatus().SnapshotProgress > 0.2, async () =>
                         {
                             await l.C2.RenameAsync("Папір A4", "Папір A4 (500 арк.)");
-                            l.C2.Agent.Network.DownBitsPerSecond = 0;
+                            l.C2.Network.DownBitsPerSecond = 0;
                         });
                         return Task.CompletedTask;
                     }),
@@ -304,8 +304,8 @@ public static class Scenarios
             {
                 Gone(l, "Скотч");
                 Gone(l, "Маркери");
-                Check(Inspect.OwnerItem(l.Owner, "Палета") is { Price: 999 }, "ціна «Палети» з черги Клієнта 2 не доїхала");
-                Check(Inspect.OwnerHas(l.Owner, "Папір A4 (500 арк.)"), "перейменування з часу завантаження знімка загубилось");
+                Check(Inspect.OwnerItem(l.Owner, "Палета") is not { Price: 999 }, "ціна «Палети» з черги Клієнта 2 не мала доїхати: знімок відкидає чергу");
+                Check(!Inspect.OwnerHas(l.Owner, "Папір A4 (500 арк.)"), "перейменування з часу завантаження знімка не мало доїхати");
                 return Task.CompletedTask;
             }),
 
@@ -336,7 +336,7 @@ public static class Scenarios
                 Gone(l, "Каталог 2019");
                 Check(Inspect.OwnerHas(l.Owner, "Архівна шафа") && Inspect.ClientHas(l.C1, "Архівна шафа"), "«Архівна шафа» мала лишитись і приїхати до Клієнта 1");
                 Check(Inspect.OwnerItem(l.Owner, "Степлер") is { Price: 135 }, "правка ціни «Степлера» не доїхала");
-                Check(HasNote(l.C1, "не видалено"), "Клієнт 1 не отримав повідомлення про невидалений запис");
+                Check(HasNote(l, l.C1, "not deleted"), "Клієнт 1 не отримав повідомлення про невидалений запис");
                 return Task.CompletedTask;
             }),
 
@@ -348,10 +348,10 @@ public static class Scenarios
                 await l.SyncNowAsync(l.C1);
             },
             [
-                new ScenarioStep("Увімкнути зв'язок Клієнта 2", "Репліки нема, тому на Start власник відповідає SnapshotRequired з розміром знімка. Файл малий, тому клієнт бере файл, а не порожню репліку. Власник робить VACUUM INTO, реєструє клієнта з acked_version = V і віддає файл шматками по 4 КБ (канал Клієнта 2 тут 100 кбіт/с). Поки файл їде, автоматика змінює «Степлер». На третині файлу зв'язок рветься, а після відновлення завантаження продовжується з того ж зміщення за snapshot_id. Після підміни Subscribe довозить зміну «Степлера», новішу за V.",
+                new ScenarioStep("Увімкнути зв'язок Клієнта 2", "Репліки нема (курсори нульові), тому на Start власник відповідає SnapshotRequired з розміром знімка. Власник робить VACUUM INTO, реєструє клієнта з acked_version = V і віддає файл шматками по 4 КБ (канал Клієнта 2 тут 100 кбіт/с). Поки файл їде, автоматика змінює «Степлер». На третині файлу зв'язок рветься, а після відновлення завантаження продовжується з того ж зміщення за snapshot_id. Після підміни Subscribe довозить зміну «Степлера», новішу за V.",
                     l =>
                     {
-                        l.C2.Agent.Network.DownBitsPerSecond = 100_000;
+                        l.C2.Network.DownBitsPerSecond = 100_000;
                         l.C2.Link = true;
                         l.When(() => l.C2.Agent.GetStatus().SnapshotProgress > 0.15, () => l.Owner.SetPriceAsync("Степлер", 175));
                         l.When(() => l.C2.Agent.GetStatus().SnapshotProgress > 0.35, () =>
@@ -359,7 +359,7 @@ public static class Scenarios
                             l.C2.Link = false;
                             l.Later(TimeSpan.FromSeconds(1.5), () =>
                             {
-                                l.C2.Agent.Network.DownBitsPerSecond = 0;
+                                l.C2.Network.DownBitsPerSecond = 0;
                                 l.C2.Link = true;
                                 return Task.CompletedTask;
                             });
@@ -374,12 +374,37 @@ public static class Scenarios
                 return Task.CompletedTask;
             }),
 
+        new Scenario("skip", "Новий клієнт: без знімка",
+            "Клієнт без репліки просить досинхронізацію замість знімка. Він дізнається instance_id власника з Identity, бере нульові курсори, власник приймає його, і дані йдуть потоком від нових до старих.",
+            async l =>
+            {
+                l.Owner.Store.Options.CatchupBatchRows = 3;
+                await l.SyncNowAsync(l.C1);
+            },
+            [
+                new ScenarioStep("Увімкнути зв'язок Клієнта 2 з SkipSnapshotOnEmptyReplica", "Identity повідомляє instance_id власника, і клієнт реєструє інстанс з нульовими курсорами. Репліки нема, але в Start стоїть skip_snapshot_on_empty_replica, тому власник не рахує розмір знімка і приймає клієнта з нульовими курсорами, і далі йде звичайна досинхронізація пачками по 3 рядки. Знімок не створюється і не завантажується.",
+                    l =>
+                    {
+                        l.C2.Agent.Options.SkipSnapshotOnEmptyReplica = true;
+                        l.C2.Link = true;
+                        return Task.CompletedTask;
+                    }),
+                new ScenarioStep("Змінити «Степлер» на власнику", "Після досинхронізації клієнт онлайн, і зміна приходить тим самим потоком, без нового Start.",
+                    l => l.Owner.SetPriceAsync("Степлер", 175)),
+            ],
+            l =>
+            {
+                Check(l.C2.Agent.InstanceId == l.Owner.Store.InstanceId, "Клієнт 2 не взяв instance_id власника");
+                Check(Inspect.ClientHas(l.C2, "Степлер"), "у Клієнта 2 нема «Степлера»");
+                return Task.CompletedTask;
+            }),
+
         new Scenario("archive", "Перенесення в архів",
             "Користувач забирає частину даних собі й звільняє місце на власнику. Рядки в БД клієнта спершу отримують InstanceId = X:archive, синк їх більше не чіпає, і тільки потім власнику йде умовне видалення.",
             async l =>
             {
                 await BothSynced(l);
-                l.C1.Agent.Network.Latency = TimeSpan.FromMilliseconds(700);
+                l.C1.Network.Latency = TimeSpan.FromMilliseconds(700);
             },
             [
                 new ScenarioStep("Клієнт 1 переносить в архів категорію «Архів» і товар «Каталог 2019»", "Замикання по FK додає дочірні «Старий принтер» і «Факс». Набір отримує InstanceId = X:archive однією транзакцією. У чергу йде одна дія: Id ∈ набір і SyncVersion ≤ V. Поки Apply летить, автоматика змінює ціну «Факсу»; рядок в архіві, тому ця зміна проходить повз. Власник видаляє рядки з SyncVersion ≤ V: «Факс» новіший і лишається, а з ним його батько «Архів». Клієнт повертає обидва з архіву в репліку, «Факс» іде в NeedFull, і клієнт повторює перенесення.",
@@ -517,7 +542,7 @@ public static class Scenarios
             {
                 foreach (string n in new[] { "Палета", "Скотч", "Скотч широкий", "Маркери", "Степлер" })
                     Gone(l, n);
-                Check(HasNote(l.C2, "втрачено"), "Клієнт 2 не отримав повідомлення про втрачену правку");
+                Check(HasNote(l, l.C2, "is lost"), "Клієнт 2 не отримав повідомлення про втрачену правку");
                 return Task.CompletedTask;
             }),
 
@@ -538,10 +563,11 @@ public static class Scenarios
                         l.C1.Link = true;
                         await Lab.WaitAsync(() => l.C1.Agent.GetStatus().State == AgentState.SchemaMismatch, TimeSpan.FromSeconds(15), "нема SchemaMismatch");
                     }),
-                new ScenarioStep("Повернути схему 1", "Обидві сторони знову на одній версії: агент перепідключається, і черга доїжджає.",
+                new ScenarioStep("Повернути схему 1 і увімкнути зв'язок", "На SchemaMismatch агент вимкнув зв'язок. Обидві сторони знову на одній версії: зв'язок увімкнено, і черга доїжджає.",
                     l =>
                     {
                         l.C1.Agent.SetSchemaVersion(1);
+                        l.C1.Link = true;
                         return Task.CompletedTask;
                     }),
             ],
@@ -571,8 +597,7 @@ public static class Scenarios
             Check(!Inspect.ClientHas(c, name), $"«{name}» лишився в репліці {c.Label}");
     }
 
-    private static bool HasNote(ClientNode c, string fragment) =>
-        c.Replication.Store.Notes().Any(n => n.Text.Contains(fragment, StringComparison.Ordinal));
+    private static bool HasNote(Lab l, ClientNode c, string fragment) => l.Notes.Has(c.Label, fragment);
 
     public static Scenario Find(string id) => All.First(s => s.Id == id);
 }
@@ -587,7 +612,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
 
     public async Task SetupAsync()
     {
-        Lab.Say($"сценарій «{Scenario.Title}»: старт", SyncLogLevel.Ok);
+        Lab.Say($"сценарій «{Scenario.Title}»: старт");
         await Scenario.Setup(Lab);
     }
 
@@ -596,7 +621,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
         if (Done)
             return;
         ScenarioStep s = Scenario.Steps[Step++];
-        Lab.Say($"— крок {Step}: {s.Title}", SyncLogLevel.Ok);
+        Lab.Say($"— крок {Step}: {s.Title}");
         await s.Do(Lab);
     }
 
@@ -620,7 +645,7 @@ public sealed class ScenarioRunner(Lab lab, Scenario scenario)
         foreach (ClientNode c in Lab.Clients.Where(c => c.Link && c.Agent.GetStatus().State == AgentState.Online))
             problems.AddRange(Inspect.Diff(Lab.Owner, c).Select(d => $"{c.Label}: {d}"));
         Lab.Say(problems.Count == 0 ? "перевірка: репліки дорівнюють власнику, очікуваний результат є" : "перевірка: " + string.Join("; ", problems),
-            problems.Count == 0 ? SyncLogLevel.Ok : SyncLogLevel.Bad);
+            problems.Count == 0 ? LogLevel.Information : LogLevel.Error);
         return problems;
     }
 }

@@ -8,6 +8,7 @@ using NUnit.Framework;
 using Replication.Client;
 using Replication.Model;
 using Sample.Domain;
+using Sample.Lab;
 
 namespace Replication.Tests;
 
@@ -306,6 +307,63 @@ public sealed class WriteRouterTests
         Assert.That(client.InstanceOf("Item", stapler), Is.Null);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Outbox_write_that_fails_takes_the_edit_with_it_and_a_retry_goes_through(bool async)
+    {
+        await using ClientDb client = ClientDb.Create();
+        (_, Guid itemId) = client.SeedRemote();
+        await using SampleDbContext db = client.Db();
+        (await db.Items.SingleAsync(x => x.Id == itemId, TestContext.CurrentContext.CancellationToken)).Price = 1;
+        client.Sql("CREATE TRIGGER _test_fault BEFORE INSERT ON _sync_outbox BEGIN SELECT RAISE(ABORT, 'injected'); END");
+
+        Exception? thrown = Assert.CatchAsync(() => SaveAsync(db, async));
+
+        Assert.That(thrown?.ToString(), Does.Contain("injected"));
+        Assert.That(client.PriceOf(itemId), Is.EqualTo(100L), "the replica write and the outbox write are one transaction");
+        Assert.That(client.Replication.Store.Entries(), Is.Empty);
+        AssertReleased(client, db);
+
+        client.Sql("DROP TRIGGER _test_fault");
+        db.ChangeTracker.Clear();
+        (await db.Items.SingleAsync(x => x.Id == itemId, TestContext.CurrentContext.CancellationToken)).Price = 2;
+        await SaveAsync(db, async);
+        Assert.That(client.PriceOf(itemId), Is.EqualTo(2L));
+        Assert.That(client.Replication.Store.Entries().Select(e => (e.Table, e.Kind)), Is.EqualTo(new[] { ("Item", OutboxKind.Patch) }));
+    }
+
+    [Test]
+    public async Task Edit_of_one_member_of_a_complex_type_queues_only_that_column()
+    {
+        await using ClientDb client = ClientDb.Create();
+        Guid id = client.Seed(new StockObject { Name = "Стелаж", Settings = new ObjectSettings("верхній", 3) });
+        await using SampleDbContext db = client.Db();
+        StockObject o = await db.StockObjects.SingleAsync(x => x.Id == id, TestContext.CurrentContext.CancellationToken);
+
+        o.Settings = o.Settings with { StockLevel = 9 };
+        await db.SaveChangesAsync(TestContext.CurrentContext.CancellationToken);
+
+        OutboxEntry entry = client.Replication.Store.Entries().Single();
+        Assert.That((entry.Table, entry.Kind), Is.EqualTo(("StockObject", OutboxKind.Patch)));
+        Assert.That(entry.Columns, Does.Contain("Settings_StockLevel"));
+        Assert.That(entry.Columns, Has.None.EqualTo("Settings_Description"));
+        Assert.That(entry.Columns, Has.None.EqualTo("Name"));
+    }
+
+    [Test]
+    public async Task Edit_that_leaves_every_member_of_a_complex_type_as_it_was_queues_nothing()
+    {
+        await using ClientDb client = ClientDb.Create();
+        Guid id = client.Seed(new StockObject { Name = "Стелаж", Settings = new ObjectSettings("верхній", 3) });
+        await using SampleDbContext db = client.Db();
+        StockObject o = await db.StockObjects.SingleAsync(x => x.Id == id, TestContext.CurrentContext.CancellationToken);
+
+        o.Settings = new ObjectSettings("верхній", 3);
+        await db.SaveChangesAsync(TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(client.Replication.Store.Entries(), Is.Empty);
+    }
+
     private static async Task SaveAsync(SampleDbContext db, bool async)
     {
         if (async)
@@ -338,7 +396,7 @@ public sealed class WriteRouterTests
     private static async Task AssertNextSaveQueuesNothingAsync(ClientDb client, SampleDbContext db)
     {
         db.ChangeTracker.Clear();
-        db.Log.Add(new LogEntry { Text = "нотатка" }).SetInstance(SyncColumns.LocalInstance);
+        db.Log.Add(new LogEntry { Text = "нотатка" });
         await db.SaveChangesAsync(TestContext.CurrentContext.CancellationToken);
         Assert.That(client.Replication.Store.Entries(), Is.Empty);
     }
@@ -409,13 +467,12 @@ internal sealed class ClientDb : IAsyncDisposable
             db.Database.EnsureCreated();
             model = SyncModel.From(db);
         }
-        var replication = new ClientReplication(path, model);
-        replication.Install();
+        var replication = new ClientReplication(ClientReplication.BuildServices(path, model).InstallClientStore());
         return new ClientDb(path, replication);
     }
 
     /// <summary>A context with the application's interceptors before the router, as the router asks (8.1).</summary>
-    public SampleDbContext Db(params IInterceptor[] app) => SampleDbContext.Open(DbPath, Replication.Interceptors(app));
+    public SampleDbContext Db(params IInterceptor[] app) => SampleDbContext.Open(DbPath, [.. app, Replication.Router]);
 
     /// <summary>A context with interceptors after the router: they run once the router has begun its write transaction.</summary>
     public SampleDbContext DbRouterFirst(params IInterceptor[] after) => SampleDbContext.Open(DbPath, [Replication.Router, .. after]);
@@ -448,6 +505,12 @@ internal sealed class ClientDb : IAsyncDisposable
     {
         using SqliteConnection c = Replication.Store.Open();
         return TestDb.Scalar(c, $"SELECT InstanceId FROM {Wire.Q(table)} WHERE Id = @id", ("@id", Wire.PkText(id))) as string;
+    }
+
+    public long PriceOf(Guid item)
+    {
+        using SqliteConnection c = Replication.Store.Open();
+        return (long)TestDb.Scalar(c, "SELECT Price FROM Item WHERE Id = @id", ("@id", Wire.PkText(item)))!;
     }
 
     public int Sql(string sql, params (string Name, object Value)[] args)

@@ -12,6 +12,14 @@ public sealed record RowView(
     /// <summary><see cref="Mark"/> of a row in the instance's archive (design 11.1).</summary>
     public const string ArchiveMark = "архів";
 
+    /// <summary>The owner of the replica the row belongs to, for a client with several owners; empty otherwise.</summary>
+    public string Owner { get; init; } = "";
+
+    /// <summary><c>ModifiedOn</c> of the row (UTC), when the table has it.</summary>
+    public DateTime? ModifiedOn { get; init; }
+
+    public string Modified => ModifiedOn is { } m ? DateTime.SpecifyKind(m, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm:ss.fff") : "";
+
     public bool IsArchived => Mark == ArchiveMark;
 }
 
@@ -42,14 +50,15 @@ public static class Inspect
     }
 
     /// <summary>The client's rows of its instance and of the instance's archive, with outbox marks.</summary>
-    public static List<RowView> ClientRows(ClientNode n, string table, int limit = 200)
+    /// <param name="newestFirst">By <c>ModifiedOn</c>, newest first, so that the limit keeps the latest rows.</param>
+    public static List<RowView> ClientRows(ClientNode n, string table, int limit = 200, bool newestFirst = false)
     {
         string? inst = n.Agent.InstanceId;
         if (inst is null)
             return [];
         SyncTable t = n.Replication.Model[table];
         using SqliteConnection c = Open(n.DbPath);
-        List<RowView> rows = ReadRows(c, t, $"x.InstanceId IN ('{inst.Replace("'", "''")}', '{SyncColumns.ArchiveOf(inst).Replace("'", "''")}')", limit, owner: false);
+        List<RowView> rows = ReadRows(c, t, $"x.InstanceId IN ('{inst.Replace("'", "''")}', '{SyncColumns.ArchiveOf(inst).Replace("'", "''")}')", limit, owner: false, newestFirst);
         List<OutboxEntry> entries = ClientStore.Entries(c, null, inst);
         return [.. rows.Select(r =>
         {
@@ -60,17 +69,27 @@ public static class Inspect
         })];
     }
 
-    private static List<RowView> ReadRows(SqliteConnection c, SyncTable t, string where, int limit, bool owner)
+    /// <summary>The client's own rows (<c>InstanceId</c> NULL): no owner, no outbox.</summary>
+    public static List<RowView> LocalRows(LocalData local, string table, int limit = 200, bool newestFirst = false)
+    {
+        SyncTable t = local.Replication.Model[table];
+        using SqliteConnection c = Open(local.Replication.Store.DbPath);
+        return ReadRows(c, t, "x.InstanceId IS NULL", limit, owner: false, newestFirst);
+    }
+
+    private static List<RowView> ReadRows(SqliteConnection c, SyncTable t, string where, int limit, bool owner, bool newestFirst = false)
     {
         bool hasName = t.HasColumn("Name");
         string label = hasName ? "x.Name" : t.HasColumn("Text") ? "x.Text" : "x.Id";
         string price = t.HasColumn("Price") ? "x.Price" : "NULL";
         string status = t.HasColumn("Status") ? "x.Status" : "NULL";
         string cat = t.HasColumn("CategoryId") ? "(SELECT k.Name FROM Category k WHERE k.Id = x.CategoryId)" : "NULL";
-        string order = t.Name == "Log" ? "x.SyncVersion DESC" : "x.Id";
+        bool hasModified = t.HasColumn("ModifiedOn");
+        string modified = hasModified ? "x.ModifiedOn" : "NULL";
+        string order = newestFirst && hasModified ? "x.ModifiedOn DESC, x.SyncVersion DESC" : t.Name == "Log" ? "x.SyncVersion DESC" : "x.Id";
         using SqliteCommand cmd = c.CreateCommand();
         cmd.CommandText = $"""
-            SELECT x.Id, {label}, {price}, {status}, {cat}, x.SyncVersion, x.SyncBase, x.SyncMask, x.SyncOrigin, x.InstanceId
+            SELECT x.Id, {label}, {price}, {status}, {cat}, x.SyncVersion, x.SyncBase, x.SyncMask, x.SyncOrigin, x.InstanceId, {modified}
             FROM "{t.Name}" x WHERE {where} ORDER BY {order} LIMIT {limit}
             """;
         using SqliteDataReader r = cmd.ExecuteReader();
@@ -79,7 +98,10 @@ public static class Inspect
         {
             list.Add(new RowView(t.Name, r.GetString(0), r.IsDBNull(1) ? "" : r.GetString(1), r.IsDBNull(2) ? null : r.GetInt64(2),
                 r.IsDBNull(3) ? null : r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4), r.GetInt64(5), r.GetInt64(6),
-                owner ? MaskText(t, r.GetInt64(7)) : "", r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetString(9), ""));
+                owner ? MaskText(t, r.GetInt64(7)) : "", r.IsDBNull(8) ? null : r.GetString(8), r.IsDBNull(9) ? null : r.GetString(9), "")
+            {
+                ModifiedOn = r.IsDBNull(10) ? null : r.GetDateTime(10),
+            });
         }
 
         return list;

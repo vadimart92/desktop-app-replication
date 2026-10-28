@@ -11,6 +11,8 @@ service Sync {
   rpc Snapshot (SnapshotRequest) returns (stream SnapshotChunk);
   rpc Subscribe (stream SubscribeMessage) returns (stream ChangeMessage);
   rpc Apply (ApplyRequest) returns (ApplyReply);
+  // Who is at this address: the client picks its replica of this owner by the instance_id before it opens Subscribe.
+  rpc Identity (IdentityRequest) returns (IdentityReply);
 }
 
 // A column value with the SQLite storage class kept as is. An unset oneof is NULL.
@@ -37,9 +39,12 @@ message SubscribeMessage {
 message Start {
   string client_id = 1;
   int32 schema_version = 2;
-  string instance_id = 3;           // empty when the client has no replica yet
+  string instance_id = 3;           // the owner's instance from Identity
   repeated TableCursor cursors = 4;
   repeated string open_tables = 5;
+  // All cursors empty (a new replica): catch-up from zero instead of SnapshotRequired. Any other reason for a snapshot
+  // (different instance, cursor behind purged_version or ahead of head) still gets SnapshotRequired.
+  bool skip_snapshot_on_empty_replica = 6;
 }
 
 // Cursor C plus received ranges (lo, hi] above C. Ranges are delta-encoded:
@@ -76,6 +81,7 @@ message ChangeMessage {
     SnapshotRequired snapshot_required = 6;
     SchemaMismatch schema_mismatch = 7;
   }
+  reserved 8;                        // was `Accepted accepted = 8`, removed: never reuse the number
 }
 
 message RangeExtra {
@@ -119,13 +125,13 @@ message Head {
 message Progress {
   int64 remaining = 1;
   bool done = 2;
-  int64 owner_time_unix = 3;
+  int64 owner_time_unix = 3;         // set by the owner; the client does not read it
 }
 
 message SnapshotRequired {
   string reason = 1;
   int64 size_bytes = 2;
-  string instance_id = 3;
+  string instance_id = 3;            // the instance that answers: equal to the client's one = refill it, other = the client adopts that owner on the next round
 }
 
 message SchemaMismatch {
@@ -146,7 +152,7 @@ message SnapshotChunk {
   int64 total_size = 3;
   bytes data = 4;
   int64 version = 5;
-  string instance_id = 6;
+  string instance_id = 6;            // the client does not read it: the instance comes from the snapshot's _sync_meta
   bytes sha256 = 7;                  // hash of the whole file, in every chunk
 }
 
@@ -199,10 +205,16 @@ message ActionResult {
   int64 version = 5;
   repeated RowRef changed = 6;       // not deleted: changed after V
   repeated RowRef children = 7;      // not deleted: has children that stay on the owner
-  int32 deleted = 8;
+  int32 deleted = 8;                 // rows removed by the action; the client does not read it
 }
 
 message ApplyReply {
   int64 applied_up_to_seq = 1;
   repeated ActionResult results = 2;
+}
+
+message IdentityRequest {}
+
+message IdentityReply {
+  string instance_id = 1;
 }

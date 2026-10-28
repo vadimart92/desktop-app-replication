@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Media;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Replication;
+using Microsoft.Extensions.Logging;
 
 namespace Sample.App.ViewModels;
 
@@ -17,18 +17,22 @@ public sealed class LogFeed : ObservableObject
 
     public event Action? Appended;
 
-    public void Attach(SyncLog log) => log.Written += e => Dispatcher.UIThread.Post(() => Add(e));
-
-    private void Add(SyncLogEntry e)
+    /// <summary>A line from <see cref="LogFeedLoggerProvider"/>; <paramref name="owner"/> marks the owner's lines.</summary>
+    public void Add(string source, string text, LogLevel level, bool owner)
     {
-        IBrush brush = e.Level switch
+        DateTimeOffset at = DateTimeOffset.Now;
+        IBrush brush = level switch
         {
-            SyncLogLevel.Ok => Brushes.SeaGreen,
-            SyncLogLevel.Warn => Brushes.DarkOrange,
-            SyncLogLevel.Bad => Brushes.IndianRed,
-            _ => e.Source == "owner" ? Brushes.SteelBlue : e.Source == "сценарій" ? Brushes.MediumPurple : Brushes.Gray,
+            LogLevel.Warning => Brushes.DarkOrange,
+            >= LogLevel.Error => Brushes.IndianRed,
+            _ => owner ? Brushes.SteelBlue : source == LogFeedLoggerProvider.Scenario ? Brushes.MediumPurple : Brushes.Gray,
         };
-        Lines.Add(new LogLine(e.At.ToString("HH:mm:ss.fff"), e.Source, e.Text, brush));
+        Dispatcher.UIThread.Post(() => Add(at, source, text, brush));
+    }
+
+    private void Add(DateTimeOffset at, string source, string text, IBrush brush)
+    {
+        Lines.Add(new LogLine(at.ToString("HH:mm:ss.fff"), source, text, brush));
         while (Lines.Count > Max)
             Lines.RemoveAt(0);
         Appended?.Invoke();

@@ -14,17 +14,22 @@ public static class SyncColumns
     public const string InstanceId = "InstanceId";
     public const string Key = "Id";
 
-    /// <summary><c>InstanceId</c> of the client's own data (5.4).</summary>
-    public const string LocalInstance = "local";
-
     private const string ArchiveSuffix = ":archive";
 
     internal static readonly HashSet<string> s_all = [Version, Base, Mask, Origin, InstanceId];
 
     public static string ArchiveOf(string instanceId) => instanceId + ArchiveSuffix;
 
+    /// <summary>A row of an owner's replica: not the client's own data (<c>InstanceId</c> NULL, 5.4) and not an archive.</summary>
     public static bool IsRemote(string? instanceId) =>
-        !string.IsNullOrEmpty(instanceId) && instanceId != LocalInstance && !instanceId.EndsWith(ArchiveSuffix, StringComparison.Ordinal);
+        !string.IsNullOrEmpty(instanceId) && !instanceId.EndsWith(ArchiveSuffix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a row of <paramref name="child"/> may point to a row of <paramref name="parent"/>: only within one source
+    /// (an instance, or the client's own data with <c>InstanceId</c> NULL), and from an instance's archive to the instance (11.6).
+    /// </summary>
+    public static bool MayReference(string? child, string? parent) =>
+        string.IsNullOrEmpty(child) ? string.IsNullOrEmpty(parent) : child == parent || child == ArchiveOf(parent ?? "");
 }
 
 public sealed record SyncForeignKey(string Column, string ParentTable, bool Cascade);
@@ -127,7 +132,8 @@ public sealed class SyncModel
             if (key.Properties.Count != 1 || key.Properties[0].ClrType != typeof(Guid) || key.Properties[0].GetColumnName(store) != SyncColumns.Key)
                 throw new NotSupportedException($"{tableName}: a replicated table needs a single Guid key column named Id (design 5.1).");
 
-            List<string> columns = et.GetProperties()
+            // Flattened: the members of complex types are columns of this table too (Settings_Description).
+            List<string> columns = et.GetFlattenedProperties()
                 .Where(p => !p.IsPrimaryKey())
                 .Select(p => p.GetColumnName(store)!)
                 .Where(c => !SyncColumns.s_all.Contains(c))

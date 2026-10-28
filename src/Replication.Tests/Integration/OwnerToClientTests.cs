@@ -78,6 +78,6 @@ public sealed class OwnerToClientTests : LabTests
         Assert.That(lab.C2.Agent.MinCursor, Is.EqualTo(lab.Head()));
         Assert.That(lab.C2.Agent.CursorOf("Item").Ranges, Is.Empty, "the received ranges merged into the cursor");
         // A catch-up: the only snapshot is the one of the first connection.
-        Assert.That(OwnerLogAbout(lab.C2).Count(l => l.Contains("SnapshotRequired", StringComparison.Ordinal)), Is.EqualTo(1));
+        Assert.That(ClientLog(lab.C2).Count(l => l.StartsWith("→ Snapshot", StringComparison.Ordinal)), Is.EqualTo(1));
     }
 }

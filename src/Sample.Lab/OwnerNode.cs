@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Replication;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using Replication.Owner;
 using Sample.Domain;
@@ -15,39 +15,40 @@ public sealed class OwnerNode : IAsyncDisposable
 {
     private static readonly string[] s_autoNames = ["Ліхтарик", "Батарейки", "Клей", "Блокнот", "Лампа", "Кабель", "Фарба", "Рукавиці"];
     private static readonly string[] s_statuses = ["новий", "активний", "архів"];
-    private readonly Random _rnd = new(42);
+    private readonly Random _rnd;
+    private readonly OwnerSeed _seed;
+    private readonly ILogger<OwnerNode> _log;
     private int _logN;
 
-    private OwnerNode(string dbPath, OwnerStore store, OwnerHost host, SyncLog log)
+    private OwnerNode(string dbPath, OwnerStore store, OwnerHost host, OwnerSeed seed)
     {
         DbPath = dbPath;
         Store = store;
         Host = host;
-        Log = log;
+        _log = host.Loggers.CreateLogger<OwnerNode>();
+        _seed = seed;
+        _rnd = new Random(seed.RandomSeed);
     }
 
     public string DbPath { get; }
     public OwnerStore Store { get; }
     public OwnerHost Host { get; }
-    public SyncLog Log { get; }
     public string Address => Host.Address;
 
-    public static async Task<OwnerNode> StartAsync(string dbPath, SyncLog log, int port = 0, bool listenAnywhere = false, Action<OwnerOptions>? configure = null)
+    /// <param name="logging">Logging providers of the owner's host; none when null.</param>
+    /// <param name="seed">Initial data of an empty database; <see cref="OwnerSeed.Default"/> when null.</param>
+    public static async Task<OwnerNode> StartAsync(string dbPath, int port = 0, bool listenAnywhere = false, Action<OwnerOptions>? configure = null, OwnerSeed? seed = null, Action<ILoggingBuilder>? logging = null)
     {
         SyncModel model;
+        using (SampleDbContext db = SampleDbContext.Open(dbPath))
+            model = SyncModel.From(db);
+        var options = new OwnerOptions();
+        configure?.Invoke(options);
+        OwnerHost host = await OwnerHost.StartAsync(dbPath, model, options, port, listenAnywhere, logging);
         bool empty;
         await using (SampleDbContext db = SampleDbContext.Open(dbPath))
-        {
-            await db.Database.EnsureCreatedAsync();
-            model = SyncModel.From(db);
             empty = !await db.Categories.AnyAsync();
-        }
-        var options = new OwnerOptions { Log = log };
-        configure?.Invoke(options);
-        var store = new OwnerStore(dbPath, model, options);
-        store.Install();
-        OwnerHost host = await OwnerHost.StartAsync(store, port, listenAnywhere);
-        var node = new OwnerNode(dbPath, store, host, log);
+        var node = new OwnerNode(dbPath, host.Store, host, seed ?? OwnerSeed.Default);
         if (empty)
             await node.SeedAsync();
         return node;
@@ -55,7 +56,7 @@ public sealed class OwnerNode : IAsyncDisposable
 
     public SampleDbContext Db() => SampleDbContext.Open(DbPath);
 
-    private void Say(string text, SyncLogLevel level = SyncLogLevel.Info) => Log.Write("owner", "автоматика: " + text, level);
+    private void Say(string text, LogLevel level = LogLevel.Information) => _log.Log(level, "автоматика: {Text}", text);
 
     private T Pick<T>(IReadOnlyList<T> list) => list[_rnd.Next(list.Count)];
 
@@ -66,22 +67,14 @@ public sealed class OwnerNode : IAsyncDisposable
     private async Task SeedAsync()
     {
         await using SampleDbContext db = Db();
-        Dictionary<string, Category> cats = new[] { "Офіс", "Склад", "Архів" }.ToDictionary(n => n, n => new Category { Name = n });
+        Dictionary<string, Category> cats = _seed.Categories.ToDictionary(n => n, n => new Category { Name = n });
         db.Categories.AddRange(cats.Values);
-        foreach ((string n, long p, string s, string c) in new[]
-                 {
-                     ("Степлер", 120L, "активний", "Офіс"), ("Папір A4", 240L, "активний", "Офіс"), ("Маркери", 85L, "новий", "Офіс"),
-                     ("Палета", 450L, "активний", "Склад"), ("Стрейч-плівка", 310L, "активний", "Склад"), ("Скотч", 40L, "новий", "Склад"),
-                     ("Старий принтер", 900L, "архів", "Архів"), ("Факс", 300L, "архів", "Архів"), ("Каталог 2019", 15L, "архів", "Офіс"),
-                 })
-        {
+        foreach ((string n, long p, string s, string c) in _seed.Items)
             db.Items.Add(new Item { Name = n, Price = p, Status = s, Category = cats[c] });
-        }
-
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < _seed.LogEntries; i++)
             db.Log.Add(NextLogEntry());
         await db.SaveChangesAsync();
-        Say($"початкові дані: 3 категорії, 9 товарів, 3 записи журналу; голова {Head()}");
+        Say($"початкові дані: {_seed.Categories.Count} категорії, {_seed.Items.Count} товарів, {_seed.LogEntries} записи журналу; голова {Head()}");
     }
 
     public long Head()
@@ -136,13 +129,23 @@ public sealed class OwnerNode : IAsyncDisposable
         return it.Id;
     }
 
+    public async Task<Guid> NewStockObjectAsync(string name, string? description, int stockLevel)
+    {
+        await using SampleDbContext db = Db();
+        var o = new StockObject { Name = name, Settings = new ObjectSettings(description, stockLevel) };
+        db.StockObjects.Add(o);
+        await db.SaveChangesAsync();
+        Say($"створено об'єкт «{name}» (Settings: {description}, {stockLevel})");
+        return o.Id;
+    }
+
     /// <summary>ExecuteDelete path: the delete trigger writes the tombstone.</summary>
     public async Task DeleteItemAsync(string name)
     {
         await using SampleDbContext db = Db();
         Item it = await ItemAsync(db, name);
         await db.Items.Where(x => x.Id == it.Id).ExecuteDeleteAsync();
-        Say($"видалено «{name}» (ExecuteDelete), tombstone", SyncLogLevel.Warn);
+        Say($"видалено «{name}» (ExecuteDelete), tombstone", LogLevel.Warning);
     }
 
     /// <summary>The FK cascade in SQLite deletes the items; each gets its tombstone from the trigger.</summary>
@@ -153,7 +156,7 @@ public sealed class OwnerNode : IAsyncDisposable
         int n = await db.Items.CountAsync(x => x.CategoryId == cat.Id);
         db.Categories.Remove(cat);
         await db.SaveChangesAsync();
-        Say($"видалено категорію «{name}» з каскадом ({n} товарів), tombstones: {n + 1}", SyncLogLevel.Warn);
+        Say($"видалено категорію «{name}» з каскадом ({n} товарів), tombstones: {n + 1}", LogLevel.Warning);
     }
 
     public async Task AddLogAsync(int n)
@@ -211,17 +214,37 @@ public sealed class OwnerNode : IAsyncDisposable
     {
         OwnerStore.PurgeResult r = Store.Purge();
         object floor = r.Floor == OwnerStore.NoFloor ? "∞" : r.Floor;
-        Log.Write("owner", r.Tombstones > 0
-            ? $"очищення: видалено {r.Tombstones} tombstones (floor = MIN(acked_version) = {floor}), purged_version = {r.PurgedVersion}"
-            : $"очищення: нічого видаляти, floor = {floor}");
+        if (r.Tombstones > 0)
+            _log.LogInformation("очищення: видалено {Tombstones} tombstones (floor = MIN(acked_version) = {Floor}), purged_version = {PurgedVersion}", r.Tombstones, floor, r.PurgedVersion);
+        else
+            _log.LogInformation("очищення: нічого видаляти, floor = {Floor}", floor);
         return Task.FromResult(r);
     }
 
     public void AdvanceClock(TimeSpan by)
     {
         Store.AdvanceClock(by);
-        Log.Write("owner", $"годинник власника +{by.TotalDays:0.#} дн.");
+        _log.LogInformation("годинник власника +{Days} дн.", by.TotalDays.ToString("0.#"));
     }
 
     public ValueTask DisposeAsync() => Host.DisposeAsync();
+}
+
+/// <summary>What an empty owner database starts with, and the seed of its automation's random choices.</summary>
+public sealed record OwnerSeed(int RandomSeed, IReadOnlyList<string> Categories, IReadOnlyList<(string Name, long Price, string Status, string Category)> Items, int LogEntries)
+{
+    /// <summary>3 categories, 9 items and 3 log entries, as on the demo page.</summary>
+    public static readonly OwnerSeed Default = new(42, ["Офіс", "Склад", "Архів"],
+    [
+        ("Степлер", 120L, "активний", "Офіс"), ("Папір A4", 240L, "активний", "Офіс"), ("Маркери", 85L, "новий", "Офіс"),
+        ("Палета", 450L, "активний", "Склад"), ("Стрейч-плівка", 310L, "активний", "Склад"), ("Скотч", 40L, "новий", "Склад"),
+        ("Старий принтер", 900L, "архів", "Архів"), ("Факс", 300L, "архів", "Архів"), ("Каталог 2019", 15L, "архів", "Офіс"),
+    ], 3);
+
+    /// <summary>A second owner with its own data: 2 categories, 5 items and 6 log entries, none of the names shared with <see cref="Default"/>.</summary>
+    public static readonly OwnerSeed Second = new(7, ["Кухня", "Гараж"],
+    [
+        ("Чайник", 650L, "активний", "Кухня"), ("Тарілки", 180L, "новий", "Кухня"), ("Ключі", 320L, "активний", "Гараж"),
+        ("Мастило", 95L, "новий", "Гараж"), ("Шини", 2400L, "архів", "Гараж"),
+    ], 6);
 }

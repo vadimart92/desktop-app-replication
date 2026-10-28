@@ -3,8 +3,10 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 using Replication.Model;
 using static Replication.Model.Wire;
 
@@ -12,12 +14,14 @@ namespace Replication.Client;
 
 /// <summary>
 /// EF interceptor for the client's DbContext (8.1): an edit of a row with <c>InstanceId = X</c> is written to
-/// the replica and, in the same transaction, to the outbox of X. Rows of <c>local</c> and archives are not touched.
+/// the replica and, in the same transaction, to the outbox of X. The client's own rows (<c>InstanceId</c> NULL) and archives are not touched.
 /// </summary>
 /// <remarks>
-/// Register it after every other SaveChanges interceptor (<see cref="ClientReplication.Interceptors"/>). EF tells no
+/// Register it after every other SaveChanges interceptor (after the application's own). EF tells no
 /// interceptor when one throws in SavingChanges, so an interceptor after the router that rejects the save would leave
 /// the router's write transaction, and with it the write lock on the client database, open until the next save on that context.
+/// Each outbox write is logged at Information as <c>[instance] …</c>, through the DbContext's <c>ILoggerFactory</c>: the
+/// application's one with AddDbContext, or the one given to UseLoggerFactory; otherwise the lines go nowhere.
 /// </remarks>
 public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
 {
@@ -31,12 +35,6 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
     private sealed record Pending(
         IReadOnlyList<Change> Changes, IReadOnlyList<ArchiveMove> ArchiveMoves,
         bool OpenedConnection, IDbContextTransaction? OwnTransaction);
-
-    /// <summary>Raised after an outbox change commits, with the instance it belongs to; the agent wakes and sends.</summary>
-    public event Action<string>? OutboxChanged;
-
-    /// <summary>Raised with a description of each outbox write, for the sample's event log.</summary>
-    public event Action<string, string>? Routed;
 
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
@@ -156,6 +154,14 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         HashSet<(string Name, string)> deleted = entries.Where(e => e.State == EntityState.Deleted && model.ForType(e.Metadata.ClrType) is not null)
             .Select(e => (model.ForType(e.Metadata.ClrType)!.Name, PkText((Guid)e.Property(SyncColumns.Key).OriginalValue!)))
             .ToHashSet();
+        // Parents by key: from this save, and from the database once per parent (many rows usually point to a few parents).
+        Dictionary<(SyncTable, Guid), string?> inSave = [];
+        foreach (EntityEntry e in entries)
+        {
+            if (e.State != EntityState.Deleted && model.ForType(e.Metadata.ClrType) is { } t && e.Property(SyncColumns.Key).CurrentValue is Guid k)
+                inSave[(t, k)] = (string?)e.Property(SyncColumns.InstanceId).CurrentValue;
+        }
+        Dictionary<(SyncTable, Guid), (bool, string?)> inDb = [];
         var changes = new List<Change>();
         var moves = new List<ArchiveMove>();
         bool opened = false;
@@ -167,17 +173,20 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
                 if (model.ForType(e.Metadata.ClrType) is not { } t)
                     continue;
                 string? instance = (string?)(e.State == EntityState.Deleted ? e.Property(SyncColumns.InstanceId).OriginalValue : e.Property(SyncColumns.InstanceId).CurrentValue);
+                StoreObjectIdentifier store = StoreObjectIdentifier.Table(t.Name, null);
+                // Local rows too: no source may point into another one (5.4).
+                if (e.State is EntityState.Added or EntityState.Modified)
+                    CheckSources(ctx, inSave, inDb, t, e, instance, store);
                 if (!SyncColumns.IsRemote(instance))
                     continue;
                 string pk = PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!);
-                StoreObjectIdentifier store = StoreObjectIdentifier.Table(t.Name, null);
                 switch (e.State)
                 {
                     case EntityState.Added:
                         changes.Add(new Change(t, instance!, pk, OutboxKind.Create, []));
                         break;
                     case EntityState.Modified:
-                        List<string> cols = e.Properties.Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
+                        List<string> cols = ModifiedProperties(e).Where(p => p.IsModified).Select(p => p.Metadata.GetColumnName(store)!).Where(t.HasColumn).ToList();
                         if (cols.Count > 0)
                             changes.Add(new Change(t, instance!, pk, OutboxKind.Patch, cols));
                         break;
@@ -189,6 +198,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
                         // Archived rows point to it (directly or below): EF must not delete it, the cascade would take the archive (11.6).
                         if (model.ChildrenOf(t.Name).Any())
                         {
+                            // opened / own mark what this router opened or began, so only those are closed, committed or rolled back (Pending, catch).
                             if (ctx.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
                             {
                                 ctx.Database.OpenConnection();
@@ -221,14 +231,87 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
         return changes.Count == 0 ? null : new Pending(changes, moves, opened, own);
     }
 
+    /// <summary>All properties of the entry (not only modified ones; the caller filters by <c>IsModified</c>), including the members of its complex properties at any depth.</summary>
+    private static IEnumerable<PropertyEntry> ModifiedProperties(EntityEntry e)
+    {
+        foreach (PropertyEntry p in e.Properties)
+            yield return p;
+        foreach (ComplexPropertyEntry c in e.ComplexProperties)
+        {
+            foreach (PropertyEntry p in Members(c))
+                yield return p;
+        }
+
+        static IEnumerable<PropertyEntry> Members(ComplexPropertyEntry c)
+        {
+            foreach (PropertyEntry p in c.Properties)
+                yield return p;
+            foreach (ComplexPropertyEntry n in c.ComplexProperties)
+            {
+                foreach (PropertyEntry p in Members(n))
+                    yield return p;
+            }
+        }
+    }
+
     private static string PropertyOf(IEntityType et, string column, StoreObjectIdentifier store) =>
         et.GetProperties().First(p => p.GetColumnName(store) == column).Name;
+
+    /// <summary>
+    /// A row may point only to rows of its own source (5.4): local rows (<c>InstanceId</c> NULL) to local rows, a replica's
+    /// rows to that instance's rows. An owner's delete then never reaches another source's rows, by cascade or by orphaning.
+    /// </summary>
+    private void CheckSources(DbContext ctx, Dictionary<(SyncTable, Guid), string?> inSave, Dictionary<(SyncTable, Guid), (bool, string?)> inDb,
+        SyncTable t, EntityEntry e, string? instance, StoreObjectIdentifier store)
+    {
+        bool moved = e.State == EntityState.Modified && e.Property(SyncColumns.InstanceId).IsModified;
+        foreach (SyncForeignKey fk in t.ForeignKeys)
+        {
+            PropertyEntry p = e.Property(PropertyOf(e.Metadata, fk.Column, store));
+            if (p.CurrentValue is not Guid pid || (e.State == EntityState.Modified && !p.IsModified && !moved) || !model.TryGet(fk.ParentTable, out SyncTable? pt))
+                continue;
+            // A parent the database does not have is left to the FK constraint.
+            if (ParentInstance(ctx, inSave, inDb, pt, pid) is (true, var parent) && !SyncColumns.MayReference(instance, parent))
+            {
+                throw new InvalidOperationException(
+                    $"{t.Name} {PkText((Guid)e.Property(SyncColumns.Key).CurrentValue!)} ({SourceText(instance)}) cannot point to {pt.Name} {PkText(pid)} ({SourceText(parent)}): a row may point only to rows of its own source");
+            }
+        }
+    }
+
+    // Display text for errors only: the client's own data has InstanceId NULL, there is no "local" value in the database.
+    private static string SourceText(string? instance) => string.IsNullOrEmpty(instance) ? "local" : instance;
+
+    /// <summary>The parent's <c>InstanceId</c>: from this save when the parent is in it, otherwise from the database (looked up once per save).</summary>
+    private static (bool Found, string? Instance) ParentInstance(DbContext ctx, Dictionary<(SyncTable, Guid), string?> inSave,
+        Dictionary<(SyncTable, Guid), (bool, string?)> inDb, SyncTable parent, Guid id)
+    {
+        if (inSave.TryGetValue((parent, id), out string? saved))
+            return (true, saved);
+        if (inDb.TryGetValue((parent, id), out (bool, string?) known))
+            return known;
+        ctx.Database.OpenConnection();
+        try
+        {
+            var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
+            using SqliteCommand cmd = ((SqliteConnection)ctx.Database.GetDbConnection()).Cmd($"SELECT InstanceId FROM {Q(parent.Name)} WHERE Id = @id", tx, ("@id", PkText(id)));
+            using SqliteDataReader r = cmd.ExecuteReader();
+            return inDb[(parent, id)] = r.Read() ? (true, r.IsDBNull(0) ? null : r.GetString(0)) : (false, null);
+        }
+        finally
+        {
+            ctx.Database.CloseConnection();
+        }
+    }
 
     private void Flush(DbContext ctx)
     {
         if (!_pending.TryGetValue(ctx, out Pending? p))
             return;
         _pending.Remove(ctx);
+
+        ILogger<WriteRouter> log = ctx.GetService<ILoggerFactory>().CreateLogger<WriteRouter>();
+
         var conn = (SqliteConnection)ctx.Database.GetDbConnection();
         var tx = (SqliteTransaction?)ctx.Database.CurrentTransaction?.GetDbTransaction();
         try
@@ -236,7 +319,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
             foreach (ArchiveMove m in p.ArchiveMoves)
             {
                 if (ArchiveGuard.DeleteOrArchive(conn, tx, model, m.Instance, m.Table, m.Pk))
-                    Routed?.Invoke(m.Instance, $"{m.Table.Name} {Short(m.Pk)}: на нього посилаються архівні записи, тому в репліці він перенесений в архів, а видалення йде власнику");
+                    log.LogInformation("[{Instance}] {Table} {Pk}: archived rows point to it, so the replica moved it to the archive and the delete goes to the owner", m.Instance, m.Table.Name, Short(m.Pk));
             }
 
             foreach (Change ch in p.Changes)
@@ -244,7 +327,7 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
                 if (ch.Kind is { } kind)
                 {
                     string what = ClientStore.Put(conn, tx, ch.Instance, ch.Table.Name, ch.Pk, kind, ch.Columns, OutboxClass.Interactive);
-                    Routed?.Invoke(ch.Instance, $"черга: {ch.Table.Name} {Short(ch.Pk)} → {what}");
+                    log.LogInformation("[{Instance}] queue: {Table} {Pk} → {What}", ch.Instance, ch.Table.Name, Short(ch.Pk), what);
                 }
             }
             if (p.Changes.Any(x => x.Kind is OutboxKind.Delete or null))
@@ -266,7 +349,5 @@ public sealed class WriteRouter(SyncModel model) : SaveChangesInterceptor
             if (p.OpenedConnection)
                 ctx.Database.CloseConnection();
         }
-        foreach (string inst in p.Changes.Select(x => x.Instance).Distinct())
-            OutboxChanged?.Invoke(inst);
     }
 }

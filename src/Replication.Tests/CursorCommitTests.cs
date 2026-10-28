@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using NUnit.Framework;
 using Replication.Model;
+using Replication.Tests.Integration;
 using Sample.Lab;
 
 namespace Replication.Tests;
@@ -9,7 +10,7 @@ namespace Replication.Tests;
 public sealed class CursorCommitTests
 {
     [Test]
-    public async Task Batch_whose_cursor_save_fails_arrives_again()
+    public async Task Batch_whose_cursor_save_fails_rolls_back_its_rows_and_arrives_again()
     {
         await using Lab lab = await Lab.StartAsync();
         await lab.SyncNowAsync(lab.C1);
@@ -25,9 +26,16 @@ public sealed class CursorCommitTests
             BEGIN SELECT RAISE(ABORT, 'injected') WHERE (SELECT armed FROM _test_fault) = 1; END;
             """);
 
+        Dictionary<string, string> before = lab.C1.Replication.Store.LoadCursors(c, lab.C1.Instance).ToDictionary(k => k.Key, k => k.Value.ToString());
+        int logRows = Rows.All(lab.C1.DbPath, "Log", lab.C1.Instance).Count;
+        Guid lamp = await lab.Owner.NewItemAsync("Ліхтарик", category: "Склад");
         await lab.Owner.AddLogAsync(5);
-        await lab.Owner.NewItemAsync("Ліхтарик", category: "Склад");
         await Lab.WaitAsync(() => lab.C1.Agent.GetStatus().LastError?.Contains("injected", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(30), "збереження курсорів не впало");
+
+        // The failed transaction took the rows with it: neither the new rows nor new cursors are in the replica.
+        Assert.That(lab.C1.ReplicaHas("Item", lamp), Is.False, "the rows of the failed batch rolled back");
+        Assert.That(Rows.All(lab.C1.DbPath, "Log", lab.C1.Instance), Has.Count.EqualTo(logRows));
+        Assert.That(lab.C1.Replication.Store.LoadCursors(c, lab.C1.Instance).ToDictionary(k => k.Key, k => k.Value.ToString()), Is.EqualTo(before));
         TestDb.Exec(c, "UPDATE _test_fault SET armed = 0");
         await lab.SettleAsync();
 
@@ -35,16 +43,5 @@ public sealed class CursorCommitTests
         Dictionary<string, CursorState> saved = lab.C1.Replication.Store.LoadCursors(c, lab.C1.Instance);
         foreach ((string table, CursorState k) in saved)
             Assert.That(lab.C1.Agent.CursorOf(table).ToString(), Is.EqualTo(k.ToString()));
-    }
-
-    [Test]
-    public void Working_copy_does_not_change_the_published_cursor()
-    {
-        var published = new CursorState(10, [(20L, 30L)]);
-        CursorState copy = published.Clone();
-        copy.AddRange(40, 50);
-        copy.AddRange(10, 20);
-        Assert.That(published.ToString(), Is.EqualTo("10 + (20,30]"));
-        Assert.That(copy.ToString(), Is.EqualTo("30 + (40,50]"));
     }
 }

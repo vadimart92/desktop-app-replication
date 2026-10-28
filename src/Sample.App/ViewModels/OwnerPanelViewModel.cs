@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Replication.Net;
 using Sample.Lab;
+using Sample.Lab.Net;
 
 namespace Sample.App.ViewModels;
 
@@ -32,7 +32,9 @@ public sealed partial class OwnerPanelViewModel(OwnerNode owner) : ObservableObj
     public ObservableCollection<TombstoneView> Tombstones { get; } = [];
     public ObservableCollection<ClientView> Clients { get; } = [];
 
-    public string Title => $"Власник · {Owner.Address}";
+    public string Name { get; init; } = "Власник";
+
+    public string Title => $"{Name} · {Owner.Address}";
 
     /// <summary>Byte counters of the clients connected in this process (the lab); empty for a standalone owner.</summary>
     public IReadOnlyList<WireMeter> Meters { get; init; } = [];

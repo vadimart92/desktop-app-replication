@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using NUnit.Framework;
 using Sample.Lab;
 
@@ -12,10 +11,8 @@ public sealed class ScenarioTests
     [TestCaseSource(nameof(Ids))]
     public async Task Scenario_converges(string id)
     {
-        var log = new SyncLog();
-        var lines = new ConcurrentQueue<string>();
-        log.Written += e => lines.Enqueue($"{e.At:HH:mm:ss.fff} [{e.Source}] {e.Text}");
-        await using Lab lab = await Lab.StartAsync(log: log);
+        using var log = new TestLog();
+        await using Lab lab = await Lab.StartAsync(logging: log.AddTo);
         var run = new ScenarioRunner(lab, Scenarios.Find(id));
         List<string> problems;
         try
@@ -31,8 +28,7 @@ public sealed class ScenarioTests
         }
         finally
         {
-            foreach (string l in lines)
-                TestContext.Out.WriteLine(l);
+            log.WriteTo(TestContext.Out);
         }
         Assert.That(problems, Is.Empty);
     }

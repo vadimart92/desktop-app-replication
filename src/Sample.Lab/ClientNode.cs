@@ -1,45 +1,69 @@
 using Microsoft.EntityFrameworkCore;
-using Replication;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Replication.Client;
 using Replication.Model;
 using Sample.Domain;
+using Sample.Lab.Net;
 
 namespace Sample.Lab;
 
 /// <summary>
-/// A client: one database for every instance, the user's edits go through an ordinary DbContext with the
-/// WriteRouter interceptor; the agent syncs in the background (design 4, 8.1).
+/// A client's replica of one owner: one database for every instance, the user's edits go through an ordinary DbContext
+/// with the WriteRouter interceptor; the owner's agent syncs in the background (design 4, 8.1).
 /// </summary>
-public sealed class ClientNode : IAsyncDisposable
+/// <remarks>The <see cref="ClientReplication"/> owns the agents: dispose it, not the nodes.</remarks>
+public sealed class ClientNode
 {
-    private ClientNode(string label, string dbPath, ClientReplication replication, SyncAgent agent, SyncLog log)
+    private readonly ILogger<ClientNode> _log;
+
+    private ClientNode(string label, string ownerName, string dbPath, ClientReplication replication, SyncAgent agent, WireMeter meter, NetworkProfile network)
     {
         Label = label;
+        OwnerName = ownerName;
         DbPath = dbPath;
         Replication = replication;
         Agent = agent;
-        Log = log;
+        Meter = meter;
+        Network = network;
+        _log = replication.Loggers.CreateLogger<ClientNode>();
     }
 
     public string Label { get; }
+
+    /// <summary>The owner's name, as the client knows it.</summary>
+    public string OwnerName { get; }
+
     public string DbPath { get; }
     public ClientReplication Replication { get; }
     public SyncAgent Agent { get; }
-    public SyncLog Log { get; }
 
-    public static ClientNode Create(string label, string dbPath, string ownerAddress, SyncLog log, AgentOptions? options = null)
+    /// <summary>Bytes on the agent's TCP connection.</summary>
+    public WireMeter Meter { get; }
+
+    /// <summary>The emulated link of the agent; change it at any time, it applies to the bytes sent after that.</summary>
+    public NetworkProfile Network { get; }
+
+    /// <summary>The client without owners: the database migrated, the service tables installed. Owners are added by <see cref="Connect"/>.</summary>
+    /// <param name="loggers">Loggers of the client; none when null. The caller disposes them.</param>
+    public static ClientReplication Create(string dbPath, ILoggerFactory? loggers = null)
     {
         SyncModel model;
         using (SampleDbContext db = SampleDbContext.Open(dbPath))
-        {
-            db.Database.EnsureCreated();
             model = SyncModel.From(db);
-        }
-        var replication = new ClientReplication(dbPath, model, log);
-        replication.Install();
-        SyncAgent agent = replication.Connect(ownerAddress, "Власник", options, label);
-        agent.SetOpenTables("Item");
-        return new ClientNode(label, dbPath, replication, agent, log);
+        ServiceProvider services = ClientReplication.BuildServices(dbPath, model, s => s.AddSampleDb(dbPath, sp => [sp.GetRequiredService<WriteRouter>()]), loggers);
+        services.MigrateSampleDb().InstallClientStore();
+        return new ClientReplication(services);
+    }
+
+    /// <summary>Connects the client to one more owner: the same database and WriteRouter, a new agent (4).</summary>
+    public static ClientNode Connect(ClientReplication replication, string label, string ownerAddress, AgentOptions? options = null, string ownerName = "Власник")
+    {
+        var meter = new WireMeter();
+        var network = new NetworkProfile();
+        SyncAgent agent = replication.Connect(ownerAddress, label, options, s => new ShapedStream(s, meter, network));
+        agent.SetOpenTables(["Item"]);
+        return new ClientNode(label, ownerName, replication.Store.DbPath, replication, agent, meter, network);
     }
 
     public bool Link
@@ -50,9 +74,9 @@ public sealed class ClientNode : IAsyncDisposable
 
     public string Instance => Agent.InstanceId ?? throw new InvalidOperationException($"{Label}: репліки ще нема");
 
-    public SampleDbContext Db() => SampleDbContext.Open(DbPath, Replication.Interceptors());
+    public SampleDbContext Db() => Replication.Services.GetRequiredService<IDbContextFactory<SampleDbContext>>().CreateDbContext();
 
-    private void Say(string text) => Log.Write(Label, "користувач: " + text);
+    private void Say(string text) => _log.LogInformation("[{Agent}] користувач: {Text}", Label, text);
 
     private IQueryable<T> Mine<T>(SampleDbContext db) where T : BaseEntity =>
         db.Set<T>().Where(x => EF.Property<string>(x, SyncColumns.InstanceId) == Instance);
@@ -179,6 +203,4 @@ public sealed class ClientNode : IAsyncDisposable
         Say($"переносить в архів: {string.Join(", ", rows.Select(r => $"«{r.Name}»"))}");
         return await Agent.ArchiveAsync(ids);
     }
-
-    public ValueTask DisposeAsync() => Replication.DisposeAsync();
 }
