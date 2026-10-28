@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using NUnit.Framework;
 using Replication.Client;
@@ -182,6 +184,58 @@ public sealed class RecoveryTests
     }
 
     [Test]
+    public async Task Archive_retries_of_the_old_instance_do_not_reach_the_owner_restored_from_a_backup()
+    {
+        await StartOwnerAsync();
+        StartClient();
+        await SettleAsync();
+        await StopOwnerAsync();
+        string backup = Path.Combine(_dir, "owner.backup.db");
+        File.Copy(OwnerPath, backup);
+
+        // The owner's change is held back from the client, so the client archives an older version and the owner keeps the row (11.2, step 6).
+        await StartOwnerAsync();
+        await SettleAsync();
+        _owner!.Store.Options.Faults.DelayStream(_client!.Replication.ClientId, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30));
+        await _owner.SetPriceAsync("Палета", 470);
+        await _client.ArchiveAsync(("Item", "Палета"));
+        await Lab.WaitAsync(() => _client.Agent.HasPendingArchiveWork, TimeSpan.FromSeconds(30), "the owner did not keep the changed row");
+
+        // The restored owner holds the same Ids under a new instance id (5.3): the retry belonged to the old instance.
+        await GoOfflineAsync();
+        await StopOwnerAsync();
+        File.Copy(backup, OwnerPath, overwrite: true);
+        await StartOwnerAsync();
+        _client.Link = true;
+        await SettleAsync();
+
+        Assert.That(_client.Instance, Is.EqualTo(_owner!.Store.InstanceId));
+        Assert.That(_client.Agent.HasPendingArchiveWork, Is.False, "the archive retry of the old instance is forgotten");
+        Assert.That(Inspect.OwnerItem(_owner, "Палета"), Is.Not.Null);
+        Assert.That(Inspect.ClientHas(_client, "Палета"), Is.True);
+        Assert.That(Inspect.Diff(_owner, _client), Is.Empty);
+    }
+
+    [Test]
+    public async Task Back_off_starts_over_once_the_owner_accepts_Start()
+    {
+        await StartOwnerAsync();
+        StartClient();
+        await SettleAsync();
+
+        // Failed rounds double the wait up to ReconnectMax (1 s).
+        await StopOwnerAsync();
+        await Lab.WaitAsync(() => Retries().Contains(1.0), TimeSpan.FromSeconds(30), "the back-off did not reach ReconnectMax");
+        await StartOwnerAsync();
+        await SettleAsync();
+        int before = Retries().Count;
+
+        await StopOwnerAsync();
+        await Lab.WaitAsync(() => Retries().Count > before, TimeSpan.FromSeconds(30), "the client did not lose the link");
+        Assert.That(Retries()[before], Is.EqualTo(0.2), "the first retry after an accepted Start waits ReconnectMin");
+    }
+
+    [Test]
     public async Task Client_behind_the_retention_period_takes_a_snapshot_and_drops_its_outbox()
     {
         await StartOwnerAsync();
@@ -256,6 +310,14 @@ public sealed class RecoveryTests
     {
         return _log.OfAgent("клієнт").Count(l => l.StartsWith("→ Snapshot", StringComparison.Ordinal));
     }
+
+    /// <summary>The waits of the agent's "link lost …, retry in N s" lines, in seconds, oldest first.</summary>
+    private List<double> Retries() =>
+        _log.OfAgent("клієнт")
+            .Select(l => Regex.Match(l, @"link lost .*, retry in ([\d.,]+) s"))
+            .Where(m => m.Success)
+            .Select(m => double.Parse(m.Groups[1].Value.Replace(',', '.'), CultureInfo.InvariantCulture))
+            .ToList();
 
     private long SnapshotVersion() => (long)Rows.Scalar(ClientPath, "SELECT snapshot_version FROM _sync_instances")!;
 }

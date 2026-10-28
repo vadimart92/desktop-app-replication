@@ -209,6 +209,35 @@ public sealed class SubscribeProtocolTests
         Assert.That(received, Has.Count.EqualTo(100), "every row arrives once the stream is online again");
     }
 
+    [Test]
+    public async Task Tail_of_a_commit_cut_at_the_online_batch_arrives_without_another_commit()
+    {
+        await using Lab lab = await Lab.StartAsync(configureOwner: o =>
+        {
+            o.OnlineBatchRows = 10;
+            o.OnlineLagVersions = 20;
+        });
+        // Nothing else may wake the owner: an Ack from a lab client is a commit too, it changes data_version.
+        foreach (ClientNode c in lab.Clients)
+            await lab.GoOfflineAsync(c);
+        using RawSession session = RawSession.Open(lab);
+        await session.SendStartAsync(session.NewStart(skipSnapshot: true));
+        await session.ReadUntilAsync(m => m.BodyCase == ChangeMessage.BodyOneofCase.Progress && m.Progress.Done);
+
+        // One commit of 15 rows: the online step takes 10, the other 5 are under the lag limit, so the stream stays online.
+        InsertLogRows(lab, 15);
+        long head = lab.Owner.Head();
+        var received = new HashSet<string>();
+        ChangeMessage m;
+        while ((m = await session.ReadAsync()).BodyCase != ChangeMessage.BodyOneofCase.Head || m.Head.Version < head)
+        {
+            Assert.That(m.BodyCase, Is.Not.EqualTo(ChangeMessage.BodyOneofCase.Progress), "the tail stays online");
+            if (m.BodyCase == ChangeMessage.BodyOneofCase.Batch)
+                received.UnionWith(m.Batch.Rows.Select(r => Wire.PkText(r.Pk)));
+        }
+        Assert.That(received, Has.Count.EqualTo(15));
+    }
+
     internal static void InsertLogRows(Lab lab, int count)
     {
         IEnumerable<string> values = Enumerable.Range(0, count)

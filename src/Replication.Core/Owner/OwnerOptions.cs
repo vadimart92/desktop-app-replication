@@ -10,7 +10,7 @@ public sealed class OwnerOptions
     /// <summary>Rows per catch-up batch. The design sizes a batch at ~64 KB or more (6.4); the sample lowers it to show ranges.</summary>
     public int CatchupBatchRows { get; set; } = 500;
 
-    /// <summary>Rows per online batch.</summary>
+    /// <summary>Rows per online batch. A step cut at this size goes on at once, without waiting for a poll or <see cref="OnlineInterval"/>.</summary>
     public int OnlineBatchRows { get; set; } = 500;
 
     /// <summary>
@@ -19,7 +19,10 @@ public sealed class OwnerOptions
     /// </summary>
     public long OnlineLagVersions { get; set; } = 1200;
 
-    /// <summary>Online batches are sent at most this often, gathering what appeared meanwhile (6.4, "gluing small batches").</summary>
+    /// <summary>
+    /// Online batches are sent at most this often, gathering what appeared meanwhile (6.4, "gluing small batches").
+    /// A step cut at <see cref="OnlineBatchRows"/> is followed by the next one at once: a full batch needs no gluing.
+    /// </summary>
     public TimeSpan OnlineInterval { get; set; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>How often <c>PRAGMA data_version</c> is polled for new commits (6.4, "online").</summary>

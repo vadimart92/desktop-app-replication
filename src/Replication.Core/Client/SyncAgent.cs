@@ -37,7 +37,10 @@ public sealed class AgentOptions
 
     /// <summary>Pause between Apply rounds when the outbox has nothing more to send right away.</summary>
     public TimeSpan ApplyInterval { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>The first wait after a lost link; it doubles on every failed round up to <see cref="ReconnectMax"/> and starts over once the owner accepts Start.</summary>
     public TimeSpan ReconnectMin { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The longest wait between reconnect attempts.</summary>
     public TimeSpan ReconnectMax { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>An Apply batch is sized by send time, not by count: ~15 s at the measured rate, within 16 KB-1 MB (6.5).</summary>
@@ -98,6 +101,7 @@ public sealed class SyncAgent : IAsyncDisposable
     private double? _snapshotProgress;
     private double _applyRate;
     private readonly Dictionary<string, int> _archiveTries = [];
+    private TimeSpan _backoff;
 
     /// <summary>Unix ms of the last sign of life from the owner: a handshake or a stream message; 0 = never.</summary>
     private long _lastReceivedMs;
@@ -141,7 +145,7 @@ public sealed class SyncAgent : IAsyncDisposable
     /// <summary>Drop the next ApplyReply as if it was lost in the network (the demo's "lost reply").</summary>
     public bool LoseNextApplyReply { get; set; }
 
-    /// <summary>Archive actions waiting for a retry, kept in memory (<c>_archiveRetry</c>), not outbox rows (11.2, step 6).</summary>
+    /// <summary>Archive actions of the current instance waiting for a retry, kept in memory (<c>_archiveRetry</c>), not outbox rows (11.2, step 6).</summary>
     public bool HasPendingArchiveWork => _archiveRetry.Count > 0;
 
     public CursorState CursorOf(string table)
@@ -260,7 +264,7 @@ public sealed class SyncAgent : IAsyncDisposable
 
     private async Task RunAsync(CancellationToken life)
     {
-        TimeSpan backoff = Options.ReconnectMin;
+        _backoff = Options.ReconnectMin;
         while (!life.IsCancellationRequested)
         {
             if (!_link)
@@ -291,9 +295,9 @@ public sealed class SyncAgent : IAsyncDisposable
                 }
                 _lastError = e is RpcException re ? $"{re.StatusCode}: {re.Status.Detail}" : e.Message;
                 SetState(AgentState.Offline);
-                _log.LogWarning("[{Agent}] link lost ({Error}), retry in {Seconds} s", Name, _lastError, backoff.TotalSeconds.ToString("0.#"));
-                await _linkSignal.WaitAsync(backoff, life);
-                backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, Options.ReconnectMax.Ticks));
+                _log.LogWarning("[{Agent}] link lost ({Error}), retry in {Seconds} s", Name, _lastError, _backoff.TotalSeconds.ToString("0.#"));
+                await _linkSignal.WaitAsync(_backoff, life);
+                _backoff = TimeSpan.FromTicks(Math.Min(_backoff.Ticks * 2, Options.ReconnectMax.Ticks));
             }
             finally
             {
@@ -427,6 +431,8 @@ public sealed class SyncAgent : IAsyncDisposable
             }
 
             SetState(AgentState.Catchup);
+            // The owner accepted Start: the next lost link waits ReconnectMin again, not the wait the failed rounds grew to.
+            _backoff = Options.ReconnectMin;
             _log.LogInformation("[{Agent}] Start accepted: stream started, Apply in parallel", Name);
             _write = Write;
             await HandleAsync(first);
@@ -460,7 +466,10 @@ public sealed class SyncAgent : IAsyncDisposable
         try
         {
             if (_instance is not null)
+            {
                 _store.Release(_instance, this);
+                ForgetInstanceWork();
+            }
             if (_store.Claim(id, this) is var holder && holder != this)
             {
                 // Duplicate: the claim is held by another agent, so this one serves no instance (its Release must not touch the holder's claim).
@@ -491,6 +500,23 @@ public sealed class SyncAgent : IAsyncDisposable
         _log.LogInformation(known ? "[{Agent}] owner instance {InstanceId}: replica exists, cursors from the database" : "[{Agent}] owner instance {InstanceId}: no replica, zero cursors", Name, id);
         StatusChanged?.Invoke();
         return true;
+    }
+
+    /// <summary>
+    /// In-memory work of the replica being left: NeedFull, archive retries, a partial snapshot download. It belongs to that
+    /// instance and must not reach the next owner. Called under the gate.
+    /// </summary>
+    private void ForgetInstanceWork()
+    {
+        lock (_needFull)
+            _needFull.Clear();
+        _archiveRetry.Clear();
+        _archiveTries.Clear();
+        if (_download is { } d)
+        {
+            File.Delete(d.Path);
+            _download = null;
+        }
     }
 
     /// <summary>The answer to SnapshotRequired: a snapshot, or with <see cref="AgentOptions.SkipSnapshotOnEmptyReplica"/> an emptied replica filled from the stream (6.3, 10.3).</summary>

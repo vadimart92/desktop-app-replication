@@ -187,6 +187,7 @@ internal sealed class SubscribeSession
         long dataVersion = conn.Scalar<long>("PRAGMA data_version");
         // A monotonic stamp: a wall clock set back would stall online delivery for the size of the step.
         long? lastOnline = null;
+        bool more = false;
         while (!ct.IsCancellationRequested)
         {
             if (!_needFull.IsEmpty)
@@ -206,19 +207,25 @@ internal sealed class SubscribeSession
             }
 
             // Online: poll PRAGMA data_version (triggers cannot notify the process), or wake on our own commits.
-            bool woke = await _wake.WaitAsync(Opt.PollInterval, ct);
-            long dv = conn.Scalar<long>("PRAGMA data_version");
-            if (!woke && dv == dataVersion)
-                continue;
-            dataVersion = dv;
-            TimeSpan wait = lastOnline is long at ? Opt.OnlineInterval - Stopwatch.GetElapsedTime(at) : TimeSpan.Zero;
-            if (wait > TimeSpan.Zero)
-                await Task.Delay(wait, ct);
-            if (await OnlineStepAsync(conn, ct))
+            // A step cut at OnlineBatchRows goes on at once: no new commit may come to wake it, and a full batch needs no gluing.
+            if (!more)
+            {
+                bool woke = await _wake.WaitAsync(Opt.PollInterval, ct);
+                long dv = conn.Scalar<long>("PRAGMA data_version");
+                if (!woke && dv == dataVersion)
+                    continue;
+                dataVersion = dv;
+                TimeSpan wait = lastOnline is long at ? Opt.OnlineInterval - Stopwatch.GetElapsedTime(at) : TimeSpan.Zero;
+                if (wait > TimeSpan.Zero)
+                    await Task.Delay(wait, ct);
+            }
+            (bool sent, more) = await OnlineStepAsync(conn, ct);
+            if (sent)
             {
                 lastOnline = Stopwatch.GetTimestamp();
                 await FallBackIfLaggingAsync(conn, ct);
             }
+            more &= _online;
         }
     }
 
@@ -364,19 +371,23 @@ internal sealed class SubscribeSession
         return n;
     }
 
-    /// <summary>Online: everything after the last sent version, oldest first, then Head(V) (6.4).</summary>
-    private async Task<bool> OnlineStepAsync(SqliteConnection conn, CancellationToken ct)
+    /// <summary>
+    /// Online: everything after the last sent version, oldest first, then Head(V) (6.4).
+    /// <c>More</c> when the step was cut at <see cref="OwnerOptions.OnlineBatchRows"/> below the head.
+    /// </summary>
+    private async Task<(bool Sent, bool More)> OnlineStepAsync(SqliteConnection conn, CancellationToken ct)
     {
         var messages = new List<ChangeMessage>();
         var logs = new List<string>();
         long upTo;
+        long head;
         using (SqliteTransaction tx = conn.BeginTransaction(deferred: true))
         {
-            long head = _store.Head(conn, tx);
+            head = _store.Head(conn, tx);
             if (head <= _sentUpTo)
             {
                 tx.Commit();
-                return false;
+                return (false, false);
             }
             int n = Opt.OnlineBatchRows;
             List<(SyncTable Table, OwnerItem Item)> all = Model.Tables
@@ -416,7 +427,7 @@ internal sealed class SubscribeSession
             k.LiftTo(upTo);
         }
         _sentUpTo = upTo;
-        return true;
+        return (true, upTo < head);
     }
 
     /// <summary>
